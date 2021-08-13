@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 
@@ -219,6 +224,7 @@ public:
   RetTy visitMemMoveInst(MemMoveInst &I)          { DELEGATE(MemTransferInst); }
   RetTy visitMemTransferInst(MemTransferInst &I)  { DELEGATE(MemIntrinsic); }
   RetTy visitMemIntrinsic(MemIntrinsic &I)        { DELEGATE(IntrinsicInst); }
+  RetTy visitLifeTimeMarkerInst(LifeTimeMarkerInst &I) { DELEGATE(IntrinsicInst); }
   RetTy visitVAStartInst(VAStartInst &I)          { DELEGATE(IntrinsicInst); }
   RetTy visitVAEndInst(VAEndInst &I)              { DELEGATE(IntrinsicInst); }
   RetTy visitVACopyInst(VACopyInst &I)            { DELEGATE(IntrinsicInst); }
@@ -278,6 +284,8 @@ private:
       case Intrinsic::vastart:     DELEGATE(VAStartInst);
       case Intrinsic::vaend:       DELEGATE(VAEndInst);
       case Intrinsic::vacopy:      DELEGATE(VACopyInst);
+      case Intrinsic::lifetime_start:   DELEGATE(LifeTimeMarkerInst);
+      case Intrinsic::lifetime_end:     DELEGATE(LifeTimeMarkerInst);
       case Intrinsic::not_intrinsic: break;
       }
     }

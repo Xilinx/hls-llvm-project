@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the diagnostic options. Users of this file
@@ -79,6 +84,7 @@ DIAGOPT(ShowTemplateTree, 1, 0)  /// Print a template tree when diffing
 DIAGOPT(CLFallbackMode, 1, 0)    /// Format for clang-cl fallback mode
 
 VALUE_DIAGOPT(ErrorLimit, 32, 0)           /// Limit # errors emitted.
+VALUE_DIAGOPT(WarnLimit, 32, 0)           /// Limit # warnings emitted.
 /// Limit depth of macro expansion backtrace.
 VALUE_DIAGOPT(MacroBacktraceLimit, 32, DefaultMacroBacktraceLimit)
 /// Limit depth of instantiation backtrace.

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains a class for representing known zeros and ones used by
@@ -110,8 +115,14 @@ public:
 
   /// Truncate the underlying known Zero and One bits. This is equivalent
   /// to truncating the value we're tracking.
-  KnownBits trunc(unsigned BitWidth) {
+  KnownBits trunc(unsigned BitWidth) const {
     return KnownBits(Zero.trunc(BitWidth), One.trunc(BitWidth));
+  }
+
+  /// Return known bits for an "any" extension of the value we're tracking,
+  /// where we don't know anything about the extended bits.
+  KnownBits anyext(unsigned BitWidth) const {
+    return KnownBits(Zero.zext(BitWidth), One.zext(BitWidth));
   }
 
   /// Zero extends the underlying known Zero and One bits. This is equivalent
@@ -124,6 +135,16 @@ public:
   /// to sign extending the value we're tracking.
   KnownBits sext(unsigned BitWidth) {
     return KnownBits(Zero.sext(BitWidth), One.sext(BitWidth));
+  }
+
+  /// Return known bits for an "any" extension or truncation of the value we're
+  /// tracking.
+  KnownBits anyextOrTrunc(unsigned BitWidth) const {
+    if (BitWidth > getBitWidth())
+      return anyext(BitWidth);
+    if (BitWidth < getBitWidth())
+      return trunc(BitWidth);
+    return *this;
   }
 
   /// Zero extends or truncates the underlying known Zero and One bits. This is

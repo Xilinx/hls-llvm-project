@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code dealing with C++ code generation of classes
@@ -611,6 +616,8 @@ static void EmitMemberInitializer(CodeGenFunction &CGF,
 
   // non-static data member initializers.
   FieldDecl *Field = MemberInit->getAnyMember();
+  if (Field->hasAttr<NoCtorAttr>())
+    return;
   QualType FieldType = Field->getType();
 
   llvm::Value *ThisPtr = CGF.LoadCXXThis();
@@ -891,6 +898,11 @@ namespace {
       // Never memcpy fields when we are adding poisoned paddings.
       if (CGF.getContext().getLangOpts().SanitizeAddressFieldPadding)
         return false;
+
+      // Never memcpy fields when it's hls
+      if (CGF.getContext().getLangOpts().HLSExt)
+        return false;
+
       Qualifiers Qual = F->getType().getQualifiers();
       if (Qual.hasVolatile() || Qual.hasObjCLifetime())
         return false;
@@ -1866,6 +1878,113 @@ void CodeGenFunction::EmitCXXAggrConstructorCall(
   EmitCXXAggrConstructorCall(ctor, numElements, arrayBegin, E, zeroInitialize);
 }
 
+// Hack by HLS Begin
+static bool getArrayInfo(llvm::Value*& SrcPtr, llvm::ArrayType*& SrcATy,
+                         llvm::Value *arrayBegin, unsigned numElements) {
+  auto *GEP = dyn_cast<llvm::GEPOperator>(arrayBegin);
+  if (!GEP || !GEP->hasAllZeroIndices()) return false;
+  llvm::Value *Ptr = GEP->getPointerOperand();
+  llvm::ArrayType *ATy = dyn_cast<llvm::ArrayType>(
+                     cast<llvm::PointerType>(Ptr->getType())->getElementType());
+  if (ATy)
+    SrcATy = ATy;
+  else
+    return false;
+  SrcPtr = Ptr;
+  unsigned count = 1;
+  while (ATy) {
+    count *= ATy->getNumElements();
+    ATy = dyn_cast<llvm::ArrayType>(ATy->getElementType());
+  }
+
+  if (count == numElements)
+    return true;
+
+  return false;
+}
+
+bool CodeGenFunction::EmitArrayInitLoopNest(llvm::ArrayType *ATy,
+                                            llvm::Value *SrcPtr,
+                                            Address arrayBase,
+                                            const CXXConstructorDecl *ctor,
+                                            const CXXConstructExpr *E,
+                                            bool zeroInitialize) {
+  llvm::BasicBlock *CurBB = Builder.GetInsertBlock();
+  if (CurBB->getTerminator() || Builder.GetInsertPoint() != CurBB->end())
+    return false;
+  llvm::BasicBlock *RestoreBB = llvm::BasicBlock::Create(CurBB->getContext(),
+                                          CurBB->getName(), CurBB->getParent());
+  llvm::Instruction *SplitPt = Builder.CreateBr(RestoreBB);
+  llvm::BasicBlock *PredBB = CurBB;
+  llvm::BasicBlock *SuccBB = PredBB->splitBasicBlock(SplitPt,
+                                                     PredBB->getName());
+  // Create the loop body.
+  llvm::BasicBlock *LoopBB = llvm::BasicBlock::Create(SuccBB->getContext(),
+                                                      "arrayctor.loop",
+                                                 SuccBB->getParent(), SuccBB);
+  Builder.SetInsertPoint(LoopBB);
+  llvm::PHINode *IndVar = Builder.CreatePHI(Builder.getInt32Ty(), 2, "indvar");
+  llvm::Constant *One = llvm::ConstantInt::get(Builder.getInt32Ty(), 1);
+  llvm::Constant *Zero = llvm::ConstantInt::get(Builder.getInt32Ty(), 0);
+  llvm::Value *NewIndex = Builder.CreateAdd(IndVar, One, "indvarinc");
+
+  llvm::Value *Idxs[2] = { Zero, IndVar };
+  llvm::Value *cur = Builder.CreateInBoundsGEP(SrcPtr, Idxs, "array.src");
+
+  if (llvm::ArrayType *EATy = dyn_cast<llvm::ArrayType>(
+      cast<llvm::PointerType>(cur->getType())->getElementType())) {
+    if (!EmitArrayInitLoopNest(EATy, cur, arrayBase, ctor,
+                               E, zeroInitialize))
+      return false;
+  } else {
+    // Inside the loop body, emit the constructor call on the array element.
+    QualType type = getContext().getTypeDeclType(ctor->getParent());
+    CharUnits eltAlignment =
+      arrayBase.getAlignment()
+               .alignmentOfArrayElement(getContext().getTypeSizeInChars(type));
+    Address curAddr = Address(cur, eltAlignment);
+
+    // Zero initialize the storage, if requested.
+    if (zeroInitialize)
+      EmitNullInitialization(curAddr, type);
+
+    // C++ [class.temporary]p4:
+    // There are two contexts in which temporaries are destroyed at a different
+    // point than the end of the full-expression. The first context is when a
+    // default constructor is called to initialize an element of an array.
+    // If the constructor has one or more default arguments, the destruction of
+    // every temporary created in a default argument expression is sequenced
+    // before the construction of the next array element, if any.
+    {
+      RunCleanupsScope Scope(*this);
+
+      // Evaluate the constructor and its arguments in a regular
+      // partial-destroy cleanup.
+      if (getLangOpts().Exceptions &&
+          !ctor->getParent()->hasTrivialDestructor()) {
+        Destroyer *destroyer = destroyCXXObject;
+        llvm::Value *arrayBegin = arrayBase.getPointer();
+        pushRegularPartialArrayCleanup(arrayBegin, cur, type, eltAlignment, *destroyer);
+      }
+
+      EmitCXXConstructorCall(ctor, Ctor_Complete, /*ForVirtualBase=*/false,
+                           /*Delegating=*/false, curAddr, E);
+
+    }
+  }
+  // Go to the next element.
+  llvm::Value *Cond = Builder.CreateICmpEQ(IndVar,
+           llvm::ConstantInt::get(Builder.getInt32Ty(), ATy->getNumElements()-1));
+  Builder.CreateCondBr(Cond, SuccBB, LoopBB);
+  IndVar->addIncoming(Zero, PredBB);
+  IndVar->addIncoming(NewIndex, Builder.GetInsertBlock());
+
+  PredBB->getTerminator()->setSuccessor(0, LoopBB);
+  Builder.SetInsertPoint(RestoreBB);
+  return true;
+}
+// Hack by HLS End
+
 /// EmitCXXAggrConstructorCall - Emit a loop to call a particular
 /// constructor for each of several members of an array.
 ///
@@ -1904,6 +2023,18 @@ void CodeGenFunction::EmitCXXAggrConstructorCall(const CXXConstructorDecl *ctor,
 
   // Find the end of the array.
   llvm::Value *arrayBegin = arrayBase.getPointer();
+  
+  // Hack by HLS Begin
+  llvm::Value *SrcPtr = 0;
+  llvm::ArrayType *SrcATy = 0;
+  if (constantCount && getLangOpts().HLSExt &&
+      getArrayInfo(SrcPtr, SrcATy, arrayBegin, constantCount->getZExtValue())) {
+    if (EmitArrayInitLoopNest(SrcATy, SrcPtr, arrayBase, ctor,
+                              E, zeroInitialize))
+      return;
+  }
+  // Hack by HLS end
+  
   llvm::Value *arrayEnd = Builder.CreateInBoundsGEP(arrayBegin, numElements,
                                                     "arrayctor.end");
 

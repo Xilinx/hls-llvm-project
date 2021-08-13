@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the generic AliasAnalysis interface which is used as the
@@ -132,6 +137,21 @@ ModRefInfo AAResults::getArgModRefInfo(ImmutableCallSite CS, unsigned ArgIdx) {
   return Result;
 }
 
+ModRefInfo AAResults::getModRefInfo(Instruction *I1, Instruction *I2) {
+  if (auto CS2 = ImmutableCallSite(I2)) {
+    return getModRefInfo(I1, CS2);
+  } else if (I2->isFenceLike()) {
+    // If this is a fence, just return ModRef.
+    return ModRefInfo::ModRef;
+  } else {
+    const MemoryLocation Loc2 = MemoryLocation::get(I2);
+    ModRefInfo MR = getModRefInfo(I1, Loc2);
+    if (isModOrRefSet(MR))
+      return setModAndRef(MR);
+  }
+  return ModRefInfo::NoModRef;
+}
+
 ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
   // We may have two calls.
   if (auto CS = ImmutableCallSite(I)) {
@@ -146,6 +166,7 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
     // is that if the call references what this instruction
     // defines, it must be clobbered by this location.
     const MemoryLocation DefLoc = MemoryLocation::get(I);
+    assert(DefLoc.Ptr && "Expect non null Memory Location!");
     ModRefInfo MR = getModRefInfo(Call, DefLoc);
     if (isModOrRefSet(MR))
       return setModAndRef(MR);

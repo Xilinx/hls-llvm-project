@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
@@ -504,7 +509,7 @@ def warn_pragma_message : Warning<"%0">,
    InGroup<PoundPragmaMessage>, DefaultWarnNoWerror;
 def err_pragma_message : Error<"%0">;
 def warn_pragma_ignored : Warning<"unknown pragma ignored">,
-   InGroup<UnknownPragmas>, DefaultIgnore;
+   InGroup<InvalidXlxPragmas>, DefaultIgnore;
 def ext_on_off_switch_syntax :
    ExtWarn<"expected 'ON' or 'OFF' or 'DEFAULT' in pragma">,
    InGroup<UnknownPragmas>;

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Optimization diagnostic interfaces.  It's packaged as an analysis pass so
@@ -72,16 +77,17 @@ void OptimizationRemarkEmitter::computeHotness(
 
 void OptimizationRemarkEmitter::emit(
     DiagnosticInfoOptimizationBase &OptDiagBase) {
-  auto &OptDiag = cast<DiagnosticInfoIROptimization>(OptDiagBase);
-  computeHotness(OptDiag);
+  if (auto *OptDiag = dyn_cast<DiagnosticInfoIROptimization>(&OptDiagBase)) {
+    computeHotness(*OptDiag);
 
-  // Only emit it if its hotness meets the threshold.
-  if (OptDiag.getHotness().getValueOr(0) <
+    // Only emit it if its hotness meets the threshold.
+    if (OptDiag->getHotness().getValueOr(0) <
       F->getContext().getDiagnosticsHotnessThreshold()) {
-    return;
+      return;
+    }
   }
 
-  F->getContext().diagnose(OptDiag);
+  F->getContext().diagnose(OptDiagBase);
 }
 
 OptimizationRemarkEmitterWrapperPass::OptimizationRemarkEmitterWrapperPass()

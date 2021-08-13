@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the NumericLiteralParser, CharLiteralParser, and
@@ -665,6 +670,9 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
           assert(s <= ThisTokEnd && "didn't maximally munch?");
           break;
         }
+      } else if (PP.getLangOpts().HLSExt) {
+        if (ParseHLSExtSuffix(TokLoc))
+          break;
       }
       // fall through.
     case 'j':
@@ -707,6 +715,31 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
       hadError = true;
     }
   }
+}
+
+/// ParseHLSExtSuffix - This method is called for suffixes
+bool NumericLiteralParser::ParseHLSExtSuffix(SourceLocation TokLoc) {
+  if (isLong || isLongLong || MicrosoftInteger)
+    return true;
+
+  if (isFloatingLiteral())
+    return false;
+
+  // Expect numbers after the 'i'
+  if (s + 1 == ThisTokEnd)
+    return true; // Failed
+
+  // Skip the 'i'
+  ++s;
+
+  // Allow arbitrary precision
+  if (StringRef(s, ThisTokEnd - s).getAsInteger(10, MicrosoftInteger))
+    return true;  // Failed
+
+  if (MicrosoftInteger)
+    s = ThisTokEnd;
+
+  return true;
 }
 
 /// ParseDecimalOrOctalCommon - This method is called for decimal or octal

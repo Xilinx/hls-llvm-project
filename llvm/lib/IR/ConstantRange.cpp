@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Represent a range of possible values that may occur when the program is run
@@ -31,6 +36,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -51,6 +57,26 @@ ConstantRange::ConstantRange(APInt L, APInt U)
          "ConstantRange with unequal bit widths");
   assert((Lower != Upper || (Lower.isMaxValue() || Lower.isMinValue())) &&
          "Lower == Upper, but they aren't min or max value!");
+}
+
+ConstantRange ConstantRange::fromKnownBits(const KnownBits &Known,
+                                           bool IsSigned) {
+  assert(!Known.hasConflict() && "Expected valid KnownBits");
+
+  if (Known.isUnknown())
+    return ConstantRange(Known.getBitWidth(), /*isFullSet=*/true);
+
+  // For unsigned ranges, or signed ranges with known sign bit, create a simple
+  // range between the smallest and largest possible value.
+  if (!IsSigned || Known.isNegative() || Known.isNonNegative())
+    return ConstantRange(Known.One, ~Known.Zero + 1);
+
+  // If we don't know the sign bit, pick the lower bound as a negative number
+  // and the upper bound as a non-negative one.
+  APInt Lower = Known.One, Upper = ~Known.Zero;
+  Lower.setSignBit();
+  Upper.clearSignBit();
+  return ConstantRange(Lower, Upper + 1);
 }
 
 ConstantRange ConstantRange::makeAllowedICmpRegion(CmpInst::Predicate Pred,

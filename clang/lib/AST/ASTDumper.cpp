@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the AST dump methods, which dump out the
@@ -310,6 +315,12 @@ namespace  {
       dumpLocation(T->getAttributeLoc());
       dumpTypeAsChild(T->getElementType());
       dumpStmt(T->getSizeExpr());
+    }
+    void VisitDependentSizedAPIntType(const DependentSizedAPIntType *T) {
+      OS << " ";
+      dumpLocation(T->getAttributeLoc());
+      dumpTypeAsChild(T->getElementType());
+      dumpStmt(T->getSizeInBitsExpr());
     }
     void VisitVectorType(const VectorType *T) {
       switch (T->getVectorKind()) {
@@ -2214,8 +2225,8 @@ void ASTDumper::VisitArrayInitIndexExpr(const ArrayInitIndexExpr *E) {
 
 void ASTDumper::VisitUnaryOperator(const UnaryOperator *Node) {
   VisitExpr(Node);
-  OS << " " << (Node->isPostfix() ? "postfix" : "prefix")
-     << " '" << UnaryOperator::getOpcodeStr(Node->getOpcode()) << "'";
+  OS << " " << (Node->isPostfix() ? "postfix" : "prefix") << " '"
+     << UnaryOperator::getOpcodeStr(Node->getOpcode()) << "'";
   if (!Node->canOverflow())
     OS << " cannot overflow";
 }
@@ -2226,6 +2237,9 @@ void ASTDumper::VisitUnaryExprOrTypeTraitExpr(
   switch(Node->getKind()) {
   case UETT_SizeOf:
     OS << " sizeof";
+    break;
+  case UETT_BitwidthOf:
+    OS << " __bitwidthof";
     break;
   case UETT_AlignOf:
     OS << " alignof";

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This provides an abstract class for OpenCL code generation.  Concrete
@@ -66,11 +71,19 @@ llvm::Type *CGOpenCLRuntime::convertOpenCLSpecificType(const Type *T) {
 }
 
 llvm::Type *CGOpenCLRuntime::getPipeType(const PipeType *T) {
+  // Do not cache the pipe type for HLS extension
+  if (CGM.getLangOpts().HLSExt) {
+    llvm::Type *EltType = CGM.getTypes().ConvertType(T->getElementType());
+    // FIXME: Move this magical 128 to FPGA target?
+    return llvm::PointerType::get(EltType, /*xcl_pipe*/ 128);
+  }
+
   if (!PipeTy){
     uint32_t PipeAddrSpc = CGM.getContext().getTargetAddressSpace(
         CGM.getContext().getOpenCLTypeAddrSpace(T));
-    PipeTy = llvm::PointerType::get(llvm::StructType::create(
-      CGM.getLLVMContext(), "opencl.pipe_t"), PipeAddrSpc);
+    PipeTy = llvm::PointerType::get(
+        llvm::StructType::create(CGM.getLLVMContext(), "opencl.pipe_t"),
+        PipeAddrSpc);
   }
 
   return PipeTy;

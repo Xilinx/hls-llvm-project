@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements LoopPass and LPPassManager. All loop optimization
@@ -16,6 +21,7 @@
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/GitCommitModule.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/OptBisect.h"
@@ -59,6 +65,11 @@ public:
 
 char PrintLoopPassWrapper::ID = 0;
 }
+
+static Module &getModule(Loop *L) { return *L->getHeader()->getModule(); }
+#define RUN_ON(Loop, L) runOn##Loop(Loop *L, LPPassManager &)
+GIT_COMMIT_MODULE_PASS_WRAPPER_INTERNAL(Loop, getModule, RUN_ON)
+#undef RUN_ON
 
 //===----------------------------------------------------------------------===//
 // LPPassManager
@@ -286,6 +297,11 @@ void LPPassManager::dumpPassStructure(unsigned Offset) {
 Pass *LoopPass::createPrinterPass(raw_ostream &O,
                                   const std::string &Banner) const {
   return new PrintLoopPassWrapper(O, Banner);
+}
+
+Pass *LoopPass::createGitCommitModulePass(const std::string &GitRepo,
+                                          const std::string &Message) const {
+  return new GitCommitLoopPassWrapper(GitRepo, Message);
 }
 
 // Check if this pass is suitable for the current LPPassManager, if

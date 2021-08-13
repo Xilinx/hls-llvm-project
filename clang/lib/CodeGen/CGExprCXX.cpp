@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code dealing with code generation of C++ expressions
@@ -580,7 +585,7 @@ CodeGenFunction::EmitCXXConstructExpr(const CXXConstructExpr *E,
   // If this is a call to a trivial default constructor, do nothing.
   if (CD->isTrivial() && CD->isDefaultConstructor())
     return;
-  
+
   // Elide the constructor if we're constructing from a temporary.
   // The temporary check is required because Sema sets this on NRVO
   // returns.

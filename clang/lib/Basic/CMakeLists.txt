@@ -12,7 +12,7 @@ set(version_inc "${CMAKE_CURRENT_BINARY_DIR}/SVNVersion.inc")
 
 set(get_svn_script "${LLVM_CMAKE_PATH}/GetSVN.cmake")
 
-if(DEFINED llvm_vc AND DEFINED clang_vc)
+if((DEFINED llvm_vc AND DEFINED clang_vc) AND LLVM_APPEND_VC_REV)
   # Create custom target to generate the VC revision include.
   add_custom_command(OUTPUT "${version_inc}"
     DEPENDS "${llvm_vc}" "${clang_vc}" "${get_svn_script}"
@@ -73,6 +73,7 @@ add_clang_library(clangBasic
   Targets/ARM.cpp
   Targets/AVR.cpp
   Targets/BPF.cpp
+  Targets/FPGA.cpp
   Targets/Hexagon.cpp
   Targets/Lanai.cpp
   Targets/Le64.cpp

@@ -43,6 +43,8 @@ function(llvm_create_cross_target_internal target_name toolchain buildtype)
   string(REPLACE ";" "$<SEMICOLON>" experimental_targets_to_build_arg
          "${LLVM_EXPERIMENTAL_TARGETS_TO_BUILD}")
 
+  # Add OPEN_SQLITE_LIB_FILE & OPEN_SQLITE_INCLUDE_DIR:
+  # Only when user build open source with option "DLLVM_OPTIMIZED_TABLEGEN=ON"
   add_custom_command(OUTPUT ${LLVM_${target_name}_BUILD}/CMakeCache.txt
     COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}"
         -DCMAKE_MAKE_PROGRAM="${CMAKE_MAKE_PROGRAM}"
@@ -52,6 +54,8 @@ function(llvm_create_cross_target_internal target_name toolchain buildtype)
         -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="${experimental_targets_to_build_arg}"
         -DLLVM_DEFAULT_TARGET_TRIPLE="${TARGET_TRIPLE}"
         -DLLVM_TARGET_ARCH="${LLVM_TARGET_ARCH}"
+        -DOPEN_SQLITE_LIB_FILE="${OPEN_SQLITE_LIB_FILE}"
+        -DOPEN_SQLITE_INCLUDE_DIR="${OPEN_SQLITE_INCLUDE_DIR}"
         ${build_type_flags} ${linker_flag} ${external_clang_dir}
     WORKING_DIRECTORY ${LLVM_${target_name}_BUILD}
     DEPENDS CREATE_LLVM_${target_name}

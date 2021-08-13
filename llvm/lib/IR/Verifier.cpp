@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the function verifier interface, that can be used for some
@@ -4464,6 +4469,35 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
     }
 
     break;
+  }
+  case Intrinsic::directive_scope_entry:{
+     Assert(CS.isCall(), "directive_scope_entry can not be invoked");
+     IntrinsicInst* call = dyn_cast<IntrinsicInst>(CS.getInstruction());
+
+     bool atLeastOneExit = false;
+     for (Use &use : call->uses()){
+       User *user = use.getUser();
+       CallSite callsite(user);
+
+       //the directive.scope.entry would be used by other no-directive.scope.exit
+       Assert(callsite, "directive.scope.entry can only be used by OperandBundleUser(CallInst) or by a directive.scope.exit");
+       if (callsite.getIntrinsicID() != Intrinsic::directive_scope_exit) {
+         Assert(callsite.isBundleOperand(&use), "directive.scope.entry can only be used in an operand bundle or by a directive.scope.exit");
+       }
+       else { 
+         atLeastOneExit = true;
+       }
+     }
+     Assert(atLeastOneExit, "directive.scope.entry should have at least one directive.scope.exit user");
+     break;
+  }
+  case Intrinsic::directive_scope_exit:{
+     Assert(CS.isCall(), "directive_scope_exit can not be invoked");
+     Value* arg = CS.getArgOperand(0);
+     Assert(isa<IntrinsicInst>(arg) , "directive.scope.exit 's argument must be token result from directive.scope.entry");
+     IntrinsicInst *call = dyn_cast<IntrinsicInst>(arg);
+     Assert(call->getIntrinsicID() == Intrinsic::directive_scope_entry, "directive.scope.exit 's argument must be token result from directive.scope.entry");
+     break;
   }
   };
 }

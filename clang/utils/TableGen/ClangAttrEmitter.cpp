@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // These tablegen backends emit Clang attribute processing code
@@ -84,6 +89,8 @@ GetFlattenedSpellings(const Record &Attr) {
       // Gin up two new spelling objects to add into the list.
       Ret.emplace_back("GNU", Name, "", true);
       Ret.emplace_back("CXX11", Name, "gnu", true);
+    } else if (Variety == "XLXPragma") {
+      Ret.emplace_back("GNU", Name, "", true);
     } else if (Variety == "Clang") {
       Ret.emplace_back("GNU", Name, "", false);
       Ret.emplace_back("CXX11", Name, "clang", false);
@@ -312,6 +319,11 @@ namespace {
         OS << "    OS << \"";
       } else if (type == "TypeSourceInfo *") {
         OS << "\" << get" << getUpperName() << "().getAsString() << \"";
+      } else if (type == "Expr *") {
+        OS << "\";\n"
+           << "get" << getUpperName()
+           << "()->printPretty(OS, nullptr, Policy);\n"
+           << "    OS << \"";
       } else {
         OS << "\" << get" << getUpperName() << "() << \"";
       }
@@ -1078,6 +1090,10 @@ namespace {
   };
 
   class VariadicExprArgument : public VariadicArgument {
+    void writeValueImpl(raw_ostream &OS) const override {
+      OS << "    Val->printPretty(OS, nullptr, Policy);\n";
+    }
+
   public:
     VariadicExprArgument(const Record &Arg, StringRef Attr)
       : VariadicArgument(Arg, Attr, "Expr *")
@@ -2330,6 +2346,14 @@ static bool AttrHasPragmaSpelling(const Record *R) {
          }) != Spellings.end();
 }
 
+// Determines if an attribute has an Xilinx Pragma spelling.
+static bool AttrHasXLXPragmaSpelling(const Record *R) {
+  std::vector<Record *> Spellings = R->getValueAsListOfDefs("Spellings");
+  return llvm::any_of(Spellings, [](const Record *S) {
+           return S->getValueAsString("Variety") == "XLXPragma";
+         });
+}
+
 namespace {
 
   struct AttrClassDescriptor {
@@ -2519,9 +2543,12 @@ void EmitClangAttrList(RecordKeeper &Records, raw_ostream &OS) {
   // Add defaulting macro definitions.
   Hierarchy.emitDefaultDefines(OS);
   emitDefaultDefine(OS, "PRAGMA_SPELLING_ATTR", nullptr);
+  // Add defaulting macro definition for Xilinx Pragma.
+  emitDefaultDefine(OS, "XLX_PRAGMA_SPELLING_ATTR", nullptr);
 
   std::vector<Record *> Attrs = Records.getAllDerivedDefinitions("Attr");
   std::vector<Record *> PragmaAttrs;
+  std::vector<Record *> XLXPragmaAttrs;
   for (auto *Attr : Attrs) {
     if (!Attr->getValueAsBit("ASTNode"))
       continue;
@@ -2529,6 +2556,10 @@ void EmitClangAttrList(RecordKeeper &Records, raw_ostream &OS) {
     // Add the attribute to the ad-hoc groups.
     if (AttrHasPragmaSpelling(Attr))
       PragmaAttrs.push_back(Attr);
+
+    // Add the attribute to the ad-hoc Xilinx Pragma groups.
+    if (AttrHasXLXPragmaSpelling(Attr))
+      XLXPragmaAttrs.push_back(Attr);
 
     // Place it in the hierarchy.
     Hierarchy.classifyAttr(Attr);
@@ -2540,6 +2571,9 @@ void EmitClangAttrList(RecordKeeper &Records, raw_ostream &OS) {
   // Emit the ad hoc groups.
   emitAttrList(OS, "PRAGMA_SPELLING_ATTR", PragmaAttrs);
 
+  // Emit Xilinx pragma groups
+  emitAttrList(OS, "XLX_PRAGMA_SPELLING_ATTR", XLXPragmaAttrs);
+
   // Emit the attribute ranges.
   OS << "#ifdef ATTR_RANGE\n";
   Hierarchy.emitAttrRanges(OS);
@@ -2548,6 +2582,7 @@ void EmitClangAttrList(RecordKeeper &Records, raw_ostream &OS) {
 
   Hierarchy.emitUndefs(OS);
   OS << "#undef PRAGMA_SPELLING_ATTR\n";
+  OS << "#undef XLX_PRAGMA_SPELLING_ATTR\n";
 }
 
 // Emits the enumeration list for attributes.

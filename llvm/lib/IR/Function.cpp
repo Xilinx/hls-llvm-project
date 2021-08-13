@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Function class for the IR library.
@@ -595,6 +600,11 @@ StringRef Intrinsic::getName(ID id) {
   return IntrinsicNameTable[id];
 }
 
+StringRef Intrinsic::lookupName(ID id) {
+  assert(id < num_intrinsics && "Invalid intrinsic ID!");
+  return IntrinsicNameTable[id];
+}
+
 std::string Intrinsic::getName(ID id, ArrayRef<Type*> Tys) {
   assert(id < num_intrinsics && "Invalid intrinsic ID!");
   std::string Result(IntrinsicNameTable[id]);
@@ -978,11 +988,15 @@ bool Intrinsic::isLeaf(ID id) {
 #undef GET_INTRINSIC_ATTRIBUTES
 
 Function *Intrinsic::getDeclaration(Module *M, ID id, ArrayRef<Type*> Tys) {
-  // There can never be multiple globals with the same name of different types,
-  // because intrinsics must be a specific type.
-  return
-    cast<Function>(M->getOrInsertFunction(getName(id, Tys),
-                                          getType(M->getContext(), id, Tys)));
+  std::string Name = getName(id, Tys);
+  auto *Decl = M->getFunction(Name);
+  auto *FTy = getType(M->getContext(), id, Tys);
+  // Sometimes there is an incorrectly mangled intrinsic in the way... Move it
+  // away.
+  if (Decl && Decl->getFunctionType() != FTy)
+    Decl->setName(Decl->getName() + ".old");
+
+  return cast<Function>(M->getOrInsertFunction(Name, FTy));
 }
 
 // This defines the "Intrinsic::getIntrinsicForGCCBuiltin()" method.

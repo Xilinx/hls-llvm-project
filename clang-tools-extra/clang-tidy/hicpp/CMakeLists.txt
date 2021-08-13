@@ -13,7 +13,7 @@ add_clang_library(clangTidyHICPPModule
   clangLex
   clangTidy
   clangTidyBugproneModule
-  clangTidyCppCoreGuidelinesModule
+  clangTCCGModule
   clangTidyGoogleModule
   clangTidyMiscModule
   clangTidyModernizeModule

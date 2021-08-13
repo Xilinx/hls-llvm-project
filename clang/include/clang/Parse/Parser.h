@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the Parser interface.
@@ -167,6 +172,13 @@ class Parser : public CodeCompletionHandler {
   std::unique_ptr<PragmaHandler> OpenCLExtensionHandler;
   std::unique_ptr<PragmaHandler> OpenMPHandler;
   std::unique_ptr<PragmaHandler> PCSectionHandler;
+  std::unique_ptr<PragmaHandler> XlxHLSHandler;
+  std::unique_ptr<PragmaHandler> XlxhlsHandler;
+  std::unique_ptr<PragmaHandler> XlxAPHandler;
+  std::unique_ptr<PragmaHandler> XlxapHandler;
+  std::unique_ptr<PragmaHandler> XlxAUTOPILOTHandler;
+  std::unique_ptr<PragmaHandler> XlxautopilotHandler;
+  std::unique_ptr<PragmaHandler> ModelComposerHandler;
   std::unique_ptr<PragmaHandler> MSCommentHandler;
   std::unique_ptr<PragmaHandler> MSDetectMismatchHandler;
   std::unique_ptr<PragmaHandler> MSPointersToMembers;
@@ -585,6 +597,19 @@ private:
   void HandlePragmaOpenCLExtension();
 
   /// \brief Handle the annotation token produced for
+  /// #pragma HLS|AP|AUTOPILOT ...
+  void HandleXlxPragma();
+  static bool HasDataflowAttribute(AttributeList *List);
+
+  void RemoveDataflowAttribute(ParsedAttributes &From);
+
+  struct ParsedAttributesWithRange;
+  void SinkParsedHLSUnrollPragmas(ParsedAttributesWithRange &To, Scope *P);
+  void SinkLabelAttributes(ParsedAttributesWithRange &To,
+                           ParsedAttributesWithRange &From,
+                           const Token &IdentTok);
+
+  /// \brief Handle the annotation token produced for
   /// #pragma clang __debug captured
   StmtResult HandlePragmaCaptured();
 
@@ -875,9 +900,9 @@ public:
 
     // Exit - Exit the scope associated with this object now, rather
     // than waiting until the object is destroyed.
-    void Exit() {
+    void Exit(ParsedAttributes *ScopeAttr = nullptr) {
       if (Self) {
-        Self->ExitScope();
+        Self->ExitScope(ScopeAttr);
         Self = nullptr;
       }
     }
@@ -891,7 +916,7 @@ public:
   void EnterScope(unsigned ScopeFlags);
 
   /// ExitScope - Pop a scope off the scope stack.
-  void ExitScope();
+  void ExitScope(ParsedAttributes *ScopeAttr = nullptr);
 
 private:
   /// \brief RAII object used to modify the scope flags for the current scope.
@@ -1474,6 +1499,7 @@ public:
     IsTypeCast
   };
 
+  ExprResult ParseHLSVariableExpression(StringRef optionName, bool noVoid=true);
   ExprResult ParseExpression(TypeCastState isTypeCast = NotTypeCast);
   ExprResult ParseConstantExpressionInExprEvalContext(
       TypeCastState isTypeCast = NotTypeCast);
@@ -1498,6 +1524,7 @@ private:
                                  bool &NotCastExpr,
                                  TypeCastState isTypeCast,
                                  bool isVectorLiteral = false);
+
   ExprResult ParseCastExpression(bool isUnaryExpression,
                                  bool isAddressOfOperand = false,
                                  TypeCastState isTypeCast = NotTypeCast,
@@ -1760,9 +1787,16 @@ private:
   StmtResult ParseCaseStatement(bool MissingCase = false,
                                 ExprResult Expr = ExprResult());
   StmtResult ParseDefaultStatement();
-  StmtResult ParseCompoundStatement(bool isStmtExpr = false);
-  StmtResult ParseCompoundStatement(bool isStmtExpr,
-                                    unsigned ScopeFlags);
+  StmtResult ParseDataflowCompoundStatement();
+  StmtResult
+  ParseCompoundStatement(bool isStmtExpr = false,
+                         ParsedAttributesWithRange *ScopeAttr = nullptr);
+  StmtResult
+  ParseCompoundStatement(bool isStmtExpr, unsigned ScopeFlags,
+                         ParsedAttributesWithRange *ScopeAttr = nullptr);
+
+  bool CheckLBraceForDataflowLoopBody();
+
   void ParseCompoundStatementLeadingPragmas();
   StmtResult ParseCompoundStatementBody(bool isStmtExpr = false);
   bool ParseParenExprOrCondition(StmtResult *InitStmt,
@@ -1771,9 +1805,11 @@ private:
                                  Sema::ConditionKind CK);
   StmtResult ParseIfStatement(SourceLocation *TrailingElseLoc);
   StmtResult ParseSwitchStatement(SourceLocation *TrailingElseLoc);
-  StmtResult ParseWhileStatement(SourceLocation *TrailingElseLoc);
-  StmtResult ParseDoStatement();
-  StmtResult ParseForStatement(SourceLocation *TrailingElseLoc);
+  StmtResult ParseWhileStatement(ParsedAttributesWithRange &ScopeAttr,
+                                 SourceLocation *TrailingElseLoc);
+  StmtResult ParseDoStatement(ParsedAttributesWithRange &ScopeAttr);
+  StmtResult ParseForStatement(ParsedAttributesWithRange &ScopeAttr,
+                               SourceLocation *TrailingElseLoc);
   StmtResult ParseGotoStatement();
   StmtResult ParseContinueStatement();
   StmtResult ParseBreakStatement();
@@ -2345,15 +2381,31 @@ private:
   /// \brief Parses opencl_unroll_hint attribute if language is OpenCL v2.0
   /// or higher.
   /// \return false if error happens.
-  bool MaybeParseOpenCLUnrollHintAttribute(ParsedAttributes &Attrs) {
-    if (getLangOpts().OpenCL)
-      return ParseOpenCLUnrollHintAttribute(Attrs);
+  bool MaybeParseOpenCLLoopAttribute(ParsedAttributes &Attrs) {
+    if (getLangOpts().OpenCL || getLangOpts().HLSExt)
+      return ParseOpenCLLoopAttribute(Attrs);
     return true;
   }
   /// \brief Parses opencl_unroll_hint attribute.
   /// \return false if error happens.
-  bool ParseOpenCLUnrollHintAttribute(ParsedAttributes &Attrs);
+  bool ParseOpenCLLoopAttribute(ParsedAttributes &Attrs);
+
   void ParseNullabilityTypeSpecifiers(ParsedAttributes &attrs);
+
+  void ParseXCLDependenceAttribute(IdentifierInfo &AttrName,
+                                  SourceLocation AttrNameLoc,
+                                  ParsedAttributes &Attrs,
+                                  SourceLocation *EndLoc,
+                                  IdentifierInfo *ScopeName,
+                                  SourceLocation ScopeLoc,
+                                  AttributeList::Syntax Syntax);
+  void ParseXCLArrayViewAttribute(IdentifierInfo &AttrName,
+                                  SourceLocation AttrNameLoc,
+                                  ParsedAttributes &Attrs,
+                                  SourceLocation *EndLoc,
+                                  IdentifierInfo *ScopeName,
+                                  SourceLocation ScopeLoc,
+                                  AttributeList::Syntax Syntax);
 
   VersionTuple ParseVersionTuple(SourceRange &Range);
   void ParseAvailabilityAttribute(IdentifierInfo &Availability,

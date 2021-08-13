@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/RecordLayout.h"
@@ -2968,6 +2973,7 @@ ASTContext::getASTRecordLayout(const RecordDecl *D) const {
       // tail-padding of base classes.  This is ABI-dependent.
       // FIXME: this should be stored in the record layout.
       bool skipTailPadding =
+          LangOpts.HLSExt ||
           mustSkipTailPadding(getTargetInfo().getCXXABI(), RD);
 
       // FIXME: This should be done in FinalizeLayout.

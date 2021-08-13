@@ -31,6 +31,20 @@ if (CLANG_BUILT_STANDALONE)
   set(codegen_deps)
 endif()
 
+set(extra_libs)
+
+if(LINK_REFLOW_INTO_TOOLS)
+ LIST(APPEND extra_libs Reflow)
+endif(LINK_REFLOW_INTO_TOOLS)
+
+if(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
+  LIST(APPEND extra_libs Polly)
+endif(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
+
+if (MSVC)
+  set_source_files_properties(CodeGenModule.cpp PROPERTIES COMPILE_FLAGS /bigobj)
+endif()
+
 add_clang_library(clangCodeGen
   BackendUtil.cpp
   CGAtomic.cpp
@@ -55,6 +69,7 @@ add_clang_library(clangCodeGen
   CGExprConstant.cpp
   CGExprScalar.cpp
   CGGPUBuiltin.cpp
+  CGFPGABuiltin.cpp
   CGLoopInfo.cpp
   CGObjC.cpp
   CGObjCGNU.cpp
@@ -68,6 +83,7 @@ add_clang_library(clangCodeGen
   CGStmtOpenMP.cpp
   CGVTT.cpp
   CGVTables.cpp
+  CGXlxAttr.cpp
   CodeGenABITypes.cpp
   CodeGenAction.cpp
   CodeGenFunction.cpp
@@ -97,4 +113,5 @@ add_clang_library(clangCodeGen
   clangBasic
   clangFrontend
   clangLex
+  ${extra_libs}
   )

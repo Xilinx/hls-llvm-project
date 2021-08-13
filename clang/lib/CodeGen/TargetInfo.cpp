@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // These classes wrap the information about a call or function
@@ -8441,6 +8446,80 @@ unsigned SPIRTargetCodeGenInfo::getOpenCLKernelCallingConv() const {
   return llvm::CallingConv::SPIR_KERNEL;
 }
 
+//===----------------------------------------------------------------------===//
+// FPGA ABI Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+class FPGAABIInfo : public DefaultABIInfo {
+  bool IsTop;
+
+public:
+  FPGAABIInfo(CodeGen::CodeGenTypes &CGT, bool IsTop = false)
+      : DefaultABIInfo(CGT), IsTop(IsTop) {}
+
+  static QualType GetCodeGenType(QualType T) {
+    if (const auto *RT = dyn_cast<RecordType>(T.getCanonicalType())) {
+        if (auto *A = RT->getDecl()->getAttr<CodeGenTypeAttr>())
+          return A->getType();
+    }
+
+    return T;
+  }
+
+  ABIArgInfo classifyDirectOrExtendType(QualType T) const {
+    if (T->isVoidType())
+      return ABIArgInfo::getIgnore();
+
+    // Treat an enum type as its underlying type.
+    if (const EnumType *EnumTy = T->getAs<EnumType>())
+      T = EnumTy->getDecl()->getIntegerType();
+
+    if (T->isPromotableIntegerType())
+      return ABIArgInfo::getExtend(T);
+
+    return ABIArgInfo::getDirect(CGT.ConvertType(T), 0, nullptr, false);
+  }
+
+  void computeInfo(CGFunctionInfo &FI) const override {
+    auto T = GetCodeGenType(FI.getReturnType());
+    if (IsTop)
+      FI.getReturnInfo() = classifyDirectOrExtendType(T);
+    else if (!getCXXABI().classifyReturnType(FI))
+      FI.getReturnInfo() = classifyReturnType(T);
+
+    for (auto &I : FI.arguments()) {
+      auto T = GetCodeGenType(I.type);
+      if (IsTop)
+        I.info = classifyDirectOrExtendType(T);
+      else
+        I.info = classifyArgumentType(T);
+    }
+  }
+};
+
+class FPGATargetCodeGenInfo : public TargetCodeGenInfo {
+public:
+  FPGATargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
+      : TargetCodeGenInfo(new FPGAABIInfo(CGT)) {}
+  unsigned getOpenCLKernelCallingConv() const override;
+};
+
+} // End anonymous namespace.
+
+unsigned FPGATargetCodeGenInfo::getOpenCLKernelCallingConv() const {
+  return llvm::CallingConv::SPIR_KERNEL;
+}
+
+namespace clang {
+namespace CodeGen {
+void computeFPGAKernelABIInfo(CodeGenModule &CGM, CGFunctionInfo &FI) {
+  FPGAABIInfo FPGAABI(CGM.getTypes(), true);
+  FPGAABI.computeInfo(FI);
+}
+}
+}
+
 static bool appendType(SmallStringEnc &Enc, QualType QType,
                        const CodeGen::CodeGenModule &CGM,
                        TypeStringCache &TSC);
@@ -9124,6 +9203,9 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
     return SetCGInfo(new SparcV9TargetCodeGenInfo(Types));
   case llvm::Triple::xcore:
     return SetCGInfo(new XCoreTargetCodeGenInfo(Types));
+  case llvm::Triple::fpga32:
+  case llvm::Triple::fpga64:
+    return SetCGInfo(new FPGATargetCodeGenInfo(Types));
   case llvm::Triple::spir:
   case llvm::Triple::spir64:
     return SetCGInfo(new SPIRTargetCodeGenInfo(Types));

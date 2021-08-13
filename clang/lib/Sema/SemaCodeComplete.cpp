@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the code-completion semantic actions.
@@ -648,8 +653,10 @@ SimplifiedTypeClass clang::getSimplifiedTypeClass(CanQualType T) {
     return STC_Array;
     
   case Type::DependentSizedExtVector:
+  case Type::DependentSizedAPInt:
   case Type::Vector:
   case Type::ExtVector:
+  case Type::APInt:
     return STC_Arithmetic;
     
   case Type::FunctionProto:

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the Diagnostic-related interfaces.
@@ -76,6 +81,7 @@ DiagnosticsEngine::DiagnosticsEngine(
   ShowOverloads = Ovl_All;
 
   ErrorLimit = 0;
+  WarnLimit = 0;
   TemplateBacktraceLimit = 0;
   ConstexprBacktraceLimit = 0;
 

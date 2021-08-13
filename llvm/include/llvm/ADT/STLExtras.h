@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains some templates that are useful if you are working with the
@@ -1142,6 +1147,23 @@ auto apply_tuple(F &&f, Tuple &&t) -> decltype(detail::apply_tuple_impl(
 
   return detail::apply_tuple_impl(std::forward<F>(f), std::forward<Tuple>(t),
                                   Indices{});
+}
+
+template <typename T> static T *not_null(T *V) {
+  assert(V && "Unexpected nullptr!");
+  return V;
+}
+
+template <typename T> static bool is_one_value_of(T a, T b) { return a == b; }
+
+template <typename T, typename... Ts>
+static bool is_one_value_of(T a, T b, Ts... bs) {
+  return a == b || is_one_value_of(a, bs...);
+}
+
+template <typename Container, typename Predicate>
+static void filter(Container &V, Predicate P) {
+  V.erase(std::remove_if(V.begin(), V.end(), P), V.end());
 }
 
 } // end namespace llvm

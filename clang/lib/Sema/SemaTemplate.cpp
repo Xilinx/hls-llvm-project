@@ -4,6 +4,11 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
 //===----------------------------------------------------------------------===//
 //
 //  This file implements semantic analysis for C++ templates.
@@ -932,14 +937,14 @@ NamedDecl *Sema::ActOnNonTypeTemplateParameter(Scope *S, Declarator &D,
   // Check that we have valid decl-specifiers specified.
   auto CheckValidDeclSpecifiers = [this, &D] {
     // C++ [temp.param]
-    // p1 
+    // p1
     //   template-parameter:
     //     ...
     //     parameter-declaration
-    // p2 
+    // p2
     //   ... A storage class shall not be specified in a template-parameter
     //   declaration.
-    // [dcl.typedef]p1: 
+    // [dcl.typedef]p1:
     //   The typedef specifier [...] shall not be used in the decl-specifier-seq
     //   of a parameter-declaration
     const DeclSpec &DS = D.getDeclSpec();
@@ -5135,6 +5140,10 @@ bool UnnamedLocalNoLinkageFinder::VisitBuiltinType(const BuiltinType*) {
   return false;
 }
 
+bool UnnamedLocalNoLinkageFinder::VisitAPIntType(const APIntType *) {
+  return false;
+}
+
 bool UnnamedLocalNoLinkageFinder::VisitComplexType(const ComplexType* T) {
   return Visit(T->getElementType());
 }
@@ -5185,6 +5194,11 @@ bool UnnamedLocalNoLinkageFinder::VisitDependentSizedArrayType(
 
 bool UnnamedLocalNoLinkageFinder::VisitDependentSizedExtVectorType(
                                          const DependentSizedExtVectorType* T) {
+  return Visit(T->getElementType());
+}
+
+bool UnnamedLocalNoLinkageFinder::VisitDependentSizedAPIntType(
+    const DependentSizedAPIntType *T) {
   return Visit(T->getElementType());
 }
 

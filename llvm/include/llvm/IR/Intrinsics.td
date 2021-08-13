@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines properties of all LLVM intrinsics.
@@ -748,6 +753,10 @@ def int_experimental_gc_result   : Intrinsic<[llvm_any_ty], [llvm_token_ty],
 def int_experimental_gc_relocate : Intrinsic<[llvm_any_ty],
                                 [llvm_token_ty, llvm_i32_ty, llvm_i32_ty],
                                 [IntrReadMem]>;
+//===------------------------ Directive Intrinsics ------------------------===//
+//
+def int_directive_scope_entry : Intrinsic<[llvm_token_ty], [], [IntrNoDuplicate]>;
+def int_directive_scope_exit  : Intrinsic<[], [llvm_token_ty], [IntrNoDuplicate]>;
 
 //===------------------------ Coroutine Intrinsics ---------------===//
 // These are documented in docs/Coroutines.rst
@@ -977,5 +986,8 @@ include "llvm/IR/IntrinsicsNVVM.td"
 include "llvm/IR/IntrinsicsMips.td"
 include "llvm/IR/IntrinsicsAMDGPU.td"
 include "llvm/IR/IntrinsicsBPF.td"
+include "llvm/IR/IntrinsicsSPIR.td"
 include "llvm/IR/IntrinsicsSystemZ.td"
 include "llvm/IR/IntrinsicsWebAssembly.td"
+include "llvm/IR/IntrinsicsFPGA.td"
+

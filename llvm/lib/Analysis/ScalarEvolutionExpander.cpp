@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the implementation of the scalar evolution expander,
@@ -30,6 +35,12 @@
 
 using namespace llvm;
 using namespace PatternMatch;
+
+static cl::opt<bool> ReuseSameSizeIVForPointerSCEVAddRec(
+    "reuse-same-size-iv-for-ptr-scevaddrec", cl::Hidden,
+    cl::desc("Only reuses the induction variable that is same size as the "
+	     "SCEVAddRec when the SCEVAddRec is a pointer type."),
+    cl::init(true));
 
 /// ReuseOrCreateCast - Arrange for there to be a cast of V to Ty at IP,
 /// reusing an existing cast if a suitable one exists, moving an existing
@@ -1466,9 +1477,15 @@ Value *SCEVExpander::visitAddRecExpr(const SCEVAddRecExpr *S) {
 
   // First check for an existing canonical IV in a suitable type.
   PHINode *CanonicalIV = nullptr;
-  if (PHINode *PN = L->getCanonicalInductionVariable())
-    if (SE.getTypeSizeInBits(PN->getType()) >= SE.getTypeSizeInBits(Ty))
-      CanonicalIV = PN;
+  if (PHINode *PN = L->getCanonicalInductionVariable()) {
+    if (ReuseSameSizeIVForPointerSCEVAddRec && isa<PointerType>(S->getType())) {
+      if (SE.getTypeSizeInBits(PN->getType()) == SE.getTypeSizeInBits(Ty))
+        CanonicalIV = PN;
+    } else {
+      if (SE.getTypeSizeInBits(PN->getType()) >= SE.getTypeSizeInBits(Ty))
+        CanonicalIV = PN;
+    }
+  }
 
   // Rewrite an AddRec in terms of the canonical induction variable, if
   // its type is more narrow.

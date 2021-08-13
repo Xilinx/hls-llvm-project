@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Function evaluator for LLVM IR.
@@ -129,11 +134,6 @@ isSimpleEnoughValueToCommit(Constant *C,
 /// globals and GEP's of globals.  This should be kept up to date with
 /// CommitValueTo.
 static bool isSimpleEnoughPointerToCommit(Constant *C) {
-  // Conservatively, avoid aggregate types. This is because we don't
-  // want to worry about them partially overlapping other stores.
-  if (!cast<PointerType>(C->getType())->getElementType()->isSingleValueType())
-    return false;
-
   if (GlobalVariable *GV = dyn_cast<GlobalVariable>(C))
     // Do not allow weak/*_odr/linkonce linkage or external globals.
     return GV->hasUniqueInitializer();
@@ -174,32 +174,189 @@ static bool isSimpleEnoughPointerToCommit(Constant *C) {
   return false;
 }
 
+static bool canLosslesslyBitCast(Type *T1, Type *T2, const DataLayout &DL) {
+  if (T1->canLosslesslyBitCastTo(T2))
+    return true;
+
+  if (!T1->isSingleValueType() || !T2->isSingleValueType())
+    return false;
+  
+  return DL.getTypeSizeInBits(T1) == DL.getTypeSizeInBits(T2);
+}
+
+static Constant *ConvertTo(Constant *C, Type *TargetTy) {
+  if (C->getType() == TargetTy)
+    return C;
+  return ConstantExpr::getBitCast(C, TargetTy);
+}
+
 /// Return the value that would be computed by a load from P after the stores
 /// reflected by 'memory' have been performed.  If we can't decide, return null.
 Constant *Evaluator::ComputeLoadResult(Constant *P) {
+  Type *TargetTy = P->getType()->getPointerElementType();
+  if (auto *CE = dyn_cast<ConstantExpr>(P)) { 
+    if (CE->getOpcode() == Instruction::BitCast) {
+      P = CE->getOperand(0);
+
+      Type *NewTy = cast<PointerType>(P->getType())->getElementType();
+
+      while (!canLosslesslyBitCast(TargetTy, NewTy, DL)) {
+        if (StructType *STy = dyn_cast<StructType>(NewTy)) {
+          NewTy = STy->getTypeAtIndex(0U);
+
+          IntegerType *IdxTy = IntegerType::get(NewTy->getContext(), 32);
+          Constant *IdxZero = ConstantInt::get(IdxTy, 0, false);
+          Constant * const IdxList[] = {IdxZero, IdxZero};
+
+          P = ConstantExpr::getGetElementPtr(nullptr, P, IdxList);
+          if (auto *FoldedPtr = ConstantFoldConstant(P, DL, TLI))
+            P = FoldedPtr;
+        } else {
+          return nullptr;
+        }
+      }
+      assert(canLosslesslyBitCast(
+                 TargetTy, P->getType()->getPointerElementType(), DL) && 
+             "Bad bitcast");
+    }
+  }
+
   // If this memory location has been recently stored, use the stored value: it
   // is the most up-to-date.
   DenseMap<Constant*, Constant*>::const_iterator I = MutatedMemory.find(P);
-  if (I != MutatedMemory.end()) return I->second;
+  if (I != MutatedMemory.end()) return ConvertTo(I->second, TargetTy);
+
+  bool isAllocTmp = false;
+  GlobalVariable* basePtr = nullptr;
+
+  if (auto *CE = dyn_cast<ConstantExpr>(P)) { 
+    if ((CE->getOpcode() == Instruction::GetElementPtr ||
+         CE->getOpcode() == Instruction::BitCast))
+      basePtr = dyn_cast<GlobalVariable>(CE->getOperand(0));
+  } else {
+    basePtr = dyn_cast<GlobalVariable>(P);
+  }
+
+  if (!basePtr)
+    return nullptr;
+
+  isAllocTmp = AllocaTmps.count(basePtr);
+  Type *ElemTy = P->getType()->getPointerElementType();
+  LLVMContext &Context = P->getContext();
+
+  // Get value from previous store
+  if (isAllocTmp || !AssumeGlobalUnchanged) {
+    // If we are loading a structure, try to load each fileds and combine them
+    // into the structure value.
+    if (StructType *STTy = dyn_cast<StructType>(ElemTy)) {
+
+      std::vector<Constant *> Values;
+      for (unsigned i = 0, e = STTy->getNumElements(); i < e; i++) {
+        std::vector<Constant *> IdxList = 
+            {ConstantInt::get(Type::getInt32Ty(Context), 0),
+             ConstantInt::get(Type::getInt32Ty(Context), i)};
+        Constant *SubPtr = 
+            ConstantExpr::getInBoundsGetElementPtr(nullptr, P, IdxList);
+        if (auto *FoldPtr = ConstantFoldConstant(SubPtr, DL, TLI))
+          SubPtr = FoldPtr;
+
+        Constant *SubValue = ComputeLoadResult(SubPtr);
+        // If Fail to load any filed, return null
+        if (!SubValue)
+          return nullptr;
+
+        Values.push_back(SubValue);
+      }
+  
+      return ConstantStruct::get(STTy, Values);
+    } 
+
+    // Don't expect to load other aggregate type, like array. 
+    if (!ElemTy->isSingleValueType()) 
+      return nullptr;
+  }
 
   // Access it.
   if (GlobalVariable *GV = dyn_cast<GlobalVariable>(P)) {
-    if (GV->hasDefinitiveInitializer())
-      return GV->getInitializer();
+    if (GV->hasDefinitiveInitializer()) {
+      Constant *InitC = GV->getInitializer();
+      if (!InitC)
+        return nullptr;
+
+      if (GV->isConstant() || AssumeGlobalUnchanged)
+        return ConvertTo(InitC, TargetTy);
+
+      if (isa<UndefValue>(InitC) && GV != ValueWithUnknownInit)
+        return ConvertTo(InitC, TargetTy);
+    }
     return nullptr;
   }
 
   // Handle a constantexpr getelementptr.
-  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(P))
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(P)) {
     if (CE->getOpcode() == Instruction::GetElementPtr &&
         isa<GlobalVariable>(CE->getOperand(0))) {
       GlobalVariable *GV = cast<GlobalVariable>(CE->getOperand(0));
-      if (GV->hasDefinitiveInitializer())
-        return ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE);
+      if (GV->hasDefinitiveInitializer()) {
+        Constant *InitC =
+            ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE);
+        if (!InitC)
+          return nullptr;
+
+        if (GV->isConstant() || AssumeGlobalUnchanged)
+          return ConvertTo(InitC, TargetTy);
+
+        if (isa<UndefValue>(InitC) && GV != ValueWithUnknownInit)
+          return ConvertTo(InitC, TargetTy);
+      }
     }
+  }
 
   return nullptr;  // don't know how to evaluate.
 }
+
+// Save the value to MutatedMemory.
+// If the value has aggregate type, also save each element.
+bool Evaluator::saveMutatedMemory(Constant *Ptr, Constant *Val) {
+  MutatedMemory[Ptr] = Val;
+  LLVMContext &Context = Ptr->getContext();
+
+  // Don't support vector of pointers
+  if (Ptr->getType()->isVectorTy())
+    return false;
+  
+  Type *PointeeTy = Ptr->getType()->getPointerElementType();
+
+  if (PointeeTy->isStructTy() || PointeeTy->isArrayTy()) {
+    unsigned NumElements = 
+        PointeeTy->isStructTy() ? PointeeTy->getStructNumElements()
+                                : PointeeTy->getArrayNumElements();
+    for (unsigned i = 0; i < NumElements; i++) {
+      std::vector<Constant *> IdxList = 
+          {ConstantInt::get(Type::getInt32Ty(Context), 0),
+           ConstantInt::get(Type::getInt32Ty(Context), i)};
+      Constant *SubPtr =
+          ConstantExpr::getInBoundsGetElementPtr(nullptr, Ptr, IdxList);
+
+      if (auto *FoldPtr = ConstantFoldConstant(SubPtr, DL, TLI))
+        SubPtr = FoldPtr;
+
+      Constant *SubValue = Val->getAggregateElement(i);
+
+      if (!SubValue)
+        return false;
+
+      // Save the element value to MutatedMemory
+      if (!saveMutatedMemory(SubPtr, SubValue))
+        return false;
+    }
+
+    return true;
+  }
+
+  return PointeeTy->isSingleValueType();
+}
+
 
 /// Evaluate all instructions in block BB, returning true if successful, false
 /// if we can't evaluate it.  NewBB returns the next BB that control flows into,
@@ -252,7 +409,7 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
           // In order to push the bitcast onto the stored value, a bitcast
           // from NewTy to Val's type must be legal.  If it's not, we can try
           // introspecting NewTy to find a legal conversion.
-          while (!Val->getType()->canLosslesslyBitCastTo(NewTy)) {
+          while (!canLosslesslyBitCast(Val->getType(), NewTy, DL)) {
             // If NewTy is a struct, we can convert the pointer to the struct
             // into a pointer to its first member.
             // FIXME: This could be extended to support arrays as well.
@@ -284,13 +441,21 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
         }
       }
 
-      MutatedMemory[Ptr] = Val;
+      // If this is a store of structure, save values of each field
+      if (!saveMutatedMemory(Ptr, Val))
+        return false;
+
     } else if (BinaryOperator *BO = dyn_cast<BinaryOperator>(CurInst)) {
       InstResult = ConstantExpr::get(BO->getOpcode(),
                                      getVal(BO->getOperand(0)),
                                      getVal(BO->getOperand(1)));
       DEBUG(dbgs() << "Found a BinaryOperator! Simplifying: " << *InstResult
             << "\n");
+      auto Op = BO->getOpcode();
+      if ((Op == Instruction::Shl || Op == Instruction::AShr || 
+           Op == Instruction::LShr) && isa<UndefValue>(InstResult)) 
+        InstResult = ConstantInt::get(InstResult->getType(), 0);
+           
     } else if (CmpInst *CI = dyn_cast<CmpInst>(CurInst)) {
       InstResult = ConstantExpr::getCompare(CI->getPredicate(),
                                             getVal(CI->getOperand(0)),
@@ -357,10 +522,9 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
         return false;  // Cannot handle array allocs.
       }
       Type *Ty = AI->getAllocatedType();
-      AllocaTmps.push_back(llvm::make_unique<GlobalVariable>(
-          Ty, false, GlobalValue::InternalLinkage, UndefValue::get(Ty),
-          AI->getName()));
-      InstResult = AllocaTmps.back().get();
+      auto tmp = new GlobalVariable( Ty, false, GlobalValue::InternalLinkage, UndefValue::get(Ty), AI->getName());
+      InstResult = tmp;
+      AllocaTmps.insert(tmp);
       DEBUG(dbgs() << "Found an alloca. Result: " << *InstResult << "\n");
     } else if (isa<CallInst>(CurInst) || isa<InvokeInst>(CurInst)) {
       CallSite CS(&*CurInst);
@@ -437,6 +601,27 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
           DEBUG(dbgs() << "Skipping sideeffect intrinsic.\n");
           ++CurInst;
           continue;
+        } else if (II->getIntrinsicID() == Intrinsic::ssa_copy) {
+          DEBUG(dbgs() << "Propagate the source of ssa_copy intrinsic.\n");
+          setVal(&*CurInst, getVal(II->getReturnedArgOperand()));
+          ++CurInst;
+          continue;
+        } else if (!II->mayHaveSideEffects()) {
+          if (!CurInst->use_empty()) {
+            SmallVector<Constant*, 8> Formals;
+            for (User::op_iterator i = CS.arg_begin(), e = CS.arg_end(); 
+                 i != e; ++i)
+              Formals.push_back(getVal(*i));
+
+            if (Constant *C = ConstantFoldCall(CS, CS.getCalledFunction(), 
+                                               Formals, TLI)) {
+              DEBUG(dbgs() << "Evaluate part select intrinsic.\n");
+              setVal(&*CurInst, C);
+            } else
+              return false;
+          }
+          ++CurInst;
+          continue;
         }
 
         DEBUG(dbgs() << "Unknown intrinsic. Can not evaluate.\n");
@@ -481,10 +666,10 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
         InstResult = RetVal;
 
         if (InstResult) {
-          DEBUG(dbgs() << "Successfully evaluated function. Result: "
+          DEBUG(dbgs() << "Successfully evaluated "<< Callee->getName() << " Result: "
                        << *InstResult << "\n\n");
         } else {
-          DEBUG(dbgs() << "Successfully evaluated function. Result: 0\n\n");
+          DEBUG(dbgs() << "Successfully evaluated " << Callee->getName() << " Result: 0\n\n");
         }
       }
     } else if (isa<TerminatorInst>(CurInst)) {
@@ -555,7 +740,8 @@ bool Evaluator::EvaluateFunction(Function *F, Constant *&RetVal,
                                  const SmallVectorImpl<Constant*> &ActualArgs) {
   // Check to see if this function is already executing (recursion).  If so,
   // bail out.  TODO: we might want to accept limited recursion.
-  if (is_contained(CallStack, F))
+  // XILINX HLS: allow recursive call with recursive depth <= 100
+  if (count(CallStack, F) > 100)
     return false;
 
   CallStack.push_back(F);
@@ -580,7 +766,7 @@ bool Evaluator::EvaluateFunction(Function *F, Constant *&RetVal,
     BasicBlock *NextBB = nullptr; // Initialized to avoid compiler warnings.
     DEBUG(dbgs() << "Trying to evaluate BB: " << *CurBB << "\n");
 
-    if (!EvaluateBlock(CurInst, NextBB))
+    if (!EvaluateBlock(CurInst, NextBB)) 
       return false;
 
     if (!NextBB) {
@@ -592,13 +778,13 @@ bool Evaluator::EvaluateFunction(Function *F, Constant *&RetVal,
       CallStack.pop_back();
       return true;
     }
-
     // Okay, we succeeded in evaluating this control flow.  See if we have
     // executed the new block before.  If so, we have a looping function,
     // which we cannot evaluate in reasonable time.
+#if 0
     if (!ExecutedBlocks.insert(NextBB).second)
       return false;  // looped!
-
+#endif
     // Okay, we have never been in this block before.  Check to see if there
     // are any PHI nodes.  If so, evaluate them with information about where
     // we came from.

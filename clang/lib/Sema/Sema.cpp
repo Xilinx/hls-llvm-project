@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the actions class which performs semantic analysis and
@@ -35,8 +40,12 @@
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaConsumer.h"
+#include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/Sema/SemaInternal.h"
 #include "clang/Sema/TemplateDeduction.h"
+
+#include "clang/Parse/ParseDiagnostic.h"
+#include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 using namespace clang;
@@ -113,11 +122,15 @@ public:
 } // end namespace sema
 } // end namespace clang
 
+
+
+
+
 Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
            TranslationUnitKind TUKind, CodeCompleteConsumer *CodeCompleter)
     : ExternalSource(nullptr), isMultiplexExternalSource(false),
       FPFeatures(pp.getLangOpts()), LangOpts(pp.getLangOpts()), PP(pp),
-      Context(ctxt), Consumer(consumer), Diags(PP.getDiagnostics()),
+      Context(ctxt), Consumer(*BuildXlxHoistConsumer(consumer)), Diags(PP.getDiagnostics()),
       SourceMgr(PP.getSourceManager()), CollectStats(false),
       CodeCompleter(CodeCompleter), CurContext(nullptr),
       OriginalLexicalContext(nullptr), MSStructPragmaOn(false),
@@ -180,8 +193,9 @@ void Sema::addImplicitTypedef(StringRef Name, QualType T) {
 }
 
 void Sema::Initialize() {
-  if (SemaConsumer *SC = dyn_cast<SemaConsumer>(&Consumer))
+  if (SemaConsumer *SC = dyn_cast<SemaConsumer>(&Consumer)){
     SC->InitializeSema(*this);
+  }
 
   // Tell the external Sema source about this Sema object.
   if (ExternalSemaSource *ExternalSema
@@ -986,6 +1000,10 @@ void Sema::ActOnEndOfTranslationUnit() {
       TUScope = nullptr;
     return;
   }
+
+  // Act on extern delarations
+  for (auto *VD : ExternDecls)
+    Consumer.CompleteExternDeclaration(VD);
 
   // C99 6.9.2p2:
   //   A declaration of an identifier for an object that has file

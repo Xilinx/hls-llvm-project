@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -1331,7 +1336,8 @@ private:
     // If a (non-string) literal follows, this is likely a cast.
     if (Tok.Next->isNot(tok::string_literal) &&
         (Tok.Next->Tok.isLiteral() ||
-         Tok.Next->isOneOf(tok::kw_sizeof, tok::kw_alignof)))
+         Tok.Next->isOneOf(tok::kw_sizeof, tok::kw_alignof,
+                           tok::kw___bitwidthof)))
       return true;
 
     // Heuristically try to determine whether the parentheses contain a type.
@@ -1404,7 +1410,7 @@ private:
     if (PrevToken->isOneOf(tok::l_paren, tok::l_square, tok::l_brace,
                            tok::comma, tok::semi, tok::kw_return, tok::colon,
                            tok::equal, tok::kw_delete, tok::kw_sizeof,
-                           tok::kw_throw) ||
+                           tok::kw_throw, tok::kw___bitwidthof) ||
         PrevToken->isOneOf(TT_BinaryOperator, TT_ConditionalExpr,
                            TT_UnaryOperator, TT_CastRParen))
       return TT_UnaryOperator;

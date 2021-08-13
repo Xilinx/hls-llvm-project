@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements divergence analysis which determines whether a branch
@@ -82,8 +87,9 @@ namespace {
 class DivergencePropagator {
 public:
   DivergencePropagator(Function &F, TargetTransformInfo &TTI, DominatorTree &DT,
-                       PostDominatorTree &PDT, DenseSet<const Value *> &DV)
-      : F(F), TTI(TTI), DT(DT), PDT(PDT), DV(DV) {}
+                       PostDominatorTree &PDT, DenseSet<const Value *> &DV,
+                       DenseSet<const BasicBlock *> &DBB)
+      : F(F), TTI(TTI), DT(DT), PDT(PDT), DV(DV), DBB(DBB) {}
   void populateWithSourcesOfDivergence();
   void propagate();
 
@@ -94,7 +100,7 @@ private:
   void exploreSyncDependency(TerminatorInst *TI);
   // Computes the influence region from Start to End. This region includes all
   // basic blocks on any simple path from Start to End.
-  void computeInfluenceRegion(BasicBlock *Start, BasicBlock *End,
+  void computeInfluenceRegion(DomTreeNode *Start, DomTreeNode *End,
                               DenseSet<BasicBlock *> &InfluenceRegion);
   // Finds all users of I that are outside the influence region, and add these
   // users to Worklist.
@@ -105,8 +111,9 @@ private:
   TargetTransformInfo &TTI;
   DominatorTree &DT;
   PostDominatorTree &PDT;
-  std::vector<Value *> Worklist; // Stack for DFS.
-  DenseSet<const Value *> &DV;   // Stores all divergent values.
+  std::vector<Value *> Worklist;     // Stack for DFS.
+  DenseSet<const Value *> &DV;       // Stores all divergent values.
+  DenseSet<const BasicBlock *> &DBB; // Stores all divergent basic blocks.
 };
 
 void DivergencePropagator::populateWithSourcesOfDivergence() {
@@ -148,15 +155,19 @@ void DivergencePropagator::exploreSyncDependency(TerminatorInst *TI) {
   if (!ThisNode)
     return;
 
-  BasicBlock *IPostDom = ThisNode->getIDom()->getBlock();
+  DomTreeNode *IPostDom = ThisNode->getIDom();
   if (IPostDom == nullptr)
     return;
 
-  for (auto I = IPostDom->begin(); isa<PHINode>(I); ++I) {
-    // A PHINode is uniform if it returns the same value no matter which path is
-    // taken.
-    if (!cast<PHINode>(I)->hasConstantOrUndefValue() && DV.insert(&*I).second)
-      Worklist.push_back(&*I);
+  // If this is the virtual post-dominator king, there is not merge block with
+  // phi node to mark.
+  if (IPostDom->getBlock() != nullptr) {
+    for (auto I = IPostDom->getBlock()->begin(); isa<PHINode>(I); ++I) {
+      // A PHINode is uniform if it returns the same value no matter which path
+      // is taken.
+      if (!cast<PHINode>(I)->hasConstantOrUndefValue() && DV.insert(&*I).second)
+        Worklist.push_back(&*I);
+    }
   }
 
   // Propagation rule 2: if a value defined in a loop is used outside, the user
@@ -179,7 +190,8 @@ void DivergencePropagator::exploreSyncDependency(TerminatorInst *TI) {
   // for all the values defined in the influence region but used outside. All
   // these users are sync dependent on TI.
   DenseSet<BasicBlock *> InfluenceRegion;
-  computeInfluenceRegion(ThisBB, IPostDom, InfluenceRegion);
+  computeInfluenceRegion(ThisNode, IPostDom, InfluenceRegion);
+  DBB.insert(InfluenceRegion.begin(), InfluenceRegion.end());
   // An insight that can speed up the search process is that all the in-region
   // values that are used outside must dominate TI. Therefore, instead of
   // searching every basic blocks in the influence region, we search all the
@@ -206,20 +218,23 @@ void DivergencePropagator::findUsersOutsideInfluenceRegion(
   }
 }
 
-// A helper function for computeInfluenceRegion that adds successors of "ThisBB"
-// to the influence region.
+// A helper function for computeInfluenceRegion that adds successors of
+// "ThisNode" to the influence region.
 static void
-addSuccessorsToInfluenceRegion(BasicBlock *ThisBB, BasicBlock *End,
+addSuccessorsToInfluenceRegion(DomTreeNode *ThisNode, DomTreeNode *IPostDom,
                                DenseSet<BasicBlock *> &InfluenceRegion,
                                std::vector<BasicBlock *> &InfluenceStack) {
-  for (BasicBlock *Succ : successors(ThisBB)) {
+  BasicBlock *End = IPostDom->getBlock();
+  for (BasicBlock *Succ : successors(ThisNode->getBlock())) {
+    // End can be nullptr if it is the virtual post-dominator king.
+    // Then we explore all successors and that is fine.
     if (Succ != End && InfluenceRegion.insert(Succ).second)
       InfluenceStack.push_back(Succ);
   }
 }
 
 void DivergencePropagator::computeInfluenceRegion(
-    BasicBlock *Start, BasicBlock *End,
+    DomTreeNode *Start, DomTreeNode *End,
     DenseSet<BasicBlock *> &InfluenceRegion) {
   assert(PDT.properlyDominates(End, Start) &&
          "End does not properly dominate Start");
@@ -232,7 +247,8 @@ void DivergencePropagator::computeInfluenceRegion(
   while (!InfluenceStack.empty()) {
     BasicBlock *BB = InfluenceStack.back();
     InfluenceStack.pop_back();
-    addSuccessorsToInfluenceRegion(BB, End, InfluenceRegion, InfluenceStack);
+    addSuccessorsToInfluenceRegion(PDT.getNode(BB), End, InfluenceRegion,
+                                   InfluenceStack);
   }
 }
 
@@ -292,38 +308,35 @@ bool DivergenceAnalysis::runOnFunction(Function &F) {
   if (!TTI.hasBranchDivergence())
     return false;
 
+  CurrentFunction = &F;
   DivergentValues.clear();
+  DivergentBasicBlocks.clear();
   auto &PDT = getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
   DivergencePropagator DP(F, TTI,
                           getAnalysis<DominatorTreeWrapperPass>().getDomTree(),
-                          PDT, DivergentValues);
+                          PDT, DivergentValues, DivergentBasicBlocks);
   DP.populateWithSourcesOfDivergence();
   DP.propagate();
   return false;
 }
 
 void DivergenceAnalysis::print(raw_ostream &OS, const Module *) const {
-  if (DivergentValues.empty())
+  if (DivergentValues.empty() || !CurrentFunction)
     return;
-  const Value *FirstDivergentValue = *DivergentValues.begin();
-  const Function *F;
-  if (const Argument *Arg = dyn_cast<Argument>(FirstDivergentValue)) {
-    F = Arg->getParent();
-  } else if (const Instruction *I =
-                 dyn_cast<Instruction>(FirstDivergentValue)) {
-    F = I->getParent()->getParent();
-  } else {
-    llvm_unreachable("Only arguments and instructions can be divergent");
-  }
 
   // Dumps all divergent values in F, arguments and then instructions.
-  for (auto &Arg : F->args()) {
+  for (auto &Arg : CurrentFunction->args()) {
     if (DivergentValues.count(&Arg))
       OS << "DIVERGENT:  " << Arg << "\n";
   }
   // Iterate instructions using instructions() to ensure a deterministic order.
-  for (auto &I : instructions(F)) {
+  for (auto &I : instructions(CurrentFunction)) {
     if (DivergentValues.count(&I))
       OS << "DIVERGENT:" << I << "\n";
+  }
+  // Dumps all control divergent basic blocks in F.
+  for (auto &BB : *CurrentFunction) {
+    if (DivergentBasicBlocks.count(&BB))
+      OS << "DIVERGENT:  label %" << BB.getName() << "\n";
   }
 }

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the TokenKind database.  This includes normal tokens like
@@ -257,6 +262,7 @@ PUNCTUATOR(caretcaret,            "^^")
 //   KEYBORLAND - This is a keyword if Borland extensions are enabled
 //   KEYCOROUTINES - This is a keyword if support for the C++ coroutines
 //                   TS is enabled
+//   KEYHLS      - This is a keyword if support for the HLS extension is enabled
 //   BOOLSUPPORT - This is a keyword if 'bool' is a built-in type
 //   HALFSUPPORT - This is a keyword if 'half' is a built-in type
 //   WCHARSUPPORT - This is a keyword if 'wchar_t' is a built-in type
@@ -286,6 +292,7 @@ KEYWORD(return                      , KEYALL)
 KEYWORD(short                       , KEYALL)
 KEYWORD(signed                      , KEYALL)
 KEYWORD(sizeof                      , KEYALL)
+KEYWORD(__bitwidthof                , KEYHLS)
 KEYWORD(static                      , KEYALL)
 KEYWORD(struct                      , KEYALL)
 KEYWORD(switch                      , KEYALL)
@@ -794,6 +801,12 @@ ANNOTATION(pragma_opencl_extension)
 ANNOTATION(pragma_openmp)
 ANNOTATION(pragma_openmp_end)
 
+// Annotations for HLSExt pragma directives - #pragma HLS|AP|AUTOPILOT ...
+// The lexer produces these so that they only take effect when the parser
+// handles #pragma HLS|AP|AUTOPILOT ... directives.
+ANNOTATION(pragma_XlxHLS)
+ANNOTATION(pragma_XlxHLS_end)
+
 // Annotations for loop pragma directives #pragma clang loop ...
 // The lexer produces these so that they only take effect when the parser
 // handles #pragma loop ... directives.
@@ -808,6 +821,9 @@ ANNOTATION(pragma_attribute)
 ANNOTATION(module_include)
 ANNOTATION(module_begin)
 ANNOTATION(module_end)
+
+// HLS extension
+ALIAS("__bitwidthof__", __bitwidthof, KEYHLS)
 
 #undef ANNOTATION
 #undef TESTING_KEYWORD

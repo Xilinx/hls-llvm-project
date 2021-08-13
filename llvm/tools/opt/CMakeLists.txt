@@ -5,6 +5,7 @@ set(LLVM_LINK_COMPONENTS
   CodeGen
   Core
   Coroutines
+  DebugHelpers
   IPO
   IRReader
   InstCombine
@@ -40,3 +41,7 @@ export_executable_symbols(opt)
 if(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
   target_link_libraries(opt PRIVATE Polly)
 endif(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
+
+if(LINK_REFLOW_INTO_TOOLS)
+  target_link_libraries(opt PRIVATE Reflow)
+endif(LINK_REFLOW_INTO_TOOLS)

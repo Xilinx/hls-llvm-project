@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the code generation options. Users of this file
@@ -69,6 +74,7 @@ CODEGENOPT(EmitDeclMetadata  , 1, 0) ///< Emit special metadata indicating what
 CODEGENOPT(EmitGcovArcs      , 1, 0) ///< Emit coverage data files, aka. GCDA.
 CODEGENOPT(EmitGcovNotes     , 1, 0) ///< Emit coverage "notes" files, aka GCNO.
 CODEGENOPT(EmitOpenCLArgMetadata , 1, 0) ///< Emit OpenCL kernel arg metadata.
+CODEGENOPT(EmitHLSIR         , 1, 0) ///< Generate HLS compatible LLVM IR
 CODEGENOPT(EmulatedTLS       , 1, 0) ///< Set when -femulated-tls is enabled.
 /// \brief Embed Bitcode mode (off/all/bitcode/marker).
 ENUM_CODEGENOPT(EmbedBitcode, EmbedBitcodeKind, 2, Embed_Off)
@@ -297,6 +303,10 @@ VALUE_CODEGENOPT(DiagnosticsHotnessThreshold, 32, 0)
 
 /// Whether copy relocations support is available when building as PIE.
 CODEGENOPT(PIECopyRelocations, 1, 0)
+
+/// Whether to record all optimization remarks or only required ones to
+/// -foptimization-record-file output file.
+CODEGENOPT(RespectDiagnosticFilters, 1, 0)
 
 /// Whether we should use the undefined behaviour optimization for control flow
 /// paths that reach the end of a function without executing a required return.

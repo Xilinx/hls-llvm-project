@@ -93,7 +93,7 @@ Clang-Tidy Checks
    google-runtime-member-string-references
    google-runtime-operator
    google-runtime-references
-   hicpp-avoid-goto (redirects to cppcoreguidelines-avoid-goto) <hicpp-avoid-goto>
+   hicpp-avoid-goto
    hicpp-braces-around-statements (redirects to readability-braces-around-statements) <hicpp-braces-around-statements>
    hicpp-deprecated-headers (redirects to modernize-deprecated-headers) <hicpp-deprecated-headers>
    hicpp-exception-baseclass
@@ -221,3 +221,23 @@ Clang-Tidy Checks
    readability-static-accessed-through-instance
    readability-static-definition-in-anonymous-namespace
    readability-uniqueptr-delete-release
+   xilinx-aggregate-on-apint
+   xilinx-aggregate-on-hls-vector
+   xilinx-apint-literal-convertation
+   xilinx-array-stream-check
+   xilinx-constantarray-param
+   xilinx-directive2pragma
+   xilinx-dump-openclkernel
+   xilinx-loop-brace-bracket
+   xilinx-remove-assert
+   xilinx-resource-pragma-transformer
+   xilinx-ssdm-intrinsics-arguments
+   xilinx-ssdm-intrinsics-scope
+   xilinx-stream-in-struct
+   xilinx-systemc-detector
+   xilinx-tb-process
+   xilinx-tb-xfmat
+   xilinx-tb31-process
+   xilinx-top-parameters
+   xilinx-warn-mayneed-no-ctor-attribute
+   xilinx-xfmat-array-geometry

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains a pass that keeps track of @llvm.assume intrinsics in
@@ -102,6 +107,10 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
         // (A << C) or (A >>_s C) or (A >>_u C) where C is some constant.
         } else if (match(V, m_Shift(m_Value(A), m_ConstantInt(C)))) {
           AddAffected(A);
+        // (A urem B)
+        } else if (match(V, m_URem(m_Value(A), m_Value(B)))) {
+          AddAffected(A);
+          AddAffected(B);
         }
       };
 

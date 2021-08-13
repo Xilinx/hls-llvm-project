@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements routines for folding instructions into simpler forms
@@ -495,10 +500,16 @@ static Value *ThreadCmpOverPHI(CmpInst::Predicate Pred, Value *LHS, Value *RHS,
 
   // Evaluate the BinOp on the incoming phi values.
   Value *CommonValue = nullptr;
-  for (Value *Incoming : PI->incoming_values()) {
+  for (unsigned i = 0; i != PI->getNumIncomingValues(); ++i) {
+    Value *Incoming = PI->getIncomingValue(i);
     // If the incoming value is the phi node itself, it can safely be skipped.
     if (Incoming == PI) continue;
-    Value *V = SimplifyCmpInst(Pred, Incoming, RHS, Q, MaxRecurse);
+    // Need to change the corresponding context while utilizing dataflow
+    // analysis to evalute the PHI operand. Change the context to the
+    // terminator of the incoming BB terminator.
+    auto *CxtI = PI->getIncomingBlock(i)->getTerminator();
+    SimplifyQuery CQ = Q.getWithInstruction(CxtI);
+    Value *V = SimplifyCmpInst(Pred, Incoming, RHS, CQ, MaxRecurse);
     // If the operation failed to simplify, or simplified to a different value
     // to previously, then give up.
     if (!V || (CommonValue && V != CommonValue))
@@ -2332,163 +2343,6 @@ static Value *simplifyICmpWithZero(CmpInst::Predicate Pred, Value *LHS,
   return nullptr;
 }
 
-/// Many binary operators with a constant operand have an easy-to-compute
-/// range of outputs. This can be used to fold a comparison to always true or
-/// always false.
-static void setLimitsForBinOp(BinaryOperator &BO, APInt &Lower, APInt &Upper) {
-  unsigned Width = Lower.getBitWidth();
-  const APInt *C;
-  switch (BO.getOpcode()) {
-  case Instruction::Add:
-    if (match(BO.getOperand(1), m_APInt(C)) && !C->isNullValue()) {
-      // FIXME: If we have both nuw and nsw, we should reduce the range further.
-      if (BO.hasNoUnsignedWrap()) {
-        // 'add nuw x, C' produces [C, UINT_MAX].
-        Lower = *C;
-      } else if (BO.hasNoSignedWrap()) {
-        if (C->isNegative()) {
-          // 'add nsw x, -C' produces [SINT_MIN, SINT_MAX - C].
-          Lower = APInt::getSignedMinValue(Width);
-          Upper = APInt::getSignedMaxValue(Width) + *C + 1;
-        } else {
-          // 'add nsw x, +C' produces [SINT_MIN + C, SINT_MAX].
-          Lower = APInt::getSignedMinValue(Width) + *C;
-          Upper = APInt::getSignedMaxValue(Width) + 1;
-        }
-      }
-    }
-    break;
-
-  case Instruction::And:
-    if (match(BO.getOperand(1), m_APInt(C)))
-      // 'and x, C' produces [0, C].
-      Upper = *C + 1;
-    break;
-
-  case Instruction::Or:
-    if (match(BO.getOperand(1), m_APInt(C)))
-      // 'or x, C' produces [C, UINT_MAX].
-      Lower = *C;
-    break;
-
-  case Instruction::AShr:
-    if (match(BO.getOperand(1), m_APInt(C)) && C->ult(Width)) {
-      // 'ashr x, C' produces [INT_MIN >> C, INT_MAX >> C].
-      Lower = APInt::getSignedMinValue(Width).ashr(*C);
-      Upper = APInt::getSignedMaxValue(Width).ashr(*C) + 1;
-    } else if (match(BO.getOperand(0), m_APInt(C))) {
-      unsigned ShiftAmount = Width - 1;
-      if (!C->isNullValue() && BO.isExact())
-        ShiftAmount = C->countTrailingZeros();
-      if (C->isNegative()) {
-        // 'ashr C, x' produces [C, C >> (Width-1)]
-        Lower = *C;
-        Upper = C->ashr(ShiftAmount) + 1;
-      } else {
-        // 'ashr C, x' produces [C >> (Width-1), C]
-        Lower = C->ashr(ShiftAmount);
-        Upper = *C + 1;
-      }
-    }
-    break;
-
-  case Instruction::LShr:
-    if (match(BO.getOperand(1), m_APInt(C)) && C->ult(Width)) {
-      // 'lshr x, C' produces [0, UINT_MAX >> C].
-      Upper = APInt::getAllOnesValue(Width).lshr(*C) + 1;
-    } else if (match(BO.getOperand(0), m_APInt(C))) {
-      // 'lshr C, x' produces [C >> (Width-1), C].
-      unsigned ShiftAmount = Width - 1;
-      if (!C->isNullValue() && BO.isExact())
-        ShiftAmount = C->countTrailingZeros();
-      Lower = C->lshr(ShiftAmount);
-      Upper = *C + 1;
-    }
-    break;
-
-  case Instruction::Shl:
-    if (match(BO.getOperand(0), m_APInt(C))) {
-      if (BO.hasNoUnsignedWrap()) {
-        // 'shl nuw C, x' produces [C, C << CLZ(C)]
-        Lower = *C;
-        Upper = Lower.shl(Lower.countLeadingZeros()) + 1;
-      } else if (BO.hasNoSignedWrap()) { // TODO: What if both nuw+nsw?
-        if (C->isNegative()) {
-          // 'shl nsw C, x' produces [C << CLO(C)-1, C]
-          unsigned ShiftAmount = C->countLeadingOnes() - 1;
-          Lower = C->shl(ShiftAmount);
-          Upper = *C + 1;
-        } else {
-          // 'shl nsw C, x' produces [C, C << CLZ(C)-1]
-          unsigned ShiftAmount = C->countLeadingZeros() - 1;
-          Lower = *C;
-          Upper = C->shl(ShiftAmount) + 1;
-        }
-      }
-    }
-    break;
-
-  case Instruction::SDiv:
-    if (match(BO.getOperand(1), m_APInt(C))) {
-      APInt IntMin = APInt::getSignedMinValue(Width);
-      APInt IntMax = APInt::getSignedMaxValue(Width);
-      if (C->isAllOnesValue()) {
-        // 'sdiv x, -1' produces [INT_MIN + 1, INT_MAX]
-        //    where C != -1 and C != 0 and C != 1
-        Lower = IntMin + 1;
-        Upper = IntMax + 1;
-      } else if (C->countLeadingZeros() < Width - 1) {
-        // 'sdiv x, C' produces [INT_MIN / C, INT_MAX / C]
-        //    where C != -1 and C != 0 and C != 1
-        Lower = IntMin.sdiv(*C);
-        Upper = IntMax.sdiv(*C);
-        if (Lower.sgt(Upper))
-          std::swap(Lower, Upper);
-        Upper = Upper + 1;
-        assert(Upper != Lower && "Upper part of range has wrapped!");
-      }
-    } else if (match(BO.getOperand(0), m_APInt(C))) {
-      if (C->isMinSignedValue()) {
-        // 'sdiv INT_MIN, x' produces [INT_MIN, INT_MIN / -2].
-        Lower = *C;
-        Upper = Lower.lshr(1) + 1;
-      } else {
-        // 'sdiv C, x' produces [-|C|, |C|].
-        Upper = C->abs() + 1;
-        Lower = (-Upper) + 1;
-      }
-    }
-    break;
-
-  case Instruction::UDiv:
-    if (match(BO.getOperand(1), m_APInt(C)) && !C->isNullValue()) {
-      // 'udiv x, C' produces [0, UINT_MAX / C].
-      Upper = APInt::getMaxValue(Width).udiv(*C) + 1;
-    } else if (match(BO.getOperand(0), m_APInt(C))) {
-      // 'udiv C, x' produces [0, C].
-      Upper = *C + 1;
-    }
-    break;
-
-  case Instruction::SRem:
-    if (match(BO.getOperand(1), m_APInt(C))) {
-      // 'srem x, C' produces (-|C|, |C|).
-      Upper = C->abs();
-      Lower = (-Upper) + 1;
-    }
-    break;
-
-  case Instruction::URem:
-    if (match(BO.getOperand(1), m_APInt(C)))
-      // 'urem x, C' produces [0, C).
-      Upper = *C;
-    break;
-
-  default:
-    break;
-  }
-}
-
 static Value *simplifyICmpWithConstant(CmpInst::Predicate Pred, Value *LHS,
                                        Value *RHS) {
   const APInt *C;
@@ -2502,19 +2356,7 @@ static Value *simplifyICmpWithConstant(CmpInst::Predicate Pred, Value *LHS,
   if (RHS_CR.isFullSet())
     return ConstantInt::getTrue(GetCompareTy(RHS));
 
-  // Find the range of possible values for binary operators.
-  unsigned Width = C->getBitWidth();
-  APInt Lower = APInt(Width, 0);
-  APInt Upper = APInt(Width, 0);
-  if (auto *BO = dyn_cast<BinaryOperator>(LHS))
-    setLimitsForBinOp(*BO, Lower, Upper);
-
-  ConstantRange LHS_CR =
-      Lower != Upper ? ConstantRange(Lower, Upper) : ConstantRange(Width, true);
-
-  if (auto *I = dyn_cast<Instruction>(LHS))
-    if (auto *Ranges = I->getMetadata(LLVMContext::MD_range))
-      LHS_CR = LHS_CR.intersectWith(getConstantRangeFromMetadata(*Ranges));
+  ConstantRange LHS_CR = computeConstantRange(LHS);
 
   if (!LHS_CR.isFullSet()) {
     if (RHS_CR.contains(LHS_CR))
@@ -3259,6 +3101,11 @@ static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
       isKnownNonEqual(LHS, RHS, Q.DL, Q.AC, Q.CxtI, Q.DT)) {
     return Pred == ICmpInst::ICMP_NE ? getTrue(ITy) : getFalse(ITy);
   }
+
+  // icmp eq|ne X, Y -> true|false if X == Y
+  if (ICmpInst::isEquality(Pred) &&
+      isKnownEqual(LHS, RHS, Q.DL, Q.AC, Q.CxtI, Q.DT))
+    return Pred == ICmpInst::ICMP_EQ ? getTrue(ITy) : getFalse(ITy);
 
   if (Value *V = simplifyICmpWithBinOp(Pred, LHS, RHS, Q, MaxRecurse))
     return V;

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This header defines Bitcode enum values for Clang serialized AST files.
@@ -1092,7 +1097,13 @@ namespace serialization {
       TYPE_DEPENDENT_SIZED_EXT_VECTOR = 46,
 
       /// \brief A DependentAddressSpaceType record.
-      TYPE_DEPENDENT_ADDRESS_SPACE = 47
+      TYPE_DEPENDENT_ADDRESS_SPACE = 47,
+
+      /// \brief Arbitrary-precision integer type record
+      TYPE_APINT                 = 48,
+
+      /// \brief Arbitrary-precision integer type record
+      TYPE_DEPENDENT_SIZED_APINT = 49
     };
 
     /// \brief The type IDs for special types constructed by semantic

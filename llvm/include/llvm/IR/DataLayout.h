@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines layout properties related to datatype size/offset/alignment
@@ -387,6 +392,10 @@ public:
     return (getTypeSizeInBits(Ty) + 7) / 8;
   }
 
+  /// \brief Returns the maximum number of bytes that may be overwritten by
+  /// storing an integer type of the specified bitwidth.
+  uint64_t getIntegerTypeStoreSize(unsigned BitWidth) const;
+
   /// \brief Returns the maximum number of bits that may be overwritten by
   /// storing the specified type; always a multiple of 8.
   ///
@@ -404,6 +413,10 @@ public:
     // Round up to the next alignment boundary.
     return alignTo(getTypeStoreSize(Ty), getABITypeAlignment(Ty));
   }
+
+  /// \brief Returns the offset in bytes between successive objects of an
+  /// integer type of the specified bitwidth, including alignment padding.
+  uint64_t getIntegerTypeAllocSize(unsigned BitWidth) const;
 
   /// \brief Returns the offset in bits between successive objects of the
   /// specified type, including alignment padding; always a multiple of 8.

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Triple.h"
@@ -53,6 +58,8 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
   case thumbeb:        return "thumbeb";
   case x86:            return "i386";
   case x86_64:         return "x86_64";
+  case fpga32:         return "fpga32";
+  case fpga64:         return "fpga64";
   case xcore:          return "xcore";
   case nvptx:          return "nvptx";
   case nvptx64:        return "nvptx64";
@@ -121,6 +128,9 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
   case x86:
   case x86_64:      return "x86";
 
+  case fpga32:
+  case fpga64:      return "fpga";
+
   case xcore:       return "xcore";
 
   // NVPTX intrinsics are namespaced under nvvm.
@@ -168,6 +178,7 @@ StringRef Triple::getVendorTypeName(VendorType Kind) {
   case AMD: return "amd";
   case Mesa: return "mesa";
   case SUSE: return "suse";
+  case Xilinx: return "xilinx";
   }
 
   llvm_unreachable("Invalid VendorType!");
@@ -292,6 +303,8 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
     .Case("thumbeb", thumbeb)
     .Case("x86", x86)
     .Case("x86-64", x86_64)
+    .Case("fpga32", fpga32)
+    .Case("fpga64", fpga64)
     .Case("xcore", xcore)
     .Case("nvptx", nvptx)
     .Case("nvptx64", nvptx64)
@@ -384,6 +397,8 @@ static Triple::ArchType parseArch(StringRef ArchName) {
     // FIXME: Do we need to support these?
     .Cases("i786", "i886", "i986", Triple::x86)
     .Cases("amd64", "x86_64", "x86_64h", Triple::x86_64)
+    .Case("fpga32", Triple::fpga32)
+    .Cases("fpga", "fpga64", Triple::fpga64)
     .Cases("powerpc", "ppc32", Triple::ppc)
     .Cases("powerpc64", "ppu", "ppc64", Triple::ppc64)
     .Cases("powerpc64le", "ppc64le", Triple::ppc64le)
@@ -465,6 +480,7 @@ static Triple::VendorType parseVendor(StringRef VendorName) {
     .Case("amd", Triple::AMD)
     .Case("mesa", Triple::Mesa)
     .Case("suse", Triple::SUSE)
+    .Case("xilinx", Triple::Xilinx)
     .Default(Triple::UnknownVendor);
 }
 
@@ -624,6 +640,8 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
   case Triple::thumb:
   case Triple::x86:
   case Triple::x86_64:
+  case Triple::fpga32:
+  case Triple::fpga64:
     if (T.isOSDarwin())
       return Triple::MachO;
     else if (T.isOSWindows())
@@ -1206,6 +1224,7 @@ static unsigned getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
   case llvm::Triple::thumb:
   case llvm::Triple::thumbeb:
   case llvm::Triple::x86:
+  case llvm::Triple::fpga32:
   case llvm::Triple::xcore:
   case llvm::Triple::amdil:
   case llvm::Triple::hsail:
@@ -1232,6 +1251,7 @@ static unsigned getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
   case llvm::Triple::sparcv9:
   case llvm::Triple::systemz:
   case llvm::Triple::x86_64:
+  case llvm::Triple::fpga64:
   case llvm::Triple::amdil64:
   case llvm::Triple::hsail64:
   case llvm::Triple::spir64:
@@ -1291,6 +1311,7 @@ Triple Triple::get32BitArchVariant() const {
   case Triple::thumb:
   case Triple::thumbeb:
   case Triple::x86:
+  case Triple::fpga32:
   case Triple::xcore:
   case Triple::lanai:
   case Triple::shave:
@@ -1309,6 +1330,7 @@ Triple Triple::get32BitArchVariant() const {
   case Triple::sparcv9:        T.setArch(Triple::sparc);   break;
   case Triple::riscv64:        T.setArch(Triple::riscv32); break;
   case Triple::x86_64:         T.setArch(Triple::x86);     break;
+  case Triple::fpga64:         T.setArch(Triple::fpga32);  break;
   case Triple::amdil64:        T.setArch(Triple::amdil);   break;
   case Triple::hsail64:        T.setArch(Triple::hsail);   break;
   case Triple::spir64:         T.setArch(Triple::spir);    break;
@@ -1358,6 +1380,7 @@ Triple Triple::get64BitArchVariant() const {
   case Triple::x86_64:
   case Triple::wasm64:
   case Triple::renderscript64:
+  case Triple::fpga64:
     // Already 64-bit.
     break;
 
@@ -1371,6 +1394,7 @@ Triple Triple::get64BitArchVariant() const {
   case Triple::sparc:           T.setArch(Triple::sparcv9);    break;
   case Triple::riscv32:         T.setArch(Triple::riscv64);    break;
   case Triple::x86:             T.setArch(Triple::x86_64);     break;
+  case Triple::fpga32:          T.setArch(Triple::fpga64);     break;
   case Triple::amdil:           T.setArch(Triple::amdil64);    break;
   case Triple::hsail:           T.setArch(Triple::hsail64);    break;
   case Triple::spir:            T.setArch(Triple::spir64);     break;
@@ -1413,6 +1437,8 @@ Triple Triple::getBigEndianArchVariant() const {
   case Triple::wasm64:
   case Triple::x86:
   case Triple::x86_64:
+  case Triple::fpga32:
+  case Triple::fpga64:
   case Triple::xcore:
   case Triple::renderscript32:
   case Triple::renderscript64:
@@ -1503,6 +1529,8 @@ bool Triple::isLittleEndian() const {
   case Triple::wasm64:
   case Triple::x86:
   case Triple::x86_64:
+  case Triple::fpga32:
+  case Triple::fpga64:
   case Triple::xcore:
   case Triple::tcele:
   case Triple::renderscript32:

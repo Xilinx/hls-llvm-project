@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "Gnu.h"
@@ -1977,6 +1982,7 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
     }
     break;
   case llvm::Triple::x86_64:
+  case llvm::Triple::fpga64:
     LibDirs.append(begin(X86_64LibDirs), end(X86_64LibDirs));
     TripleAliases.append(begin(X86_64Triples), end(X86_64Triples));
     // x32 is always available when x86_64 is available, so adding it as
@@ -1990,6 +1996,7 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
     }
     break;
   case llvm::Triple::x86:
+  case llvm::Triple::fpga32:
     LibDirs.append(begin(X86LibDirs), end(X86LibDirs));
     // MCU toolchain is 32 bit only and its triple alias is TargetTriple
     // itself, which will be appended below.

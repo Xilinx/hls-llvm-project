@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code dealing with code generation of C++ declarations
@@ -363,6 +368,33 @@ void CodeGenModule::EmitPointerToInitFunc(const VarDecl *D,
     PtrArray->setComdat(C);
 }
 
+static bool isNoCtorCXXConstructExpr(const Expr *Init, const VarDecl &D) {
+  if (!Init)
+    return true;
+
+  if (!D.hasAttr<NoCtorAttr>())
+    return false;
+
+  const CXXConstructExpr *Construct = dyn_cast<CXXConstructExpr>(Init);
+
+  // If constructors have the reference type optional arguments, such as
+  //   constexpr complex(const T& re = T(), const T& im = T());
+  // The object will be copy constructed. This means there will be an extra
+  // clean up expression for it.
+  if (const ExprWithCleanups *Cleanup = dyn_cast<ExprWithCleanups>(Init))
+    Construct = dyn_cast<CXXConstructExpr>(Cleanup->getSubExpr());
+
+  // NoCtorAttr only impacts on initailization code inside constructors
+  if (!Construct)
+    return false;
+
+  for (auto *arg : Construct->arguments())
+    if (!isa<CXXDefaultArgExpr>(arg))
+      return false;
+
+  return true;
+}
+
 void
 CodeGenModule::EmitCXXGlobalVarDeclInitFunc(const VarDecl *D,
                                             llvm::GlobalVariable *Addr,
@@ -376,6 +408,12 @@ CodeGenModule::EmitCXXGlobalVarDeclInitFunc(const VarDecl *D,
   if (getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
       (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>() ||
        D->hasAttr<CUDASharedAttr>()))
+    return;
+
+  // If the CXXConstructExpr is with NoCtorAttr and without user given arg
+  // constructor, it requires no initialization code to be generated.
+  auto *Init = D->getInit();
+  if (Init && isNoCtorCXXConstructExpr(Init, *D))
     return;
 
   // Check if we've already initialized this decl.

@@ -1,6 +1,6 @@
 set(LLVM_LINK_COMPONENTS support)
 
-add_clang_library(clangTidyCppCoreGuidelinesModule
+add_clang_library(clangTCCGModule
   AvoidGotoCheck.cpp
   CppCoreGuidelinesTidyModule.cpp
   InterfacesGlobalInitCheck.cpp

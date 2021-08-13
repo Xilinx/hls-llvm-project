@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass performs global value numbering to eliminate fully redundant
@@ -93,9 +98,15 @@ STATISTIC(NumGVNSimpl,  "Number of instructions simplified");
 STATISTIC(NumGVNEqProp, "Number of equalities propagated");
 STATISTIC(NumPRELoad,   "Number of loads PRE'd");
 
+// HLS BEGIN
+// Disable PRE since it will split critical edges. This behavior may change
+// the loop structure when the critical edge is loop backedge.
 static cl::opt<bool> EnablePRE("enable-pre",
-                               cl::init(true), cl::Hidden);
-static cl::opt<bool> EnableLoadPRE("enable-load-pre", cl::init(true));
+                               cl::init(false), cl::Hidden);
+static cl::opt<bool> EnableIndVarPRE("enable-indvar-pre",
+                               cl::init(false), cl::Hidden);
+static cl::opt<bool> EnableLoadPRE("enable-load-pre", cl::init(false));
+// HLS END
 
 // Maximum allowed recursion depth.
 static cl::opt<uint32_t>
@@ -507,6 +518,16 @@ uint32_t GVN::ValueTable::lookupOrAdd(Value *V) {
   }
 
   Instruction* I = cast<Instruction>(V);
+
+  // HLS BEGIN
+  if (I->getMetadata("xilinx.attributes")) {
+    // Generate unique number for instructions with xilinx attributes.
+    // This can keep these instructions untouched during GVN.
+    valueNumbering[V] = nextValueNumber;
+    return nextValueNumber++;
+  }
+
+  // HLS END
   Expression exp;
   switch (I->getOpcode()) {
     case Instruction::Call:
@@ -2184,6 +2205,14 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
       CurInst->mayReadFromMemory() || CurInst->mayHaveSideEffects() ||
       isa<DbgInfoIntrinsic>(CurInst))
     return false;
+
+  // Don't do PRE on Loop's induction variable.
+  if (!EnableIndVarPRE)
+    if (isa<BinaryOperator>(CurInst) && CurInst->getType()->isIntegerTy())
+      if (auto *Phi = dyn_cast<PHINode>(CurInst->getOperand(0)))
+        if (std::any_of(CurInst->user_begin(), CurInst->user_end(),
+                        [Phi](Value *V) { return V == Phi; }))
+          return false;
 
   // Don't do PRE on compares. The PHI would prevent CodeGenPrepare from
   // sinking the compare again, and it would force the code generator to

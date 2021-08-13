@@ -209,6 +209,14 @@ options are specified.
                            cl::init(false),
                            cl::cat(ClangTidyCategory));
 
+static cl::opt<std::string> ImportDirective("import-directive", cl::desc(R"(
+file to load hls direcive command in. The
+directive command can be transformed  into hls
+pragma with clang-tidy replacements.
+)"),
+										cl::value_desc("filename"),
+										cl::cat(ClangTidyCategory));
+
 static cl::opt<std::string> VfsOverlay("vfsoverlay", cl::desc(R"(
 Overlay the virtual filesystem described by file
 over the real file system.
@@ -305,6 +313,7 @@ static std::unique_ptr<ClangTidyOptionsProvider> createOptionsProvider() {
   // USERNAME is used on Windows.
   if (!DefaultOptions.User)
     DefaultOptions.User = llvm::sys::Process::GetEnv("USERNAME");
+  DefaultOptions.ImportDirective = ImportDirective;
 
   ClangTidyOptions OverrideOptions;
   if (Checks.getNumOccurrences() > 0)
@@ -319,6 +328,8 @@ static std::unique_ptr<ClangTidyOptionsProvider> createOptionsProvider() {
     OverrideOptions.AnalyzeTemporaryDtors = AnalyzeTemporaryDtors;
   if (FormatStyle.getNumOccurrences() > 0)
     OverrideOptions.FormatStyle = FormatStyle;
+  if (ImportDirective.getNumOccurrences() > 0)
+	  OverrideOptions.ImportDirective = ImportDirective;
 
   if (!Config.empty()) {
     if (llvm::ErrorOr<ClangTidyOptions> ParsedConfig =
@@ -448,10 +459,9 @@ static int clangTidyMain(int argc, const char **argv) {
   runClangTidy(Context, OptionsParser.getCompilations(), PathList, BaseFS,
                EnableCheckProfile ? &Profile : nullptr);
   ArrayRef<ClangTidyError> Errors = Context.getErrors();
-  bool FoundErrors =
-      std::find_if(Errors.begin(), Errors.end(), [](const ClangTidyError &E) {
-        return E.DiagLevel == ClangTidyError::Error;
-      }) != Errors.end();
+  bool FoundErrors = llvm::find_if(Errors, [](const ClangTidyError &E) {
+                       return E.DiagLevel == ClangTidyError::Error;
+                     }) != Errors.end();
 
   const bool DisableFixes = Fix && FoundErrors && !FixErrors;
 
@@ -489,6 +499,19 @@ static int clangTidyMain(int argc, const char **argv) {
                    << Plural << "\n";
     }
     return WErrorCount;
+  }
+
+  if (FoundErrors) {
+    // TODO: Figure out when zero exit code should be used with -fix-errors:
+    //   a. when a fix has been applied for an error
+    //   b. when a fix has been applied for all errors
+    //   c. some other condition.
+    // For now always returning zero when -fix-errors is used.
+    if (FixErrors)
+      return 0;
+    if (!Quiet)
+      llvm::errs() << "Found compiler error(s).\n";
+    return 1;
   }
 
   return 0;
@@ -568,6 +591,11 @@ static int LLVM_ATTRIBUTE_UNUSED ObjCModuleAnchorDestination =
 extern volatile int HICPPModuleAnchorSource;
 static int LLVM_ATTRIBUTE_UNUSED HICPPModuleAnchorDestination =
     HICPPModuleAnchorSource;
+
+// This anchor is used to force the linker to link the XilinxModule.
+extern volatile int XilinxModuleAnchorSource;
+static int LLVM_ATTRIBUTE_UNUSED XilinxModuleAnchorDestination =
+    XilinxModuleAnchorSource;
 
 } // namespace tidy
 } // namespace clang

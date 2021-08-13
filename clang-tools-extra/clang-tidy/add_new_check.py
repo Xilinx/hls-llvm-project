@@ -64,6 +64,14 @@ def write_header(module_path, module, check_name, check_name_camel):
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+""")
+    if module=='xilinx':
+      f.write("""// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//""")
+    f.write("""
 //===----------------------------------------------------------------------===//
 
 #ifndef %(header_guard)s
@@ -115,6 +123,14 @@ def write_implementation(module_path, module, check_name_camel):
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+""")
+    if module=='xilinx':
+      f.write("""// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//""")
+    f.write("""
 //===----------------------------------------------------------------------===//
 
 #include "%(check_name)s.h"

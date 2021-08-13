@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -96,6 +101,7 @@ namespace clang {
   /// \brief Names for the "expression or type" traits.
   enum UnaryExprOrTypeTrait {
     UETT_SizeOf,
+    UETT_BitwidthOf,
     UETT_AlignOf,
     UETT_VecStep,
     UETT_OpenMPRequiredSimdAlign,

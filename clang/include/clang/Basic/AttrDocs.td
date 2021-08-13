@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===---------------------------------------------------------------------===//
 
 // To test that the documentation builds cleanly, you must run clang-tblgen to
@@ -3230,4 +3235,34 @@ For more information see
 `gcc documentation <https://gcc.gnu.org/onlinedocs/gcc-7.2.0/gcc/Microsoft-Windows-Variable-Attributes.html>`_
 or `msvc documentation <https://docs.microsoft.com/pl-pl/cpp/cpp/selectany>`_.
 }];
+}
+
+def HLSExtNoCtorDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+Use this attribute to ignore implicit constructors and destructors. It can be
+applied on variable declaration, C++ class or C++ struct fields.
+
+Note that __attribute__((no_ctor)) on a variable declaration or a field
+declaration will only take effect when all below requirements are met.
+
+- There isn't any inheritance existed.
+- All the fields in the C++ class/struct are with __attribute__((no_ctor)) or
+  is a trivial type.
+- There isn't any user defined constructor.
+- There isn't any argument passed to the constructor
+
+  .. code-block:: c
+
+    void foo(std::complex<float> *out, std::complex<float> *in);
+    void bar(std::complex<float> *out, std::complex<float> *in);
+
+    void top(std::complex<float> *out, std::complex<float> *in) {
+    #pragma HLS DATAFLOW
+      std::complex<float> buff[50] __attribute__((no_ctor));
+      foo(buff, in);
+      bar(out, buff);
+    }
+
+  }];
 }

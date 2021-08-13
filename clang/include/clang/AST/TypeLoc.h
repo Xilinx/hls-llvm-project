@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -1810,6 +1815,16 @@ class DependentSizedExtVectorTypeLoc :
     public InheritingConcreteTypeLoc<TypeSpecTypeLoc,
                                      DependentSizedExtVectorTypeLoc,
                                      DependentSizedExtVectorType> {
+};
+
+class DependentSizedAPIntTypeLoc
+    : public InheritingConcreteTypeLoc<TypeSpecTypeLoc,
+                                       DependentSizedAPIntTypeLoc,
+                                       DependentSizedAPIntType> {};
+
+// FIXME: attribute locations.
+class APIntTypeLoc : public InheritingConcreteTypeLoc<TypeSpecTypeLoc,
+                                                      APIntTypeLoc, APIntType> {
 };
 
 // FIXME: location of the '_Complex' keyword.

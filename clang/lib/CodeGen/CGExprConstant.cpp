@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code to emit Constant Expr nodes as LLVM code.
@@ -1479,6 +1484,9 @@ llvm::Constant *ConstantEmitter::emitForMemory(CodeGenModule &CGM,
   // Zero-extend bool.
   if (C->getType()->isIntegerTy(1)) {
     llvm::Type *boolTy = CGM.getTypes().ConvertTypeForMem(destType);
+    if (CGM.getLangOpts().HLSExt && boolTy->isIntegerTy(1))
+      return C;
+
     return llvm::ConstantExpr::getZExt(C, boolTy);
   }
 

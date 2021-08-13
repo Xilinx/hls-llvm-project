@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/GlobalStatus.h"
@@ -166,6 +171,13 @@ static bool analyzeGlobalAux(const Value *V, GlobalStatus &GS,
         if (MSI->isVolatile())
           return true;
         GS.StoredType = GlobalStatus::Stored;
+      // HLS BEGIN
+      } else if (isa<IntrinsicInst>(I) && 
+                 cast<IntrinsicInst>(I)->getIntrinsicID() == 
+                     Intrinsic::sideeffect) {
+        // Do nothing. In HLS 'sideefect' intrinsic is used to represent pragma.
+        ;
+      // HLS END
       } else if (auto C = ImmutableCallSite(I)) {
         if (!C.isCallee(&U))
           return true;

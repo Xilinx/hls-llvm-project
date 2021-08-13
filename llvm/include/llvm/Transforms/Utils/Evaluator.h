@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Function evaluator for LLVM IR.
@@ -16,6 +21,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -37,18 +43,23 @@ class TargetLibraryInfo;
 /// fails, the evaluation object should not be reused.
 class Evaluator {
 public:
-  Evaluator(const DataLayout &DL, const TargetLibraryInfo *TLI)
-      : DL(DL), TLI(TLI) {
+  Evaluator(const DataLayout &DL, const TargetLibraryInfo *TLI,
+            bool AssumeGlobalUnchanged = true, 
+            Value *ValueWithUnknownInit = nullptr)
+      : DL(DL), TLI(TLI), AssumeGlobalUnchanged(AssumeGlobalUnchanged),
+        ValueWithUnknownInit(ValueWithUnknownInit) {
     ValueStack.emplace_back();
   }
 
   ~Evaluator() {
-    for (auto &Tmp : AllocaTmps)
+    for (auto &Tmp : AllocaTmps){
       // If there are still users of the alloca, the program is doing something
       // silly, e.g. storing the address of the alloca somewhere and using it
       // later.  Since this is undefined, we'll just make it be null.
       if (!Tmp->use_empty())
         Tmp->replaceAllUsesWith(Constant::getNullValue(Tmp->getType()));
+      delete Tmp;
+    }
   }
 
   /// Evaluate a call to function F, returning true if successful, false if we
@@ -82,6 +93,8 @@ public:
   }
 
 private:
+  bool saveMutatedMemory(Constant *Ptr, Constant *Val);
+
   Constant *ComputeLoadResult(Constant *P);
 
   /// As we compute SSA register values, we store their contents here. The back
@@ -101,7 +114,7 @@ private:
   /// To 'execute' an alloca, we create a temporary global variable to represent
   /// its body.  This vector is needed so we can delete the temporary globals
   /// when we are done.
-  SmallVector<std::unique_ptr<GlobalVariable>, 32> AllocaTmps;
+  SetVector<GlobalVariable*> AllocaTmps;
 
   /// These global variables have been marked invariant by the static
   /// constructor.
@@ -113,6 +126,8 @@ private:
 
   const DataLayout &DL;
   const TargetLibraryInfo *TLI;
+  bool AssumeGlobalUnchanged;
+  Value *ValueWithUnknownInit;
 };
 
 } // end namespace llvm

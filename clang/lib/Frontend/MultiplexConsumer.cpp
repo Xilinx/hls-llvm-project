@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the MultiplexConsumer class. It also declares and defines
@@ -339,6 +344,11 @@ void MultiplexConsumer::HandleImplicitImportDecl(ImportDecl *D) {
 void MultiplexConsumer::CompleteTentativeDefinition(VarDecl *D) {
   for (auto &Consumer : Consumers)
     Consumer->CompleteTentativeDefinition(D);
+}
+
+void MultiplexConsumer::CompleteExternDeclaration(VarDecl *D) {
+  for (auto &Consumer : Consumers)
+    Consumer->CompleteExternDeclaration(D);
 }
 
 void MultiplexConsumer::AssignInheritanceModel(CXXRecordDecl *RD) {

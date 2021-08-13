@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the Scope interface.
@@ -16,6 +21,7 @@
 
 #include "clang/AST/Decl.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Sema/AttributeList.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -203,13 +209,44 @@ private:
   /// this scope, or over-defined. The bit is true when over-defined.
   llvm::PointerIntPair<VarDecl *, 1, bool> NRVO;
 
+  /// The HLS pragmas that apply to the whole scope
+  ParsedAttributes ParsedHLSPragmas;
+  ParsedAttributes DependencePragmas;
+  llvm::DenseMap<VarDecl *, AttributeList *> PendingHLSPragmas;
+
   void setFlags(Scope *Parent, unsigned F);
 
 public:
-  Scope(Scope *Parent, unsigned ScopeFlags, DiagnosticsEngine &Diag)
-    : ErrorTrap(Diag) {
+  Scope(Scope *Parent, unsigned ScopeFlags, DiagnosticsEngine &Diag,
+        AttributeFactory &Factory)
+      : ErrorTrap(Diag), ParsedHLSPragmas(Factory), DependencePragmas(Factory) {
     Init(Parent, ScopeFlags);
   }
+
+  /// getHLSPragmas - Return the current list of HLS Pragmas
+  ///
+  AttributeList *getParsedHLSPragmas() const {
+    return ParsedHLSPragmas.getList();
+  }
+  ParsedAttributes &getParsedHLSPragmasRef() { return ParsedHLSPragmas; }
+
+  AttributeList *getDependencePragmas() const {
+    return DependencePragmas.getList();
+  }
+  ParsedAttributes &getDependencePragmasRef() { return DependencePragmas; }
+
+  /// isDataflowScope - Return true if we parsed dataflow pragma in the current
+  ///                   scope
+  bool isDataflowScope() const;
+
+  /// hoistParsedHLSPragmas - Hoist parsed HLS pragmas to parent scope
+  void hoistParsedHLSPragmas(ParsedAttributes &Dst);
+  void hoistParsedHLSPragmas();
+
+  /// addPendingHLSPragma - Add HLS pragma to the current scope, and apply it
+  ///                       later
+  void addPendingHLSPragma(VarDecl *D, AttributeList *Attr);
+  AttributeList *takePendingHLSPragmas(VarDecl *D);
 
   /// getFlags - Return the flags for this scope.
   ///

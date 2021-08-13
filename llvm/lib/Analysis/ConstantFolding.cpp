@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines routines for folding instructions into constants.
@@ -1032,6 +1037,77 @@ Constant *ConstantFoldInstOperandsImpl(const Value *InstOrCE, unsigned Opcode,
   }
 }
 
+Constant *FoldPartSelect(ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 3 && "Part select must have 3 arguments");
+  Constant *SrcI = Operands[0];
+  // If the souce is undef, treat it as 0
+  if (isa<UndefValue>(SrcI)) 
+    SrcI = Constant::getNullValue(SrcI->getType());
+  ConstantInt *Src = dyn_cast<ConstantInt>(SrcI);
+  ConstantInt *Lo = dyn_cast<ConstantInt>(Operands[1]);
+  ConstantInt *Hi = dyn_cast<ConstantInt>(Operands[2]);
+
+  if (!Src || !Lo || !Hi)
+    return nullptr;
+
+  unsigned LowV = Lo->getZExtValue();
+  unsigned HighV = Hi->getZExtValue();
+
+  unsigned BitWidth = Src->getBitWidth();
+  if (LowV >= BitWidth || HighV >= BitWidth)
+    return nullptr;
+
+  bool Reverse = false;
+  if (LowV > HighV) {
+    Reverse = true;
+    std::swap(LowV, HighV);
+  }
+
+  APInt SrcV = Src->getValue();
+  APInt Result = SrcV.extractBits(HighV - LowV + 1, LowV);
+  if (Reverse)
+    Result = Result.reverseBits();
+  if (Result.getBitWidth() < SrcV.getBitWidth())
+    Result = Result.zext(SrcV.getBitWidth());
+
+  return ConstantInt::get(Src->getContext(), Result);
+}
+
+Constant *FoldPartSet(ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 4 && "Part set must have 4 arguments");
+  Constant *SrcI = Operands[0];
+  // If the souce is undef, treat it as 0
+  if (isa<UndefValue>(SrcI)) 
+    SrcI = Constant::getNullValue(SrcI->getType());
+  ConstantInt *Src = dyn_cast<ConstantInt>(SrcI);
+  ConstantInt *Rep = dyn_cast<ConstantInt>(Operands[1]);
+  ConstantInt *Lo = dyn_cast<ConstantInt>(Operands[2]);
+  ConstantInt *Hi = dyn_cast<ConstantInt>(Operands[3]);
+
+  if (!Src || !Rep || !Lo || !Hi)
+    return nullptr;
+
+  unsigned LowV = Lo->getZExtValue();
+  unsigned HighV = Hi->getZExtValue();
+
+  unsigned BitWidth = Src->getBitWidth();
+  if (LowV >= BitWidth || HighV >= BitWidth)
+    return nullptr;
+
+  bool Reverse = false;
+  if (LowV > HighV) {
+    std::swap(LowV, HighV);
+    Reverse = true;
+  }
+
+  APInt RepV = Rep->getValue().zextOrTrunc(HighV - LowV + 1);
+  if (Reverse)
+    RepV = RepV.reverseBits();
+  APInt Result = Src->getValue();
+  Result.insertBits(RepV, LowV);
+  return ConstantInt::get(Src->getContext(), Result);
+}
+
 } // end anonymous namespace
 
 //===----------------------------------------------------------------------===//
@@ -1406,6 +1482,8 @@ bool llvm::canConstantFoldCallTo(ImmutableCallSite CS, const Function *F) {
   case Intrinsic::x86_sse2_cvtsd2si64:
   case Intrinsic::x86_sse2_cvttsd2si:
   case Intrinsic::x86_sse2_cvttsd2si64:
+  case Intrinsic::fpga_legacy_part_select:
+  case Intrinsic::fpga_legacy_part_set:
     return true;
   default:
     return false;
@@ -1956,6 +2034,12 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
       return nullptr;
     }
     return nullptr;
+  }
+
+  if (IntrinsicID == Intrinsic::fpga_legacy_part_select) {
+    return FoldPartSelect(Operands);
+  } else if (IntrinsicID == Intrinsic::fpga_legacy_part_set){
+    return FoldPartSet(Operands);
   }
 
   if (Operands.size() != 3)

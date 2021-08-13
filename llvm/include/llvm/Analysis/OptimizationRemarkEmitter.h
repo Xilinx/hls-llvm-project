@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Optimization diagnostic interfaces.  It's packaged as an analysis pass so
@@ -95,6 +100,10 @@ public:
   bool allowExtraAnalysis(StringRef PassName) const {
     return (F->getContext().getDiagnosticsOutputFile() ||
             F->getContext().getDiagHandlerPtr()->isAnyRemarkEnabled(PassName));
+  }
+
+  LLVMContext &getOREContext() {
+    return F->getContext();
   }
 
 private:

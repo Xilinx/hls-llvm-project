@@ -1,11 +1,64 @@
+add_library( sqlite3 SHARED IMPORTED)
+
+# Find out position of libsqlite3 .so/.lib/.dll
+#################################################
+if (DEFINED LINK_DIRS)
+  set(LINK_DIRS_LIST ${LINK_DIRS})
+  #if( MSVC OR MINGW )
+  if(WIN32 OR CYGWIN)
+    foreach(dir ${LINK_DIRS_LIST})
+      message(STATUS dir=${dir})
+      find_file(res_path_lib libsqlite3.28.0.lib ${dir})
+      #find_file(res_path_dll libsqlite3.28.0.dll ${dir})
+      if (res_path_lib)
+        message(STATUS res_path_lib=${res_path_lib})
+        #message(STATUS res_path_dll=${res_path_dll})
+        break()
+      endif()
+    endforeach()
+  
+  else()
+    foreach(dir ${LINK_DIRS_LIST})
+      message(STATUS dir=${dir})
+      find_file(res_path_so libsqlite3.28.0.so ${dir})
+      if (res_path_so)
+        message(STATUS res_path_so=${res_path_so})
+        break()
+      endif()
+    endforeach()
+  endif()
+endif()
+#################################################
+
+
 set(system_libs)
 if ( LLVM_ENABLE_ZLIB AND HAVE_LIBZ )
   set(system_libs ${system_libs} ${ZLIB_LIBRARIES})
 endif()
-if( MSVC OR MINGW )
+#if( MSVC OR MINGW )
+if(WIN32 OR CYGWIN)
+  if (DEFINED LINK_DIRS)
+    #set_property(TARGET sqlite3 PROPERTY IMPORTED_LOCATION ${res_path_dll})
+    set_property(TARGET sqlite3 PROPERTY IMPORTED_IMPLIB ${res_path_lib})
+  else()
+    set_property(TARGET sqlite3 PROPERTY IMPORTED_LOCATION ${LLVM_MAIN_SRC_DIR}/../../../../ext/sqlite/sqlite-3.28.0/rdi/lib/vs2017/win64.o/libsqlite3.28.0.dll)
+    set_property(TARGET sqlite3 PROPERTY IMPORTED_IMPLIB ${LLVM_MAIN_SRC_DIR}/../../../../ext/sqlite/sqlite-3.28.0/rdi/lib/vs2017/win64.o/libsqlite3.28.0.lib)
+  endif()
   # libuuid required for FOLDERID_Profile usage in lib/Support/Windows/Path.inc.
   set(system_libs ${system_libs} psapi shell32 ole32 uuid)
-elseif( CMAKE_HOST_UNIX )
+#elseif( CMAKE_HOST_UNIX )
+else()
+  if (DEFINED LINK_DIRS)
+    set_property(TARGET sqlite3 PROPERTY IMPORTED_NO_SONAME 1)
+    set_target_properties(sqlite3 PROPERTIES IMPORTED_LOCATION ${res_path_so})
+  elseif (DEFINED OPEN_SQLITE_LIB_FILE)
+    set_property(TARGET sqlite3 PROPERTY IMPORTED_NO_SONAME 1)
+    set_target_properties(sqlite3 PROPERTIES IMPORTED_LOCATION ${OPEN_SQLITE_LIB_FILE})
+  else()
+    set_property(TARGET sqlite3 PROPERTY IMPORTED_NO_SONAME 1)
+    set_target_properties(sqlite3 PROPERTIES IMPORTED_LOCATION ${LLVM_MAIN_SRC_DIR}/../../../../ext/sqlite/sqlite-3.28.0/rdi/lib/lnx64.o/libsqlite3.28.0.so)
+  endif()
+
   if( HAVE_LIBRT )
     set(system_libs ${system_libs} rt)
   endif()
@@ -27,7 +80,7 @@ elseif( CMAKE_HOST_UNIX )
   if( UNIX AND NOT (BEOS OR HAIKU) )
     set(system_libs ${system_libs} m)
   endif()
-endif( MSVC OR MINGW )
+endif()
 
 add_llvm_library(LLVMSupport
   AMDGPUMetadata.cpp
@@ -72,6 +125,7 @@ add_llvm_library(LLVMSupport
   IntEqClasses.cpp
   IntervalMap.cpp
   JamCRC.cpp
+  JSON.cpp
   KnownBits.cpp
   LEB128.cpp
   LineIterator.cpp
@@ -112,6 +166,8 @@ add_llvm_library(LLVMSupport
   Triple.cpp
   Twine.cpp
   Unicode.cpp
+  XILINXFPGAPlatformBasic.cpp
+  XILINXAggregateUtil.cpp
   YAMLParser.cpp
   YAMLTraits.cpp
   raw_os_ostream.cpp
@@ -147,7 +203,45 @@ add_llvm_library(LLVMSupport
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/ADT
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Support
   ${Backtrace_INCLUDE_DIRS}
-  LINK_LIBS ${system_libs}
+  LINK_LIBS ${system_libs} 
   )
 
+######  only for debugging ##########
+if (DEFINED INCLUDE_DIRS)
+  message(STATUS gradle_INCLUDE_DIRS=${INCLUDE_DIRS})
+  foreach(dir ${INCLUDE_DIRS})
+    message(STATUS each_include_dir=${dir})
+    find_file(sqlite3_header sqlite3.h ${dir})
+    if (sqlite3_header)
+      message(STATUS sqlite3_header=${sqlite3_header})
+      break()
+    endif()
+  endforeach()
+else()
+message(STATUS "Cannot find gradle_INCLUDE_DIRS.... ")
+endif()
+######  only for debugging ##########
+
+
+
+if (DEFINED INCLUDE_DIRS)
+  target_include_directories(LLVMSupport PRIVATE ${INCLUDE_DIRS})
+elseif (DEFINED OPEN_SQLITE_INCLUDE_DIR)
+  target_include_directories(LLVMSupport PRIVATE ${OPEN_SQLITE_INCLUDE_DIR})
+else()
+  target_include_directories(LLVMSupport PRIVATE ${LLVM_MAIN_SRC_DIR}/../../../../ext/sqlite/sqlite-3.28.0/rdi/include/)
+endif()
+
+target_link_libraries(LLVMSupport PRIVATE sqlite3 )
+
+if (DEFINED RDI_BUILD_DIR)
+  message(STATUS "RDI_BUILD_DIR=${RDI_BUILD_DIR}")
+  link_directories(${RDI_BUILD_DIR}/ext)
+elseif (DEFINED LINK_DIRS)
+  link_directories("${LINK_DIRS}")
+else()
+  #message(FATAL_ERROR "Cannot find environment variable RDI_BUILD_DIR or LINKE_DIRS. Please set it....")
+endif()
+
 set_property(TARGET LLVMSupport PROPERTY LLVM_SYSTEM_LIBS "${system_libs}")
+add_definitions(-DXILINX_HLS_FE_STANDALONE)

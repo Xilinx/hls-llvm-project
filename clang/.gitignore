@@ -35,3 +35,7 @@ docs/_build
 docs/analyzer/_build
 # debug info testsuite
 test/debuginfo-tests
+
+tools/clang-format-vs/ClangFormat/clang-format.exe
+tools/clang-format-vs/ClangFormat/license.txt
+tools/clang-format-vs/ClangFormat/source.extension.vsixmanifest

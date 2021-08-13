@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
@@ -810,6 +815,8 @@ def err_pragma_attribute_no_pop_eof : Error<"unterminated "
   "'#pragma clang attribute push' at end of file">;
 def note_pragma_attribute_applied_decl_here : Note<
   "when applied to this declaration">;
+def err_pragma_attribute_type_mismatch: Error<"the %s argument type mismatch, "
+  "must be false/true">;
 
 /// Objective-C parser diagnostics
 def err_duplicate_class_def : Error<
@@ -2468,7 +2475,7 @@ def err_alignas_underaligned : Error<
   "requested alignment is less than minimum alignment of %1 for type %0">;
 def err_attribute_argument_n_type : Error<
   "%0 attribute requires parameter %1 to be %select{int or bool|an integer "
-  "constant|a string|an identifier}2">;
+  "constant|a string|an identifier|a boolean}2">;
 def err_attribute_argument_type : Error<
   "%0 attribute requires %select{int or bool|an integer "
   "constant|a string|an identifier}1">;
@@ -2480,7 +2487,7 @@ def err_init_priority_object_attr : Error<
 def err_attribute_argument_vec_type_hint : Error<
   "invalid attribute argument %0 - expecting a vector or vectorizable scalar type">;
 def err_attribute_argument_out_of_bounds : Error<
-  "%0 attribute parameter %1 is out of bounds">;
+  "%0 attribute parameter %1 is out of bounds [%2, %3]">;
 def err_attribute_only_once_per_parameter : Error<
   "%0 attribute can only be applied once per parameter">;
 def err_attribute_uuid_malformed_guid : Error<
@@ -2503,6 +2510,58 @@ def warn_attribute_return_pointers_refs_only : Warning<
 def warn_attribute_pointer_or_reference_only : Warning<
   "%0 attribute only applies to a pointer or reference (%1 is invalid)">,
   InGroup<IgnoredAttributes>;
+def warn_attributes_are_not_compatible : Warning<
+  "%0 and %1 attributes are not compatible">,
+  InGroup<IgnoredAttributes>;
+def warn_attribute_argument_n_type : Warning<
+  "%0 attribute requires parameter %1 to be %select{int or bool|an integer "
+  "constant|a string|an identifier}2">,
+  InGroup<IgnoredAttributes>;
+def warn_attribute_argument_type : Warning<
+  "%0 attribute requires %select{int or bool|an integer "
+  "constant|a string|an identifier}1">,
+  InGroup<IgnoredAttributes>;
+
+def warn_xlx_attr_wrong_stmt_target : Warning<
+  "Only %1 support the %0 pragma" >,InGroup<IgnoredAttributes>;
+def warn_xcl_loop_attr_wrong_target : Warning<
+  "Only for/while loops support the '%0'">,InGroup<IgnoredAttributes>;
+def warn_xcl_dataflow_attr_wrong_target : Warning<
+  "Only for-loops and functions support the dataflow">,InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_initial_stmt : Warning<
+  "Since the loop counter does not start from 0, the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_multiple_loop_induction_variable : Warning<
+  "Due to multiple loop counters, the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_iteration_stmt : Warning<
+  "As the loop counter is not increased by 1, the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_condition_stmt : Warning<
+  "Ignore 'dataflow' on loop: Unsupported for-loop condition statement for dataflow">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_bound : Warning<
+  "As the loop bound is not a constant or function argument, the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_dataflow_static_variable : Warning<
+  "Static scalars and arrays declared inside a dataflow region will be treated like local variables">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_dataflow_non_static_stream : Warning<
+  "Streams will behave like static variables inside a dataflow region">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_call_return_type : Warning<
+  "'dataflow' ignored: Functions with a return value cannot be used inside a dataflow region">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_call_argument_type : Warning<
+  "Either use an argument of the function or declare the variable inside the dataflow loop body">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_statement : Warning<
+  "Since the only kind of statements allowed in a canonical dataflow region are variable declarations and function calls, the compiler may not be able to correctly handle the region">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_statistics_xcl_dataflow_on_invalid_statement : Warning<
+  "There are a total of %0 such instances of non-canonical statements in the dataflow region">,
+  InGroup<IgnoredDataflowAttr>;
+
 def err_attribute_no_member_pointers : Error<
   "%0 attribute cannot be used with pointers to members">;
 def err_attribute_invalid_implicit_this_argument : Error<
@@ -2617,7 +2676,7 @@ def err_swift_abi_parameter_wrong_type : Error<
 
 def err_attribute_argument_invalid : Error<
   "%0 attribute argument is invalid: %select{max must be 0 since min is 0|"
-  "min must not be greater than max}1">;
+  "min must not be greater than max |min must not be greater than avg, and avg must not be greater than max}1">;
 def err_attribute_argument_is_zero : Error<
   "%0 attribute must be greater than 0">;
 def warn_attribute_argument_n_negative : Warning<
@@ -2698,6 +2757,12 @@ def warn_cxx11_gnu_attribute_on_type : Warning<
 def warn_unhandled_ms_attribute_ignored : Warning<
   "__declspec attribute %0 is not supported">, 
   InGroup<IgnoredAttributes>;
+def warn_decl_attribute_invalid_on_stmt : Warning<
+  "%0 attribute cannot be applied to a statement">, 
+   InGroup<IgnoredAttributes>;
+def warn_stmt_attribute_invalid_on_decl : Warning<
+  "%0 attribute cannot be applied to a declaration">,
+   InGroup<IgnoredAttributes>;
 def err_decl_attribute_invalid_on_stmt : Error<
   "%0 attribute cannot be applied to a statement">;
 def err_stmt_attribute_invalid_on_decl : Error<
@@ -2813,7 +2878,8 @@ def err_attribute_wrong_decl_type_str : Error<
   warn_attribute_wrong_decl_type_str.Text>;
 def warn_attribute_wrong_decl_type : Warning<
   "%0 attribute only applies to %select{"
-  "functions"
+  "integers"
+  "|functions"
   "|unions"
   "|variables and functions"
   "|functions and methods"
@@ -4925,8 +4991,8 @@ def err_init_element_not_constant : Error<
   "initializer element is not a compile-time constant">;
 def ext_aggregate_init_not_constant : Extension<
   "initializer for aggregate is not a compile-time constant">, InGroup<C99>;
-def err_local_cant_init : Error<
-  "'__local' variable cannot have an initializer">;
+def err_opencl_variable_cant_init : Error<
+  "'%select{__local|__global|pipe}0' variable cannot have an initializer">;
 def err_block_extern_cant_init : Error<
   "'extern' variable cannot have an initializer">;
 def warn_extern_init : Warning<"'extern' variable has an initializer">,
@@ -5502,18 +5568,18 @@ def err_atomic_specifier_bad_type : Error<
 
 // Expressions.
 def ext_sizeof_alignof_function_type : Extension<
-  "invalid application of '%select{sizeof|alignof|vec_step}0' to a "
+  "invalid application of '%select{sizeof|__bitwidthof|alignof|vec_step}0' to a "
   "function type">, InGroup<PointerArith>;
 def ext_sizeof_alignof_void_type : Extension<
-  "invalid application of '%select{sizeof|alignof|vec_step}0' to a void "
+  "invalid application of '%select{sizeof|__bitwidthof|alignof|vec_step}0' to a void "
   "type">, InGroup<PointerArith>;
 def err_opencl_sizeof_alignof_type : Error<
-  "invalid application of '%select{sizeof|alignof|vec_step|__builtin_omp_required_simd_align}0' to a void type">;
+  "invalid application of '%select{sizeof|__bitwidthof|alignof|vec_step|__builtin_omp_required_simd_align}0' to a void type">;
 def err_sizeof_alignof_incomplete_type : Error<
-  "invalid application of '%select{sizeof|alignof|vec_step|__builtin_omp_required_simd_align}0' to an "
+  "invalid application of '%select{sizeof|__bitwidthof|alignof|vec_step|__builtin_omp_required_simd_align}0' to an "
   "incomplete type %1">;
 def err_sizeof_alignof_function_type : Error<
-  "invalid application of '%select{sizeof|alignof|vec_step|__builtin_omp_required_simd_align}0' to a "
+  "invalid application of '%select{sizeof|__bitwidthof|alignof|vec_step|__builtin_omp_required_simd_align}0' to a "
   "function type">;
 def err_openmp_default_simd_align_expr : Error<
   "invalid application of '__builtin_omp_required_simd_align' to an expression, only type is allowed">;

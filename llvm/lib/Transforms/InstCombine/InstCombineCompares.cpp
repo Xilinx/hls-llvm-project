@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the visitICmp and visitFCmp functions.
@@ -4091,11 +4096,9 @@ Instruction *InstCombiner::foldICmpUsingKnownBits(ICmpInst &I) {
     llvm_unreachable("Unknown icmp opcode!");
   case ICmpInst::ICMP_EQ:
   case ICmpInst::ICMP_NE: {
-    if (Op0Max.ult(Op1Min) || Op0Min.ugt(Op1Max)) {
-      return Pred == CmpInst::ICMP_EQ
-                 ? replaceInstUsesWith(I, ConstantInt::getFalse(I.getType()))
-                 : replaceInstUsesWith(I, ConstantInt::getTrue(I.getType()));
-    }
+    if (Op0Max.ult(Op1Min) || Op0Min.ugt(Op1Max))
+      return replaceInstUsesWith(
+          I, ConstantInt::getBool(I.getType(), Pred == CmpInst::ICMP_NE));
 
     // If all bits are known zero except for one, then we know at most one bit
     // is set. If the comparison is against zero, then this is a check to see if

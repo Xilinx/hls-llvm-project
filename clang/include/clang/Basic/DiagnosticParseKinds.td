@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
@@ -943,7 +948,7 @@ def warn_pragma_align_invalid_option : Warning<
 // - #pragma pack
 def warn_pragma_unsupported_action : Warning<
   "known but unsupported action '%1' for '#pragma %0' - ignored">,
-  InGroup<IgnoredPragmas>;
+  InGroup<InvalidXlxPragmas>;
 def warn_pragma_invalid_specific_action : Warning<
   "unknown action '%1' for '#pragma %0' - ignored">,
   InGroup<IgnoredPragmas>;

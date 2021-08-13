@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code to emit Decl nodes as LLVM code.
@@ -403,8 +408,12 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
   // a no-op and should not be emitted.
   bool isCudaSharedVar = getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
                          D.hasAttr<CUDASharedAttr>();
+
+  // Static variables declared with __attribute__((no_ctor)) and without
+  // any arguments to constructor should not have any non-empty initializers.
   // If this value has an initializer, emit it.
-  if (D.getInit() && !isCudaSharedVar)
+  auto *Init = D.getInit();
+  if (Init && !isCudaSharedVar && !isNoCtorCXXConstructExpr(Init, D))
     var = AddInitializerToStaticVarDecl(D, var);
 
   var->setAlignment(alignment.getQuantity());
@@ -437,6 +446,15 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
   CGM.setStaticLocalDeclAddress(&D, castedAddr);
 
   CGM.getSanitizerMetadata()->reportGlobalToASan(var, D);
+
+  EmitXlxAttributes(&D, addr);
+  //if AST Decl is constant, but llvm::GlobalVariable is no contant 
+  //add "HLSConstant" spec intrinsic 
+  if (getLangOpts().HLSExt && 
+      D.getType().isConstant(getContext()) && 
+      !var->isConstant()) { 
+    EmitHLSConstIntrinsic(var);
+  }
 
   // Emit global variable debug descriptor for static vars.
   CGDebugInfo *DI = getDebugInfo();
@@ -922,6 +940,18 @@ static bool shouldUseMemSetPlusStoresToInitialize(llvm::Constant *Init,
   return GlobalSize > SizeLimit &&
          canEmitInitWithFewStoresAfterMemset(Init, StoreBudget);
 }
+// Only for internal debugging usage:
+static bool enableLocalConstSpec() {
+  char* tmp = std::getenv("XILINX_VITIS_HLS_LOCAL_CONST_TO_SSDM_SPEC_CONST");
+  if (tmp == NULL) 
+    return false;
+  std::string getEnvInfo = "";
+  getEnvInfo = tmp;
+  if(getEnvInfo == "yes")
+    return true;
+  else
+    return false;
+}
 
 /// EmitAutoVarDecl - Emit code and set up an entry in LocalDeclMap for a
 /// variable declaration with auto, register, or no storage class specifier.
@@ -930,6 +960,16 @@ void CodeGenFunction::EmitAutoVarDecl(const VarDecl &D) {
   AutoVarEmission emission = EmitAutoVarAlloca(D);
   EmitAutoVarInit(emission);
   EmitAutoVarCleanups(emission);
+  //if the Var is Constant and be with const Initializer , it will be optimized to 
+  //be emitted as "Global" variable, then "emission" contain  invalid Address 
+  //it is not neccessary to emit HLSconst intrinsic 
+  if (getLangOpts().HLSExt && 
+      enableLocalConstSpec() && 
+      D.getType().isConstant(getContext()) && 
+      !emission.wasEmittedAsGlobal()) { 
+    
+    EmitHLSConstIntrinsic(emission.getAllocatedAddress().getPointer());
+  }
 }
 
 /// Emit a lifetime.begin marker if some criteria are satisfied.
@@ -1140,6 +1180,8 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
                                          emission.getAllocatedAddress(),
                                          emission.getSizeForLifetimeMarkers());
 
+  EmitXlxAttributes(&D, address.getPointer());
+
   return emission;
 }
 
@@ -1208,6 +1250,37 @@ bool CodeGenFunction::isTrivialInitializer(const Expr *Init) {
   return false;
 }
 
+/// \brief Determine whether the CXXConstructExpr is with NoCtorAttr and
+///        without user given arg constructor.
+///        This implies that it requires no initialization code to be generated.
+bool CodeGenFunction::isNoCtorCXXConstructExpr(const Expr *Init,
+		                                    const VarDecl &D) {
+  if (!Init)
+    return true;
+
+  if (!D.hasAttr<NoCtorAttr>())
+    return false;
+
+  const CXXConstructExpr *Construct = dyn_cast<CXXConstructExpr>(Init);
+
+  // If constructors have the reference type optional arguments, such as
+  //   constexpr complex(const T& re = T(), const T& im = T());
+  // The object will be copy constructed. This means there will be an extra
+  // clean up expression for it.
+  if (const ExprWithCleanups *Cleanup = dyn_cast<ExprWithCleanups>(Init))
+    Construct = dyn_cast<CXXConstructExpr>(Cleanup->getSubExpr());
+
+  // NoCtorAttr only impacts on initailization code inside constructors
+  if (!Construct)
+    return false;
+
+  for (auto *arg : Construct->arguments())
+    if (!isa<CXXDefaultArgExpr>(arg))
+      return false;
+
+  return true;
+}
+
 void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
   assert(emission.Variable && "emission was not valid!");
 
@@ -1232,7 +1305,7 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
   if (emission.IsByRef)
     emitByrefStructureInit(emission);
 
-  if (isTrivialInitializer(Init))
+  if (isTrivialInitializer(Init) || isNoCtorCXXConstructExpr(Init, D))
     return;
 
   // Check whether this is a byref variable that's potentially

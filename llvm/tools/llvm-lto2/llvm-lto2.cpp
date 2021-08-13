@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This program takes in a list of bitcode files, links them and performs
@@ -189,7 +194,8 @@ static int run(int argc, char **argv) {
     DiagnosticPrinterRawOStream DP(errs());
     DI.print(DP);
     errs() << '\n';
-    exit(1);
+    if (DI.getSeverity() == DS_Error)
+      exit(1);
   };
 
   Conf.CPU = MCPU;

@@ -22,6 +22,7 @@ add_llvm_library(LLVMCore
   DiagnosticPrinter.cpp
   Dominators.cpp
   Function.cpp
+  GitCommitModule.cpp
   GVMaterializer.cpp
   Globals.cpp
   IRBuilder.cpp
@@ -54,6 +55,8 @@ add_llvm_library(LLVMCore
   ValueSymbolTable.cpp
   ValueTypes.cpp
   Verifier.cpp
+  XILINXFPGAIntrinsicInst.cpp
+  XILINXHLSIRBuilder.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/IR

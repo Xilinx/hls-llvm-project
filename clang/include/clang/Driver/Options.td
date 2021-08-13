@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the options accepted by clang.
@@ -646,6 +651,24 @@ def fembed_bitcode : Flag<["-"], "fembed-bitcode">, Group<f_Group>,
 def fembed_bitcode_marker : Flag<["-"], "fembed-bitcode-marker">,
   Alias<fembed_bitcode_EQ>, AliasArgs<["marker"]>,
   HelpText<"Embed placeholder LLVM IR data as a marker">;
+  
+def fhls : Flag<["-"], "fhls">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable High-level Synthesis C/C++ extensions for FPGA devices.">;
+def fxmc : Flag<["-"], "fxmc">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable Model Composer C/C++ extensions.">;
+def fstrict_dataflow : Flag<["-"], "fstrict-dataflow">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable generate warning and drop dataflow if loop/function is not in canonical form.">;
+
+def hls_platform_name : Joined<["-"], "hls-platform-name=">,
+  Group<f_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"pass platform name to hls compilation.">;
+
+def hls_platform_db_name : Joined<["-"], "hls-platform-db-name=">,
+  Group<f_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"pass platform db name to hls compilation.">;
+
 def fgnu_inline_asm : Flag<["-"], "fgnu-inline-asm">, Group<f_Group>, Flags<[DriverOption]>;
 def fno_gnu_inline_asm : Flag<["-"], "fno-gnu-inline-asm">, Group<f_Group>,
   Flags<[DriverOption, CC1Option]>,
@@ -806,6 +829,7 @@ def femulated_tls : Flag<["-"], "femulated-tls">, Group<f_Group>, Flags<[CC1Opti
 def fno_emulated_tls : Flag<["-"], "fno-emulated-tls">, Group<f_Group>;
 def fencoding_EQ : Joined<["-"], "fencoding=">, Group<f_Group>;
 def ferror_limit_EQ : Joined<["-"], "ferror-limit=">, Group<f_Group>, Flags<[CoreOption]>;
+def fwarn_limit_EQ : Joined<["-"], "fwarn-limit=">, Group<f_Group>, Flags<[CoreOption]>;
 def fexceptions : Flag<["-"], "fexceptions">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable support for exception handling">;
 def fdwarf_exceptions : Flag<["-"], "fdwarf-exceptions">, Group<f_Group>,
@@ -1491,7 +1515,8 @@ def foperator_arrow_depth_EQ : Joined<["-"], "foperator-arrow-depth=">,
                                Group<f_Group>;
 
 def fsave_optimization_record : Flag<["-"], "fsave-optimization-record">,
-  Group<f_Group>, HelpText<"Generate a YAML optimization record file">;
+  Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Generate a YAML optimization record file">;
 def fno_save_optimization_record : Flag<["-"], "fno-save-optimization-record">,
   Group<f_Group>, Flags<[NoArgumentUnused]>;
 def foptimization_record_file_EQ : Joined<["-"], "foptimization-record-file=">,

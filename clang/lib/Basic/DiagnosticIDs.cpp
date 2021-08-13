@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the Diagnostic IDs-related interfaces.
@@ -87,6 +92,7 @@ VALIDATE_DIAG_SIZE(PARSE)
 VALIDATE_DIAG_SIZE(AST)
 VALIDATE_DIAG_SIZE(COMMENT)
 VALIDATE_DIAG_SIZE(SEMA)
+VALIDATE_DIAG_SIZE(HLS)
 VALIDATE_DIAG_SIZE(ANALYSIS)
 VALIDATE_DIAG_SIZE(REFACTORING)
 #undef VALIDATE_DIAG_SIZE
@@ -112,6 +118,7 @@ static const StaticDiagInfoRec StaticDiagInfo[] = {
 #include "clang/Basic/DiagnosticCommentKinds.inc"
 #include "clang/Basic/DiagnosticCrossTUKinds.inc"
 #include "clang/Basic/DiagnosticSemaKinds.inc"
+#include "clang/Basic/DiagnosticHLSKinds.inc"
 #include "clang/Basic/DiagnosticAnalysisKinds.inc"
 #include "clang/Basic/DiagnosticRefactoringKinds.inc"
 #undef DIAG
@@ -151,7 +158,8 @@ CATEGORY(AST, PARSE)
 CATEGORY(COMMENT, AST)
 CATEGORY(CROSSTU, COMMENT)
 CATEGORY(SEMA, CROSSTU)
-CATEGORY(ANALYSIS, SEMA)
+CATEGORY(HLS, SEMA)
+CATEGORY(ANALYSIS, HLS)
 CATEGORY(REFACTORING, ANALYSIS)
 #undef CATEGORY
 
@@ -698,6 +706,12 @@ bool DiagnosticIDs::ProcessDiag(DiagnosticsEngine &Diag) const {
   // diagnostic that caused `fatal_too_many_errors` won't be emitted.
   if (Diag.CurDiagID == diag::fatal_too_many_errors)
     Diag.FatalErrorOccurred = true;
+
+  // Do not generate more warning than the warn limit
+  if (DiagLevel == DiagnosticIDs::Warning && Diag.WarnLimit &&
+      Diag.NumWarnings + 1 > Diag.WarnLimit)
+    return false;
+
   // Finally, report it.
   EmitDiag(Diag, DiagLevel);
   return true;

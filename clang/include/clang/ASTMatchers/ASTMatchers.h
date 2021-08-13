@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements matchers to be used together with the MatchFinder to
@@ -1611,6 +1616,16 @@ extern const internal::VariadicDynCastAllOfMatcher<Stmt, Expr> expr;
 /// \endcode
 extern const internal::VariadicDynCastAllOfMatcher<Stmt, DeclRefExpr>
     declRefExpr;
+
+
+/// \brief Matches attributed statement.
+///
+/// Example matches  '__attribute__((fpga_resource_hint("mul", 1)))    mul1 = x * 31'
+/// \code
+///   __attribute__((fpga_resource_hint("mul", 1)))    mul1 = x * 31
+/// \endcode
+extern const internal::VariadicDynCastAllOfMatcher<Stmt, AttributedStmt>
+attributedStmt;
 
 /// \brief Matches if statements.
 ///
@@ -5724,6 +5739,21 @@ AST_MATCHER_P(Decl, hasAttr, attr::Kind, AttrKind) {
       return true;
   }
   return false;
+}
+
+/// \brief Matches stmt that has a given attribute.
+///
+/// Given
+/// \code
+///   __attribute__((device)) a=b+c
+/// \endcode
+/// attributedstmt(hasAttr(clang::attr::CUDADevice)) matches the attributedstmt
+AST_MATCHER_P(AttributedStmt, hasAttachedAttr, attr::Kind, AttrKind) {
+	for (const auto *Attr : Node.getAttrs()) {
+		if (Attr->getKind() == AttrKind)
+			return true;
+	}
+	return false;
 }
 
 /// \brief Matches the return value expression of a return statement

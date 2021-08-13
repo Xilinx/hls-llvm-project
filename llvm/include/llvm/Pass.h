@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines a base class that indicates that a specified class is a
@@ -124,6 +129,11 @@ public:
   virtual Pass *createPrinterPass(raw_ostream &OS,
                                   const std::string &Banner) const = 0;
 
+  /// createGitCommitModulePass - Get a Pass to print and commit the IR
+  /// of the entire module.
+  virtual Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                          const std::string &Message) const = 0;
+
   /// Each pass is responsible for assigning a pass manager to itself.
   /// PMS is the stack of available pass manager.
   virtual void assignPassManager(PMStack &,
@@ -233,6 +243,10 @@ public:
   Pass *createPrinterPass(raw_ostream &OS,
                           const std::string &Banner) const override;
 
+  /// createGitCommitModulePass - Get a git-commit module pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override;
+
   /// runOnModule - Virtual method overriden by subclasses to process the module
   /// being operated on.
   virtual bool runOnModule(Module &M) = 0;
@@ -290,6 +304,10 @@ public:
   Pass *createPrinterPass(raw_ostream &OS,
                           const std::string &Banner) const override;
 
+  /// createGitCommitModulePass - Get a git-commit module function pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override;
+
   /// runOnFunction - Virtual method overriden by subclasses to do the
   /// per-function processing of the pass.
   virtual bool runOnFunction(Function &F) = 0;
@@ -323,6 +341,10 @@ public:
   /// createPrinterPass - Get a basic block printer pass.
   Pass *createPrinterPass(raw_ostream &OS,
                           const std::string &Banner) const override;
+
+  /// createGitCommitModulePass - Get a git-commit module basic block pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override;
 
   using llvm::Pass::doInitialization;
   using llvm::Pass::doFinalization;

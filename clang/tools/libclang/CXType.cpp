@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===--------------------------------------------------------------------===//
 //
 // This file implements the 'CXTypes' API hooks in the Clang-C library.
@@ -626,6 +631,7 @@ CXCallingConv clang_getFunctionTypeCallingConv(CXType X) {
       TCALLINGCONV(PreserveAll);
     case CC_SpirFunction: return CXCallingConv_Unexposed;
     case CC_OpenCLKernel: return CXCallingConv_Unexposed;
+    case CC_FPGAAccel:    return CXCallingConv_Unexposed;
       break;
     }
 #undef TCALLINGCONV

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Stmt::dumpPretty/Stmt::printPretty methods, which
@@ -1474,11 +1479,20 @@ static bool printExprAsWritten(raw_ostream &OS, Expr *E,
 void StmtPrinter::VisitIntegerLiteral(IntegerLiteral *Node) {
   if (Policy.ConstantsAsWritten && printExprAsWritten(OS, Node, Context))
     return;
-  bool isSigned = Node->getType()->isSignedIntegerType();
+  auto T = Node->getType();
+  bool isSigned = T->isSignedIntegerType();
   OS << Node->getValue().toString(10, isSigned);
 
+  // Print arbitary precision integer literal with Microsoft suffix extension.
+  if (auto IntTy = T->getAs<APIntType>()) {
+    if (!isSigned)
+      OS << 'U';
+    OS << 'i' << IntTy->getSizeInBits();
+    return;
+  }
+
   // Emit suffixes.  Integer literals are always a builtin integer type.
-  switch (Node->getType()->getAs<BuiltinType>()->getKind()) {
+  switch (T->getAs<BuiltinType>()->getKind()) {
   default: llvm_unreachable("Unexpected type for integer literal!");
   case BuiltinType::Char_S:
   case BuiltinType::Char_U:    OS << "i8"; break;
@@ -1600,6 +1614,9 @@ void StmtPrinter::VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *Node){
   switch(Node->getKind()) {
   case UETT_SizeOf:
     OS << "sizeof";
+    break;
+  case UETT_BitwidthOf:
+    OS << "__bitwidthof";
     break;
   case UETT_AlignOf:
     if (Policy.Alignof)

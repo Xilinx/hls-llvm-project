@@ -128,5 +128,10 @@ extern volatile int ObjCModuleAnchorSource;
 static int LLVM_ATTRIBUTE_UNUSED ObjCModuleAnchorDestination =
     ObjCModuleAnchorSource;
 
+// This anchor is used to force the linker to link the XilinxModule.
+extern volatile int XilinxModuleAnchorSource;
+static int LLVM_ATTRIBUTE_UNUSED XilinxModuleAnchorDestination =
+    XilinxModuleAnchorSource;
+
 } // namespace tidy
 } // namespace clang

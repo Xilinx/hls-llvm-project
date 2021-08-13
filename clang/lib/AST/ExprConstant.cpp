@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Expr constant evaluator.
@@ -7251,6 +7256,9 @@ static int EvaluateBuiltinClassifyType(const CallExpr *E,
   case Type::IncompleteArray:
     return LangOpts.CPlusPlus ? array_type_class : pointer_type_class;
 
+  case Type::APInt:
+    return integer_type_class;
+
   case Type::BlockPointer:
   case Type::LValueReference:
   case Type::RValueReference:
@@ -8771,6 +8779,22 @@ bool IntExprEvaluator::VisitUnaryExprOrTypeTraitExpr(
     if (!HandleSizeof(Info, E->getExprLoc(), SrcTy, Sizeof))
       return false;
     return Success(Sizeof, E);
+  }
+  case UETT_BitwidthOf: {
+    QualType SrcTy = E->getTypeOfArgument();
+    // C++ [expr.sizeof]p2: "When applied to a reference or a reference type,
+    //   the result is the size of the referenced type."
+    if (const ReferenceType *Ref = SrcTy->getAs<ReferenceType>())
+      SrcTy = Ref->getPointeeType();
+
+    if (const auto *IT = SrcTy->getAs<APIntType>())
+      return Success(IT->getSizeInBits(), E);
+
+    CharUnits Sizeof;
+    if (!HandleSizeof(Info, E->getExprLoc(), SrcTy, Sizeof))
+      return false;
+
+    return Success(getEvalInfo().Ctx.toBits(Sizeof), E);
   }
   case UETT_OpenMPRequiredSimdAlign:
     assert(E->isArgumentType());

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -30,6 +35,8 @@
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/TypoCorrection.h"
 #include "llvm/ADT/SmallVector.h"
+#include "clang/Sema/SemaDiagnostic.h"
+#include "clang/Basic/HLSDiagnostic.h"
 using namespace clang;
 
 /// \brief Simple precedence-based parser for binary/ternary operators.
@@ -124,6 +131,79 @@ ExprResult Parser::ParseExpression(TypeCastState isTypeCast) {
   ExprResult LHS(ParseAssignmentExpression(isTypeCast));
   return ParseRHSOfBinaryExpression(LHS, prec::Comma);
 }
+
+
+ExprResult Parser::ParseHLSVariableExpression(StringRef option_name, bool noVoid)
+{
+  ExprResult LHS;
+
+  while (1) {
+    // Return means the parent function
+    if (Tok.is(tok::kw_return)) {
+      auto Loc = Tok.getLocation();
+      auto *FD = Actions.getCurFunctionDecl();
+
+      ExprResult RHS = Actions.BuildDeclRefExpr(FD, FD->getType(), 
+                              VK_RValue,
+                              Tok.getLocation());
+      if (RHS.isInvalid()){ 
+        Diag(Loc, diag::warn_invalid_variable_expr);
+        return LHS;
+      }
+      if (LHS.isUnset()) { 
+        LHS = RHS;
+      }
+      else { 
+        LHS = Actions.ActOnBinOp(getCurScope(), Loc,
+                               tok::comma, LHS.get(), RHS.get());
+        if (LHS.isInvalid()) { 
+          return LHS;
+        }
+      }
+      ConsumeToken();
+    } 
+    else if (Tok.is(tok::kw_void)){
+      auto Loc = Tok.getLocation();
+      if (noVoid ) { 
+        Diag(Loc, diag::err_xlx_attribute_invalid_option)
+          <<"void" << option_name;
+      }
+      ConsumeToken();
+    }
+    else {
+      
+      SourceLocation Loc = Tok.getLocation();
+
+      ExprResult RHS = ParseCastExpression(/*isUnaryExpression=*/true,
+                                           /*isAddressOfOperand=*/false,
+                                           /*TypeCastState*/NotTypeCast);
+      RHS = Actions.CorrectDelayedTyposInExpr(RHS);
+      if (RHS.isInvalid()){ 
+        Diag(Loc, diag::warn_invalid_variable_expr);
+        return LHS;
+      }
+      if (LHS.isUnset()) { 
+        LHS = RHS;
+      }
+      else { 
+        LHS = Actions.ActOnBinOp(getCurScope(), Loc,
+                               tok::comma, LHS.get(), RHS.get());
+        if (LHS.isInvalid()) { 
+          return LHS;
+        }
+      }
+    }
+
+    if(!Tok.is(tok::comma)) { 
+      break;
+    }
+    else {
+      ConsumeToken();
+    }
+  }
+  return LHS;
+}
+
 
 /// This routine is called when the '@' is seen and consumed.
 /// Current token is an Identifier and is not a 'try'. This
@@ -1159,6 +1239,9 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
                            // unary-expression: '__alignof' '(' type-name ')'
   case tok::kw_sizeof:     // unary-expression: 'sizeof' unary-expression
                            // unary-expression: 'sizeof' '(' type-name ')'
+  case tok::kw___bitwidthof: // unary-expression: '__bitwidthof'
+                             // unary-expression
+  // unary-expression: '__bitwidthof' '(' type-name ')'
   case tok::kw_vec_step:   // unary-expression: OpenCL 'vec_step' expression
   // unary-expression: '__builtin_omp_required_simd_align' '(' type-name ')'
   case tok::kw___builtin_omp_required_simd_align:
@@ -1808,8 +1891,9 @@ Parser::ParseExprAfterUnaryExprOrTypeTrait(const Token &OpTok,
                                            ParsedType &CastTy,
                                            SourceRange &CastRange) {
 
-  assert(OpTok.isOneOf(tok::kw_typeof, tok::kw_sizeof, tok::kw___alignof,
-                       tok::kw_alignof, tok::kw__Alignof, tok::kw_vec_step,
+  assert(OpTok.isOneOf(tok::kw_typeof, tok::kw_sizeof, tok::kw___bitwidthof,
+                       tok::kw___alignof, tok::kw_alignof, tok::kw__Alignof,
+                       tok::kw_vec_step,
                        tok::kw___builtin_omp_required_simd_align) &&
          "Not a typeof/sizeof/alignof/vec_step expression!");
 
@@ -1819,8 +1903,8 @@ Parser::ParseExprAfterUnaryExprOrTypeTrait(const Token &OpTok,
   if (Tok.isNot(tok::l_paren)) {
     // If construct allows a form without parenthesis, user may forget to put
     // pathenthesis around type name.
-    if (OpTok.isOneOf(tok::kw_sizeof, tok::kw___alignof, tok::kw_alignof,
-                      tok::kw__Alignof)) {
+    if (OpTok.isOneOf(tok::kw_sizeof, tok::kw___bitwidthof, tok::kw___alignof,
+                      tok::kw_alignof, tok::kw__Alignof)) {
       if (isTypeIdUnambiguously()) {
         DeclSpec DS(AttrFactory);
         ParseSpecifierQualifierList(DS);
@@ -1892,17 +1976,20 @@ Parser::ParseExprAfterUnaryExprOrTypeTrait(const Token &OpTok,
 /// [GNU]   '__alignof' '(' type-name ')'
 /// [C11]   '_Alignof' '(' type-name ')'
 /// [C++11] 'alignof' '(' type-id ')'
+/// [HLS]   '__bitwidthof' unary-expression
+/// [HLS]   '__bitwidthof' '(' type-name ')'
 /// \endverbatim
 ExprResult Parser::ParseUnaryExprOrTypeTraitExpression() {
-  assert(Tok.isOneOf(tok::kw_sizeof, tok::kw___alignof, tok::kw_alignof,
-                     tok::kw__Alignof, tok::kw_vec_step,
+  assert(Tok.isOneOf(tok::kw_sizeof, tok::kw___bitwidthof, tok::kw___alignof,
+                     tok::kw_alignof, tok::kw__Alignof, tok::kw_vec_step,
                      tok::kw___builtin_omp_required_simd_align) &&
          "Not a sizeof/alignof/vec_step expression!");
   Token OpTok = Tok;
   ConsumeToken();
 
   // [C++11] 'sizeof' '...' '(' identifier ')'
-  if (Tok.is(tok::ellipsis) && OpTok.is(tok::kw_sizeof)) {
+  if (Tok.is(tok::ellipsis) &&
+      OpTok.isOneOf(tok::kw_sizeof, tok::kw___bitwidthof)) {
     SourceLocation EllipsisLoc = ConsumeToken();
     SourceLocation LParenLoc, RParenLoc;
     IdentifierInfo *Name = nullptr;
@@ -1970,6 +2057,8 @@ ExprResult Parser::ParseUnaryExprOrTypeTraitExpression() {
     ExprKind = UETT_VecStep;
   else if (OpTok.is(tok::kw___builtin_omp_required_simd_align))
     ExprKind = UETT_OpenMPRequiredSimdAlign;
+  else if (OpTok.is(tok::kw___bitwidthof))
+    ExprKind = UETT_BitwidthOf;
 
   if (isCastExpr)
     return Actions.ActOnUnaryExprOrTypeTraitExpr(OpTok.getLocation(),

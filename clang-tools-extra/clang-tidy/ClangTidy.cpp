@@ -582,6 +582,11 @@ void exportReplacements(const llvm::StringRef MainFilePath,
   TUD.MainSourceFile = MainFilePath;
   for (const auto &Error : Errors) {
     tooling::Diagnostic Diag = Error;
+    if (Error.RealLoc.isValid()) {
+      Diag.Message.FilePath = Error.RealFilePath.c_str();
+      // FIXME: Can not display column info
+      Diag.Message.FileOffset = Error.RealLoc.getLine();
+    }
     TUD.Diagnostics.insert(TUD.Diagnostics.end(), Diag);
   }
 

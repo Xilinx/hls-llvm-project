@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the ASTWriter class, which writes AST files.
@@ -266,6 +271,12 @@ void ASTTypeWriter::VisitExtVectorType(const ExtVectorType *T) {
   Code = TYPE_EXT_VECTOR;
 }
 
+void ASTTypeWriter::VisitAPIntType(const APIntType *T) {
+  Record.push_back(T->getSizeInBits());
+  Record.push_back(T->isSigned());
+  Code = TYPE_APINT;
+}
+
 void ASTTypeWriter::VisitFunctionType(const FunctionType *T) {
   Record.AddTypeRef(T->getReturnType());
   FunctionType::ExtInfo C = T->getExtInfo();
@@ -451,6 +462,14 @@ ASTTypeWriter::VisitDependentSizedExtVectorType(
   Record.AddStmt(T->getSizeExpr());
   Record.AddSourceLocation(T->getAttributeLoc());
   Code = TYPE_DEPENDENT_SIZED_EXT_VECTOR;
+}
+
+void ASTTypeWriter::VisitDependentSizedAPIntType(
+    const DependentSizedAPIntType *T) {
+  Record.AddTypeRef(T->getElementType());
+  Record.AddStmt(T->getSizeInBitsExpr());
+  Record.AddSourceLocation(T->getAttributeLoc());
+  Code = TYPE_DEPENDENT_SIZED_APINT;
 }
 
 void 
@@ -669,11 +688,20 @@ void TypeLocWriter::VisitDependentSizedExtVectorTypeLoc(
   Record.AddSourceLocation(TL.getNameLoc());
 }
 
+void TypeLocWriter::VisitDependentSizedAPIntTypeLoc(
+    DependentSizedAPIntTypeLoc TL) {
+  Record.AddSourceLocation(TL.getNameLoc());
+}
+
 void TypeLocWriter::VisitVectorTypeLoc(VectorTypeLoc TL) {
   Record.AddSourceLocation(TL.getNameLoc());
 }
 
 void TypeLocWriter::VisitExtVectorTypeLoc(ExtVectorTypeLoc TL) {
+  Record.AddSourceLocation(TL.getNameLoc());
+}
+
+void TypeLocWriter::VisitAPIntTypeLoc(APIntTypeLoc TL) {
   Record.AddSourceLocation(TL.getNameLoc());
 }
 
@@ -1200,6 +1228,7 @@ void ASTWriter::WriteBlockInfoBlock() {
   RECORD(TYPE_TYPEOF_EXPR);
   RECORD(TYPE_TYPEOF);
   RECORD(TYPE_RECORD);
+  RECORD(TYPE_APINT);
   RECORD(TYPE_ENUM);
   RECORD(TYPE_OBJC_INTERFACE);
   RECORD(TYPE_OBJC_OBJECT_POINTER);

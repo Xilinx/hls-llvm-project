@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains routines that help analyze properties that chains of
@@ -128,6 +133,13 @@ class Value;
                       AssumptionCache *AC = nullptr,
                       const Instruction *CxtI = nullptr,
                       const DominatorTree *DT = nullptr);
+
+  /// Return true if the given values are known to be equal when defined.
+  /// Supports scalar integer types only.
+  bool isKnownEqual(const Value *V1, const Value *V2, const DataLayout &DL,
+                    AssumptionCache *AC = nullptr,
+                    const Instruction *CxtI = nullptr,
+                    const DominatorTree *DT = nullptr);
 
   /// Return true if 'V & Mask' is known to be zero. We use this predicate to
   /// simplify operations downstream. Mask is known to be zero for bits that V
@@ -378,6 +390,15 @@ class Value;
 
   enum class OverflowResult { AlwaysOverflows, MayOverflow, NeverOverflows };
 
+  ConstantRange computeConstantRangeIncludingKnownBits(const Value *V,
+                                                       unsigned BitWidth,
+                                                       bool ForSigned,
+                                                       const DataLayout &DL,
+                                                       unsigned Depth,
+                                                       AssumptionCache *AC,
+                                                       const Instruction *CxtI,
+                                                       const DominatorTree *DT,
+						       OptimizationRemarkEmitter *ORE = nullptr);
   OverflowResult computeOverflowForUnsignedMul(const Value *LHS,
                                                const Value *RHS,
                                                const DataLayout &DL,
@@ -407,6 +428,14 @@ class Value;
   /// not overflowing, \p II being an <op>.with.overflow intrinsic.
   bool isOverflowIntrinsicNoWrap(const IntrinsicInst *II,
                                  const DominatorTree &DT);
+
+
+  /// Determine the possible constant range of an integer or vector of integer
+  /// value. This is intended as a cheap, non-recursive check.
+  ConstantRange computeConstantRange(const Value *V,
+                                     AssumptionCache *AC = nullptr,
+                                     const Instruction *CtxI = nullptr,
+                                     unsigned Depth = 0);
 
   /// Return true if this function can prove that the instruction I will
   /// always transfer execution to one of its successors (including the next

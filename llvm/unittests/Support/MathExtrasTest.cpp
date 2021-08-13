@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/MathExtras.h"
@@ -467,6 +472,26 @@ TEST(MathExtras, IsShiftedInt) {
 
   EXPECT_TRUE((isShiftedInt<6, 10>(-(int64_t(1) << 15))));
   EXPECT_FALSE((isShiftedInt<6, 10>(int64_t(1) << 15)));
+}
+
+TEST(MathExtras, GreatestCommonDivisor64) {
+  EXPECT_EQ(0U, GreatestCommonDivisor64(0U, 0U));
+  EXPECT_EQ(1U, GreatestCommonDivisor64(0U, 1U));
+  EXPECT_EQ(2U, GreatestCommonDivisor64(2U, 0U));
+  EXPECT_EQ(1U, GreatestCommonDivisor64(4U, 9U));
+  EXPECT_EQ(3U, GreatestCommonDivisor64(6U, 9U));
+  EXPECT_EQ(1U, GreatestCommonDivisor64(7540113804746346429UL,
+                                        4660046610375530309UL));
+}
+
+TEST(MathExtras, LeastCommonMultiple64) {
+  EXPECT_EQ(0U, LeastCommonMultiple64(0U, 0U));
+  EXPECT_EQ(0U, LeastCommonMultiple64(0U, 1U));
+  EXPECT_EQ(0U, LeastCommonMultiple64(2U, 0U));
+  EXPECT_EQ(36U, LeastCommonMultiple64(4U, 9U));
+  EXPECT_EQ(18U, LeastCommonMultiple64(6U, 9U));
+  EXPECT_EQ(9223372039002259457UL,
+            LeastCommonMultiple64(2820578167UL, 35970317581UL));
 }
 
 } // namespace

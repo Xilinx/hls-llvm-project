@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -74,6 +79,7 @@ STATISTIC(NumReadOnlyArg, "Number of arguments marked readonly");
 STATISTIC(NumNoAlias, "Number of function returns marked noalias");
 STATISTIC(NumNonNullReturn, "Number of function returns marked nonnull");
 STATISTIC(NumNoRecurse, "Number of functions marked as norecurse");
+STATISTIC(NumArgMemOnly, "Number of functions marked as argmemonly");
 
 // FIXME: This is disabled by default to avoid exposing security vulnerabilities
 // in C/C++ code compiled by clang:
@@ -88,6 +94,151 @@ namespace {
 using SCCNodeSet = SmallSetVector<Function *, 8>;
 
 } // end anonymous namespace
+
+/// Returns whether the given pointer value points to memory that is argument
+/// memory or local to the function, with global constants being considered
+/// local to all functions.
+static bool pointsToArgugmentMemoryOrConstantMemory(const MemoryLocation &Loc,
+                                                    const DataLayout &DL,
+                                                    bool OrLocal) {
+  SmallPtrSet<const Value *, 16> Visited;
+
+  unsigned MaxLookup = 8;
+  SmallVector<const Value *, 16> Worklist;
+  Worklist.push_back(Loc.Ptr);
+  do {
+    const Value *V = GetUnderlyingObject(Worklist.pop_back_val(), DL);
+    if (!Visited.insert(V).second)
+      continue;
+
+    // Argument memory
+    if (isa<Argument>(V))
+      continue;
+
+    // An alloca instruction defines local memory.
+    if (OrLocal && isa<AllocaInst>(V))
+      continue;
+
+    // A global constant counts as local memory for our purposes.
+    if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
+      // Note: this doesn't require GV to be "ODR" because it isn't legal for a
+      // global to be marked constant in some modules and non-constant in
+      // others.  GV may even be a declaration, not a definition.
+      if (!GV->isConstant()) {
+        return false;
+      }
+      continue;
+    }
+
+    // If both select values point to local memory, then so does the select.
+    if (const SelectInst *SI = dyn_cast<SelectInst>(V)) {
+      Worklist.push_back(SI->getTrueValue());
+      Worklist.push_back(SI->getFalseValue());
+      continue;
+    }
+
+    // If all values incoming to a phi node point to local memory, then so does
+    // the phi.
+    if (const PHINode *PN = dyn_cast<PHINode>(V)) {
+      // Don't bother inspecting phi nodes with many operands.
+      if (PN->getNumIncomingValues() > MaxLookup) {
+        return false;
+      }
+      for (Value *IncValue : PN->incoming_values())
+        Worklist.push_back(IncValue);
+      continue;
+    }
+
+    // Otherwise be conservative.
+    return false;
+  } while (!Worklist.empty() && --MaxLookup);
+
+  return Worklist.empty();
+}
+
+/// check whether the function only access argument memory or not.
+///
+/// If ThisBody is true, this function may examine the function body and will
+/// return a result pertaining to this copy of the function. If it is false, the
+/// result will be based only on AA results for the function declaration; it
+/// will be assumed that some other (perhaps less optimized) version of the
+/// function may be selected at link time.
+static bool doesFunctionOnlyAccessArgumentMemory(Function &F,
+    bool ThisBody, AAResults &AAR, const SCCNodeSet &SCCNodes) {
+  FunctionModRefBehavior MRB = AAR.getModRefBehavior(&F);
+  if (AliasAnalysis::onlyAccessesArgPointees(MRB))
+    // Already perfect!
+    return true;
+
+  if (!ThisBody)
+    return false;
+
+  const auto &DL = F.getParent()->getDataLayout();
+  // Scan the function body for instructions that may read or write memory.
+  for (inst_iterator II = inst_begin(F), E = inst_end(F); II != E; ++II) {
+    Instruction *I = &*II;
+
+    // Some instructions can be ignored even if they read or write memory.
+    // Detect these now, skipping to the next instruction if one is found.
+    CallSite CS(cast<Value>(I));
+    if (CS) {
+      // Ignore calls to functions in the same SCC, as long as the call sites
+      // don't have operand bundles.  Calls with operand bundles are allowed to
+      // have memory effects not described by the memory effects of the call
+      // target.
+      if (!CS.hasOperandBundles() && CS.getCalledFunction() &&
+          SCCNodes.count(CS.getCalledFunction()))
+        continue;
+      FunctionModRefBehavior MRB = AAR.getModRefBehavior(CS);
+
+      if (!AliasAnalysis::onlyAccessesArgPointees(MRB))
+        return false;
+
+      // Check whether all pointer arguments point to local memory, and
+      // ignore calls that only access local memory.
+      for (CallSite::arg_iterator CI = CS.arg_begin(), CE = CS.arg_end();
+           CI != CE; ++CI) {
+        Value *Arg = *CI;
+        if (!Arg->getType()->isPtrOrPtrVectorTy())
+          continue;
+
+        AAMDNodes AAInfo;
+        I->getAAMetadata(AAInfo);
+        MemoryLocation Loc(Arg, MemoryLocation::UnknownSize, AAInfo);
+
+        // Skip accesses to local or constant memory as they don't impact the
+        // externally visible mod/ref behavior.
+        if (!pointsToArgugmentMemoryOrConstantMemory(Loc, DL, /*OrLocal=*/true))
+          return false;
+      }
+    } else if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+      // Ignore non-volatile loads from local memory. (Atomic is okay here.)
+      if (LI->isVolatile()) {
+        return false;
+      } else {
+        MemoryLocation Loc = MemoryLocation::get(LI);
+        if (!pointsToArgugmentMemoryOrConstantMemory(Loc, DL, /*OrLocal=*/true))
+          return false;
+      }
+    } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
+      // Ignore non-volatile stores to local memory. (Atomic is okay here.)
+      if (SI->isVolatile()) {
+        return false;
+      } else {
+        MemoryLocation Loc = MemoryLocation::get(SI);
+        if (!pointsToArgugmentMemoryOrConstantMemory(Loc, DL, /*OrLocal=*/true))
+          return false;
+      }
+    } else if (VAArgInst *VI = dyn_cast<VAArgInst>(I)) {
+      // Ignore vaargs on local memory.
+      MemoryLocation Loc = MemoryLocation::get(VI);
+      if (!pointsToArgugmentMemoryOrConstantMemory(Loc, DL, /*OrLocal=*/true))
+        return false;
+    }
+  }
+
+  return true;
+}
 
 /// Returns the memory access attribute for function F using AAR for AA results,
 /// where SCCNodes is the current SCC.
@@ -208,6 +359,39 @@ static MemoryAccessKind checkFunctionMemoryAccess(Function &F, bool ThisBody,
 MemoryAccessKind llvm::computeFunctionBodyMemoryAccess(Function &F,
                                                        AAResults &AAR) {
   return checkFunctionMemoryAccess(F, /*ThisBody=*/true, AAR, {});
+}
+
+/// Deduce readonly/readnone attributes for the SCC.
+template <typename AARGetterT>
+static bool addArgMemOnlyAttrs(const SCCNodeSet &SCCNodes, AARGetterT &&AARGetter) {
+  for (Function *F : SCCNodes) {
+    // Call the callable parameter to look up AA results for this function.
+    AAResults &AAR = AARGetter(*F);
+
+    // Non-exact function definitions may not be selected at link time, and an
+    // alternative version that writes to memory may be selected.  See the
+    // comment on GlobalValue::isDefinitionExact for more details.
+    if (!doesFunctionOnlyAccessArgumentMemory(*F, F->hasExactDefinition(), AAR,
+                                             SCCNodes))
+      return false;
+  }
+
+  // Success!  Functions in this SCC only access memory through arguments.
+  // Give them the appropriate attribute.
+  bool MadeChange = false;
+  for (Function *F : SCCNodes) {
+    if (F->onlyAccessesArgMemory())
+      // Already perfect!
+      continue;
+
+    MadeChange = true;
+
+    // Add in the new attribute.
+    F->setOnlyAccessesArgMemory();
+    ++NumArgMemOnly;
+  }
+
+  return MadeChange;
 }
 
 /// Deduce readonly/readnone attributes for the SCC.
@@ -1235,6 +1419,7 @@ static bool runImpl(CallGraphSCC &SCC, AARGetterT AARGetter) {
   if (SCCNodes.empty())
     return Changed;
 
+  Changed |= addArgMemOnlyAttrs(SCCNodes, AARGetter);
   Changed |= addArgumentReturnedAttrs(SCCNodes);
   Changed |= addReadAttrs(SCCNodes, AARGetter);
   Changed |= addArgumentAttrs(SCCNodes);

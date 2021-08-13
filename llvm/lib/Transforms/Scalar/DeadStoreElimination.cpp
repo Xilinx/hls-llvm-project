@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements a trivial dead store elimination that only considers
@@ -84,6 +89,11 @@ static cl::opt<bool>
 EnablePartialStoreMerging("enable-dse-partial-store-merging",
   cl::init(true), cl::Hidden,
   cl::desc("Enable partial store merging in DSE"));
+
+static cl::opt<bool>
+EnableShorteningAtTheBeginning("enable-dse-beginning-shortening",
+  cl::init(false), cl::Hidden,
+  cl::desc("Enable shortening at the beginning of memory intrinsics in DSE"));
 
 //===----------------------------------------------------------------------===//
 // Helper functions
@@ -282,6 +292,9 @@ static bool isShortenableAtTheEnd(Instruction *I) {
 /// Returns true if the beginning of this instruction can be safely shortened
 /// in length.
 static bool isShortenableAtTheBeginning(Instruction *I) {
+  if (!EnableShorteningAtTheBeginning)
+    return false;
+
   // FIXME: Handle only memset for now. Supporting memcpy/memmove should be
   // easily done by offsetting the source address.
   IntrinsicInst *II = dyn_cast<IntrinsicInst>(I);

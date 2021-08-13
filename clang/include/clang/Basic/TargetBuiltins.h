@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -186,6 +191,26 @@ namespace clang {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
   #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
   #include "clang/Basic/BuiltinsLe64.def"
+    LastTSBuiltin
+  };
+  }
+
+  /// \brief SPIR builtins
+  namespace SPIR {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsSPIR.def"
+    LastTSBuiltin
+  };
+  }
+
+  /// \brief FPGA builtins
+  namespace FPGA {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsFPGA.def"
     LastTSBuiltin
   };
   }

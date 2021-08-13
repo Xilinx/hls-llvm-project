@@ -11,7 +11,7 @@ add_clang_library(clangTidyPlugin
   clangTidyAndroidModule
   clangTidyBoostModule
   clangTidyCERTModule
-  clangTidyCppCoreGuidelinesModule
+  clangTCCGModule
   clangTidyGoogleModule
   clangTidyLLVMModule
   clangTidyMiscModule
@@ -20,5 +20,6 @@ add_clang_library(clangTidyPlugin
   clangTidyObjCModule
   clangTidyPerformanceModule
   clangTidyReadabilityModule
+  clangTidyXilinxModule
   clangTooling
   )

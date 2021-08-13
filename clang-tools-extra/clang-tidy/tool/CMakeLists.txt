@@ -21,7 +21,7 @@ target_link_libraries(clang-tidy
   clangTidyBoostModule
   clangTidyBugproneModule
   clangTidyCERTModule
-  clangTidyCppCoreGuidelinesModule
+  clangTCCGModule
   clangTidyFuchsiaModule
   clangTidyGoogleModule
   clangTidyHICPPModule
@@ -32,6 +32,7 @@ target_link_libraries(clang-tidy
   clangTidyObjCModule
   clangTidyPerformanceModule
   clangTidyReadabilityModule
+  clangTidyXilinxModule
   clangTooling
   clangToolingCore
   )

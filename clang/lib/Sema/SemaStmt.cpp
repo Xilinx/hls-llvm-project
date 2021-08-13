@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements semantic analysis for statements.
@@ -42,7 +47,7 @@
 using namespace clang;
 using namespace sema;
 
-StmtResult Sema::ActOnExprStmt(ExprResult FE) {
+StmtResult Sema::ActOnExprStmt(ExprResult FE, Scope *CurScope) {
   if (FE.isInvalid())
     return StmtError();
 
@@ -54,8 +59,6 @@ StmtResult Sema::ActOnExprStmt(ExprResult FE) {
   // C99 6.8.3p2: The expression in an expression statement is evaluated as a
   // void expression for its side effects.  Conversion to void allows any
   // operand, even incomplete types.
-
-  // Same thing in for stmt first clause (when expr) and third clause.
   return StmtResult(FE.getAs<Stmt>());
 }
 
@@ -209,6 +212,9 @@ void Sema::DiagnoseUnusedExprResult(const Stmt *S) {
   // results because the results aren't expected to be used in the first place.
   if (isUnevaluatedContext())
     return;
+
+  if (IsHLSParsing())  
+    return ;
 
   SourceLocation ExprLoc = E->IgnoreParenImpCasts()->getExprLoc();
   // In most cases, we don't want to warn if the expression is written in a
@@ -505,6 +511,8 @@ StmtResult Sema::ActOnAttributedStmt(SourceLocation AttrLoc,
                                      ArrayRef<const Attr*> Attrs,
                                      Stmt *SubStmt) {
   // Fill in the declaration and return it.
+
+
   AttributedStmt *LS = AttributedStmt::Create(Context, AttrLoc, Attrs, SubStmt);
   return LS;
 }

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements various things for builtin functions.
@@ -76,9 +81,14 @@ bool Builtin::Context::builtinIsSupported(const Builtin::Info &BuiltinInfo,
   bool OclCUnsupported = !LangOpts.OpenCL &&
                          (BuiltinInfo.Langs & ALL_OCLC_LANGUAGES);
   bool OpenMPUnsupported = !LangOpts.OpenMP && BuiltinInfo.Langs == OMP_LANG;
+  bool HLSUnsupported = !LangOpts.HLSExt && BuiltinInfo.Langs == HLS_LANG;
+  // HLS extension on OpenCL support all OpenCL 2.0 builtins (i.e. the pipe)
+  if (LangOpts.OpenCL && LangOpts.HLSExt && BuiltinInfo.Langs == OCLC20_LANG)
+    OclC2Unsupported = OclC1Unsupported = OclCUnsupported = false;
   return !BuiltinsUnsupported && !MathBuiltinsUnsupported && !OclCUnsupported &&
          !OclC1Unsupported && !OclC2Unsupported && !OpenMPUnsupported &&
-         !GnuModeUnsupported && !MSModeUnsupported && !ObjCUnsupported;
+         !GnuModeUnsupported && !MSModeUnsupported && !ObjCUnsupported &&
+         !HLSUnsupported;
 }
 
 /// initializeBuiltins - Mark the identifiers for all the builtins with their

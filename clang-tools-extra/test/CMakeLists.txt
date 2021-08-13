@@ -49,6 +49,10 @@ set(CLANG_TOOLS_TEST_DEPS
   modularize
   pp-trace
 
+  # Xilinx tools
+  xilinx-dataflow-lawyer
+  xilinx-legacy-rewriter
+
   # These individual tools have no tests, add them here to make them compile
   # together with check-clang-tools, so that we won't break them in the future.
   global-symbol-builder

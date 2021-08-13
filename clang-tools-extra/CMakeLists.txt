@@ -14,6 +14,9 @@ add_subdirectory(include-fixer)
 add_subdirectory(pp-trace)
 add_subdirectory(tool-template)
 
+add_subdirectory(xilinx-legacy-rewriter)
+add_subdirectory(xilinx-dataflow-lawyer)
+
 # Add the common testsuite after all the tools.
 if(CLANG_INCLUDE_TESTS)
 add_subdirectory(test)

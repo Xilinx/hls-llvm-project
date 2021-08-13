@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This provides C++ name mangling targeting the Microsoft Visual C++ ABI.
@@ -2378,6 +2383,15 @@ void MicrosoftCXXNameMangler::mangleType(const ComplexType *T, Qualifiers,
   mangleArtificalTagType(TTK_Struct, TemplateMangling, {"__clang"});
 }
 
+void MicrosoftCXXNameMangler::mangleType(const APIntType *T, Qualifiers Quals,
+                                         SourceRange Range) {
+  DiagnosticsEngine &Diags = Context.getDiags();
+  unsigned DiagID = Diags.getCustomDiagID(
+      DiagnosticsEngine::Error,
+      "cannot mangle this arbitrary-precision integer type yet");
+  Diags.Report(Range.getBegin(), DiagID) << Range;
+}
+
 void MicrosoftCXXNameMangler::mangleType(const VectorType *T, Qualifiers Quals,
                                          SourceRange Range) {
   const BuiltinType *ET = T->getElementType()->getAs<BuiltinType>();
@@ -2432,7 +2446,14 @@ void MicrosoftCXXNameMangler::mangleType(const DependentSizedExtVectorType *T,
   Diags.Report(Range.getBegin(), DiagID)
     << Range;
 }
-
+void MicrosoftCXXNameMangler::mangleType(const DependentSizedAPIntType *T,
+                                         Qualifiers, SourceRange Range) {
+  DiagnosticsEngine &Diags = Context.getDiags();
+  unsigned DiagID = Diags.getCustomDiagID(
+      DiagnosticsEngine::Error, "cannot mangle this dependent-sized "
+                                "arbitrary-precision integer type yet");
+  Diags.Report(Range.getBegin(), DiagID) << Range;
+}
 void MicrosoftCXXNameMangler::mangleType(const DependentAddressSpaceType *T,
                                          Qualifiers, SourceRange Range) {
   DiagnosticsEngine &Diags = Context.getDiags();

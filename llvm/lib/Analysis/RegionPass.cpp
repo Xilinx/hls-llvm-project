@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements RegionPass and RGPassManager. All region optimization
@@ -14,6 +19,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "llvm/Analysis/RegionPass.h"
+#include "llvm/IR/GitCommitModule.h"
 #include "llvm/IR/OptBisect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Timer.h"
@@ -279,6 +285,19 @@ void RegionPass::assignPassManager(PMStack &PMS,
 Pass *RegionPass::createPrinterPass(raw_ostream &O,
                                   const std::string &Banner) const {
   return new PrintRegionPass(Banner, O);
+}
+
+static Module &getModule(Region *R) {
+  return *R->getEntry()->getParent()->getParent();
+}
+
+#define RUN_ON(Region, R) runOn##Region(Region *R, RGPassManager &)
+GIT_COMMIT_MODULE_PASS_WRAPPER_INTERNAL(Region, getModule, RUN_ON)
+#undef RUN_ON
+
+Pass *RegionPass::createGitCommitModulePass(const std::string &GitRepo,
+                                            const std::string &Message) const {
+  return new GitCommitRegionPassWrapper(GitRepo, Message);
 }
 
 bool RegionPass::skipRegion(Region &R) const {

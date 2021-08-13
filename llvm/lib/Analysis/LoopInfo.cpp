@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the LoopInfo class that is used to identify natural loops
@@ -23,7 +28,9 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -217,20 +224,13 @@ MDNode *Loop::getLoopID() const {
   } else {
     assert(!getLoopLatch() &&
            "The loop should have no single latch at this point");
-    // Go through each predecessor of the loop header and check the
-    // terminator for the metadata.
-    BasicBlock *H = getHeader();
-    for (BasicBlock *BB : this->blocks()) {
+    // Go through the latch blocks and check the terminator for the metadata.
+    SmallVector<BasicBlock *, 4> LatchesBlocks;
+    getLoopLatches(LatchesBlocks);
+    for (BasicBlock *BB : LatchesBlocks) {
       TerminatorInst *TI = BB->getTerminator();
-      MDNode *MD = nullptr;
+      MDNode *MD = TI->getMetadata(LLVMContext::MD_loop);
 
-      // Check if this terminator branches to the loop header.
-      for (BasicBlock *Successor : TI->successors()) {
-        if (Successor == H) {
-          MD = TI->getMetadata(LLVMContext::MD_loop);
-          break;
-        }
-      }
       if (!MD)
         return nullptr;
 
@@ -728,6 +728,14 @@ PreservedAnalyses LoopPrinterPass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
   AM.getResult<LoopAnalysis>(F).print(OS);
   return PreservedAnalyses::all();
+}
+
+DiagnosticInfoOptimizationBase::Argument::Argument(StringRef Key, const Loop *L) : Key(Key) {
+  raw_string_ostream OS(Val);
+  DebugLoc DLoc = L->getStartLoc();
+
+  if (DLoc)
+    OS << DLoc->getFilename() << ":" << DLoc.getLine() << ":" << DLoc.getCol();
 }
 
 void llvm::printLoop(Loop &L, raw_ostream &OS, const std::string &Banner) {

@@ -5,11 +5,17 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/KnownBits.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -1019,6 +1025,70 @@ TEST(ConstantRange, GetEquivalentICmp) {
       ConstantRange(APInt(32, -1)).inverse().getEquivalentICmp(Pred, RHS));
   EXPECT_EQ(Pred, CmpInst::ICMP_NE);
   EXPECT_EQ(RHS, APInt(32, -1));
+}
+
+TEST_F(ConstantRangeTest, FromKnownBits) {
+  KnownBits Unknown(16);
+  EXPECT_EQ(Full, ConstantRange::fromKnownBits(Unknown, /*signed*/false));
+  EXPECT_EQ(Full, ConstantRange::fromKnownBits(Unknown, /*signed*/true));
+
+  // .10..01. -> unsigned 01000010 (66)  to 11011011 (219)
+  //          -> signed   11000010 (194) to 01011011 (91)
+  KnownBits Known(8);
+  Known.Zero = 36;
+  Known.One = 66;
+  ConstantRange Unsigned(APInt(8, 66), APInt(8, 219 + 1));
+  ConstantRange Signed(APInt(8, 194), APInt(8, 91 + 1));
+  EXPECT_EQ(Unsigned, ConstantRange::fromKnownBits(Known, /*signed*/false));
+  EXPECT_EQ(Signed, ConstantRange::fromKnownBits(Known, /*signed*/true));
+
+  // 1.10.10. -> 10100100 (164) to 11101101 (237)
+  Known.Zero = 18;
+  Known.One = 164;
+  ConstantRange CR1(APInt(8, 164), APInt(8, 237 + 1));
+  EXPECT_EQ(CR1, ConstantRange::fromKnownBits(Known, /*signed*/false));
+  EXPECT_EQ(CR1, ConstantRange::fromKnownBits(Known, /*signed*/true));
+
+  // 01.0.1.0 -> 01000100 (68) to 01101110 (110)
+  Known.Zero = 145;
+  Known.One = 68;
+  ConstantRange CR2(APInt(8, 68), APInt(8, 110 + 1));
+  EXPECT_EQ(CR2, ConstantRange::fromKnownBits(Known, /*signed*/false));
+  EXPECT_EQ(CR2, ConstantRange::fromKnownBits(Known, /*signed*/true));
+}
+
+TEST_F(ConstantRangeTest, FromKnownBitsExhaustive) {
+  unsigned Bits = 4;
+  unsigned Max = 1 << Bits;
+  KnownBits Known(Bits);
+  for (unsigned Zero = 0; Zero < Max; ++Zero) {
+    for (unsigned One = 0; One < Max; ++One) {
+      Known.Zero = Zero;
+      Known.One = One;
+      if (Known.hasConflict() || Known.isUnknown())
+        continue;
+
+      APInt MinUnsigned = APInt::getMaxValue(Bits);
+      APInt MaxUnsigned = APInt::getMinValue(Bits);
+      APInt MinSigned = APInt::getSignedMaxValue(Bits);
+      APInt MaxSigned = APInt::getSignedMinValue(Bits);
+      for (unsigned N = 0; N < Max; ++N) {
+        APInt Num(Bits, N);
+        if ((Num & Known.Zero) != 0 || (~Num & Known.One) != 0)
+          continue;
+
+        if (Num.ult(MinUnsigned)) MinUnsigned = Num;
+        if (Num.ugt(MaxUnsigned)) MaxUnsigned = Num;
+        if (Num.slt(MinSigned)) MinSigned = Num;
+        if (Num.sgt(MaxSigned)) MaxSigned = Num;
+      }
+
+      ConstantRange UnsignedCR(MinUnsigned, MaxUnsigned + 1);
+      ConstantRange SignedCR(MinSigned, MaxSigned + 1);
+      EXPECT_EQ(UnsignedCR, ConstantRange::fromKnownBits(Known, false));
+      EXPECT_EQ(SignedCR, ConstantRange::fromKnownBits(Known, true));
+    }
+  }
 }
 
 }  // anonymous namespace

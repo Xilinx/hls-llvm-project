@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code to emit Aggregate Expr nodes as LLVM code.
@@ -1541,6 +1546,18 @@ LValue CodeGenFunction::EmitAggExprToLValue(const Expr *E) {
   return LV;
 }
 
+static bool IsFPGAArch(const TargetInfo &T) {
+  switch (T.getTriple().getArch()) {
+  default:
+    break;
+  case llvm::Triple::fpga32:
+  case llvm::Triple::fpga64:
+    return true;
+  }
+
+  return false;
+}
+
 void CodeGenFunction::EmitAggregateCopy(Address DestPtr,
                                         Address SrcPtr, QualType Ty,
                                         bool isVolatile,
@@ -1561,6 +1578,12 @@ void CodeGenFunction::EmitAggregateCopy(Address DestPtr,
       if (Record->isEmpty())
         return;
     }
+  }
+
+  if (IsFPGAArch(getTarget())) {
+    auto *D = Builder.CreateLoad(SrcPtr);
+    Builder.CreateStore(D, DestPtr, isVolatile);
+    return;
   }
   
   // Aggregate assignment turns into llvm.memcpy.  This is almost valid per
@@ -1625,7 +1648,6 @@ void CodeGenFunction::EmitAggregateCopy(Address DestPtr,
   //
   // we need to use a different call here.  We use isVolatile to indicate when
   // either the source or the destination is volatile.
-
   DestPtr = Builder.CreateElementBitCast(DestPtr, Int8Ty);
   SrcPtr = Builder.CreateElementBitCast(SrcPtr, Int8Ty);
 

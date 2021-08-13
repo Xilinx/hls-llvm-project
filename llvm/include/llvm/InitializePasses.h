@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declarations for the pass initialization routines
@@ -83,6 +88,7 @@ void initializeBreakCriticalEdgesPass(PassRegistry&);
 void initializeBreakFalseDepsPass(PassRegistry&);
 void initializeCallSiteSplittingLegacyPassPass(PassRegistry&);
 void initializeCFGOnlyPrinterLegacyPassPass(PassRegistry&);
+void initializeCFGHierOnlyPrinterLegacyPassPass(PassRegistry&);
 void initializeCFGOnlyViewerLegacyPassPass(PassRegistry&);
 void initializeCFGPrinterLegacyPassPass(PassRegistry&);
 void initializeCFGSimplifyPassPass(PassRegistry&);
@@ -90,6 +96,7 @@ void initializeCFGViewerLegacyPassPass(PassRegistry&);
 void initializeCFLAndersAAWrapperPassPass(PassRegistry&);
 void initializeCFLSteensAAWrapperPassPass(PassRegistry&);
 void initializeCallGraphDOTPrinterPass(PassRegistry&);
+void initializeCallGraphHLSDOTPrinterPass(PassRegistry&);
 void initializeCallGraphPrinterLegacyPassPass(PassRegistry&);
 void initializeCallGraphViewerPass(PassRegistry&);
 void initializeCallGraphWrapperPassPass(PassRegistry&);
@@ -123,6 +130,10 @@ void initializeDomOnlyPrinterPass(PassRegistry&);
 void initializeDomOnlyViewerPass(PassRegistry&);
 void initializeDomPrinterPass(PassRegistry&);
 void initializeDomViewerPass(PassRegistry&);
+void initializeDivergenceOnlyPrinterPass(PassRegistry &);
+void initializeDivergenceOnlyViewerPass(PassRegistry &);
+void initializeDivergencePrinterPass(PassRegistry &);
+void initializeDivergenceViewerPass(PassRegistry &);
 void initializeDominanceFrontierWrapperPassPass(PassRegistry&);
 void initializeDominatorTreeWrapperPassPass(PassRegistry&);
 void initializeDwarfEHPreparePass(PassRegistry&);

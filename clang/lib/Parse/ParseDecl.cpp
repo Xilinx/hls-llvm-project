@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the Declaration portions of the Parser interfaces.
@@ -25,10 +30,12 @@
 #include "clang/Sema/PrettyDeclStackTrace.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/SemaDiagnostic.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/Support/ScopedPrinter.h"
 
 using namespace clang;
@@ -340,14 +347,10 @@ unsigned Parser::ParseAttributeArgsCommon(
 
 /// Parse the arguments to a parameterized GNU attribute or
 /// a C++11 attribute in "gnu" namespace.
-void Parser::ParseGNUAttributeArgs(IdentifierInfo *AttrName,
-                                   SourceLocation AttrNameLoc,
-                                   ParsedAttributes &Attrs,
-                                   SourceLocation *EndLoc,
-                                   IdentifierInfo *ScopeName,
-                                   SourceLocation ScopeLoc,
-                                   AttributeList::Syntax Syntax,
-                                   Declarator *D) {
+void Parser::ParseGNUAttributeArgs(
+    IdentifierInfo *AttrName, SourceLocation AttrNameLoc,
+    ParsedAttributes &Attrs, SourceLocation *EndLoc, IdentifierInfo *ScopeName,
+    SourceLocation ScopeLoc, AttributeList::Syntax Syntax, Declarator *D) {
 
   assert(Tok.is(tok::l_paren) && "Attribute arg list not starting with '('");
 
@@ -370,6 +373,14 @@ void Parser::ParseGNUAttributeArgs(IdentifierInfo *AttrName,
     ParseTypeTagForDatatypeAttribute(*AttrName, AttrNameLoc, Attrs, EndLoc,
                                      ScopeName, ScopeLoc, Syntax);
     return;
+  } else if (AttrKind == AttributeList::AT_XCLArrayView) {
+    ParseXCLArrayViewAttribute(*AttrName, AttrNameLoc, Attrs, EndLoc, ScopeName,
+                               ScopeLoc, Syntax);
+    return;
+  } else if (AttrKind == AttributeList::AT_XCLDependence) {
+    ParseXCLDependenceAttribute(*AttrName, AttrNameLoc, Attrs, EndLoc,
+                                ScopeName, ScopeLoc, Syntax);
+    return;
   } else if (attributeIsTypeArgAttr(*AttrName)) {
     ParseAttributeWithTypeArg(*AttrName, AttrNameLoc, Attrs, EndLoc, ScopeName,
                               ScopeLoc, Syntax);
@@ -391,6 +402,19 @@ void Parser::ParseGNUAttributeArgs(IdentifierInfo *AttrName,
     }
   }
 
+#if 0
+  // xcl_dependence is ignored
+  if (getLangOpts().HLSExt &&
+      normalizeAttrName(AttrName->getName()) == "xcl_dependence") {
+    Actions.Diag(AttrNameLoc, diag::warn_xocc_wrong_compiler_version)
+        << AttrName;
+    // Eat the left paren, then skip to the ending right paren.
+    ConsumeParen();
+    SkipUntil(tok::r_paren);
+    return;
+  }
+
+#endif
   ParseAttributeArgsCommon(AttrName, AttrNameLoc, Attrs, EndLoc, ScopeName,
                            ScopeLoc, Syntax);
 }
@@ -1501,6 +1525,253 @@ void Parser::ParseTypeTagForDatatypeAttribute(IdentifierInfo &AttrName,
     *EndLoc = T.getCloseLocation();
 }
 
+static bool IsValidArrayViewAccessMode(const Token &Tok,
+                                       const LangOptions &LangOpts) {
+  if (LangOpts.HLSExt && Tok.isAnyIdentifier()) {
+    return llvm::StringSwitch<bool>(Tok.getIdentifierInfo()->getName())
+        .Cases("__read_only", "__write_only", "__read_write", "read_only",
+               "write_only", "read_write", true)
+        .Default(false);
+  }
+
+  if (LangOpts.OpenCL)
+    return Tok.isOneOf(tok::kw___read_only, tok::kw___write_only,
+                       tok::kw___read_write);
+
+  return false;
+}
+
+void Parser::ParseXCLDependenceAttribute(
+    IdentifierInfo &AttrName, SourceLocation AttrNameLoc,
+    ParsedAttributes &Attrs, SourceLocation *EndLoc, IdentifierInfo *ScopeName,
+    SourceLocation ScopeLoc, AttributeList::Syntax Syntax) {
+
+  assert(Tok.is(tok::l_paren) && "Attribute arg list not starting with '('");
+
+  BalancedDelimiterTracker T(*this, tok::l_paren);
+  T.consumeOpen();
+
+  llvm::SmallVector<ArgsUnion, 6>  Args;
+  Args.resize( 6, (Expr*)nullptr );
+
+
+  IdentifierInfo *II = nullptr;
+
+  while( true ){ 
+    II = Tok.getIdentifierInfo();
+    if (II->getName().equals_lower("variable")) {
+      ConsumeToken();
+      if (ExpectAndConsume(tok::equal)){
+        T.skipToEnd();
+        return;
+      }
+      ExprResult variable = ParseCastExpression(true);
+      Args[0] = (variable.get());
+    }
+    else if (II->getName().equals_lower("class")) {
+      /*
+       * poiner/array 
+       */
+      ConsumeToken();
+      if (ExpectAndConsume(tok::equal)) {
+        T.skipToEnd();
+        return;
+      }
+      ExprResult dep_class = ParseStringLiteralExpression();
+      Args[1] = dep_class.get();
+    }
+    else if (II->getName().equals_lower("type")) {
+      /* inter/intra, 
+       */
+      ConsumeToken();
+      if (ExpectAndConsume(tok::equal)){
+        T.skipToEnd();
+        return;
+      }
+      ExprResult dep_class = ParseStringLiteralExpression();
+      Args[2] = dep_class.get();
+    }
+    else if (II->getName().equals_lower("direction")) {
+      /* raw/war/waw
+       */
+
+      ConsumeToken();
+      if (ExpectAndConsume(tok::equal)) {
+        T.skipToEnd();
+        return;
+      }
+      ExprResult dep_direction = ParseStringLiteralExpression();
+      Args[3] = dep_direction.get();
+    }
+    else if (II->getName().equals_lower("distance")) {
+      ConsumeToken();
+      if (ExpectAndConsume(tok::equal)) {
+        T.skipToEnd();
+        return;
+      }
+      if (Tok.getKind() != tok::numeric_constant) {
+        Diag(Tok.getLocation(), diag::err_pragma_missing_argument)
+            << "HLS depdendence" << /*Expect=*/true << "int const";
+        T.skipToEnd();
+        return;
+      } else {
+        ExprResult ExprRes(Actions.ActOnNumericConstant(Tok, getCurScope()));
+        Args[4] = (ExprRes.get());
+        ConsumeToken();
+      }
+    }
+    else if (II->getName().equals_lower("dependent")) { 
+      ConsumeToken();
+      if (ExpectAndConsume(tok::equal)) {
+        T.skipToEnd();
+        return;
+      }
+      if (Tok.getKind() == tok::kw_false || Tok.getKind() == tok::kw_true) {
+        // for C++ ,  lexer return keyword false/true
+        auto &Ctx = getActions().getASTContext();
+        auto IntTy = Ctx.IntTy;
+        auto Width = Ctx.getIntWidth(IntTy);
+        auto Int = llvm::APInt(Width, Tok.getKind() == tok::kw_false ? 0 : 1);
+        Args[5] = (IntegerLiteral::Create(Ctx, Int, IntTy, Tok.getLocation()));
+        ConsumeToken();
+      } 
+      else if ((II = Tok.getIdentifierInfo())) {
+        //for C language , Lexer return identifier
+        int test = -1;
+        if (II->getName().equals_lower("true"))
+          test = 1;
+        else if (II->getName().equals_lower("false")) {
+          test = 0;
+        } else {
+          Diag(Tok.getLocation(), diag::err_pragma_missing_argument)
+              << "HLS depdendence" << /*Expect=*/true << "'true' or 'false'";
+          T.skipToEnd();
+          return;
+        }
+        auto &Ctx = getActions().getASTContext();
+        auto IntTy = Ctx.IntTy;
+        auto Width = Ctx.getIntWidth(IntTy);
+        auto Int = llvm::APInt(Width, test);
+        Args[5] = (IntegerLiteral::Create(Ctx, Int, IntTy, Tok.getLocation()));
+        ConsumeToken();
+      }
+      else if (  Tok.getKind() == tok::string_literal ) {
+        ExprResult is_dependent = ParseStringLiteralExpression();
+        if (is_dependent.isInvalid()) { 
+          // unexpected token, return error
+          Diag(Tok.getLocation(), diag::err_pragma_missing_argument)
+              << "HLS __attribute__((xcl_depdendence( ..., dependent= ? )))" 
+              << /*Expect=*/true 
+              << "\"true\" / \"false\" ";
+        }
+        else { 
+          auto is_dep_expr = dyn_cast<StringLiteral>(is_dependent.get());
+          if (is_dep_expr) { 
+            bool is_dep_value = false;
+            auto is_dep_str = is_dep_expr->getBytes();
+            if( is_dep_str.equals_lower( "false" ) ) {
+              is_dep_value = false;
+            }
+            else if ( is_dep_str.equals_lower( "true" )) { 
+              is_dep_value = true;
+            }
+            else { 
+              // unexpected token, return error
+              Diag(Tok.getLocation(), diag::err_pragma_missing_argument)
+                  << "HLS __attribute__((xcl_depdendence( ..., dependent= ? )))" 
+                  << /*Expect=*/true 
+                  << "\"true\" / \"false\" ";
+            }
+            auto &Ctx = getActions().getASTContext();
+            auto IntTy = Ctx.IntTy;
+            auto Width = Ctx.getIntWidth(IntTy);
+            auto Int = llvm::APInt(Width, is_dep_value);
+            Args[5] = (IntegerLiteral::Create(Ctx, Int, IntTy, Tok.getLocation()));
+          }
+        }
+      }
+      else {
+        // unexpected token, return error
+        Diag(Tok.getLocation(), diag::err_pragma_missing_argument)
+            << "HLS depdendence" << /*Expect=*/true << "true / false ";
+        T.skipToEnd();
+        return;
+      }
+    }
+    else { 
+      Diag(Tok.getLocation(), diag::err_pragma_missing_argument)
+          << "HLS depdendence" << false << "unexpected";
+      T.skipToEnd();
+      return;
+    }
+
+    if (TryConsumeToken(tok::comma)) {
+      continue;
+    }
+    else {
+      break;
+    }
+  }
+
+  if (!T.consumeClose())
+    Attrs.addNew(&AttrName, AttrNameLoc, ScopeName, ScopeLoc, Args.data(),
+                 6, Syntax);
+
+  if (EndLoc)
+    *EndLoc = T.getCloseLocation();
+}
+
+void Parser::ParseXCLArrayViewAttribute(
+    IdentifierInfo &AttrName, SourceLocation AttrNameLoc,
+    ParsedAttributes &Attrs, SourceLocation *EndLoc, IdentifierInfo *ScopeName,
+    SourceLocation ScopeLoc, AttributeList::Syntax Syntax) {
+  assert(Tok.is(tok::l_paren) && "Attribute arg list not starting with '('");
+
+  BalancedDelimiterTracker T(*this, tok::l_paren);
+  T.consumeOpen();
+
+  ArgsVector Args;
+
+  if (!IsValidArrayViewAccessMode(Tok, getLangOpts())) {
+    Diag(Tok, diag::err_expected) << tok::identifier;
+    T.skipToEnd();
+    return;
+  }
+
+  Args.push_back(IdentifierLoc::create(Actions.Context, Tok.getLocation(),
+                                       Tok.getIdentifierInfo()));
+  ConsumeToken();
+
+  if (ExpectAndConsume(tok::comma)) {
+    T.skipToEnd();
+    return;
+  }
+
+  // Parse the non-empty comma-separated list of expressions.
+  do {
+    EnterExpressionEvaluationContext Unevaluated(
+        Actions, Sema::ExpressionEvaluationContext::ConstantEvaluated,
+        /*LambdaContextDecl=*/nullptr,
+        /*IsDecltype=*/false);
+
+    ExprResult ArgExpr(
+        Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression()));
+    if (ArgExpr.isInvalid()) {
+      T.skipToEnd();
+      return;
+    }
+    Args.push_back(ArgExpr.get());
+    // Eat the comma, move to the next argument
+  } while (TryConsumeToken(tok::comma));
+
+  if (!T.consumeClose())
+    Attrs.addNew(&AttrName, AttrNameLoc, ScopeName, ScopeLoc, Args.data(),
+                 Args.size(), Syntax);
+
+  if (EndLoc)
+    *EndLoc = T.getCloseLocation();
+}
+
 /// DiagnoseProhibitedCXX11Attribute - We have found the opening square brackets
 /// of a C++11 attribute-specifier in a location where an attribute is not
 /// permitted. By C++11 [dcl.attr.grammar]p6, this is ill-formed. Diagnose this
@@ -2017,7 +2288,7 @@ Parser::DeclGroupPtrTy Parser::ParseDeclGroup(ParsingDeclSpec &DS,
     return Actions.FinalizeDeclaratorGroup(getCurScope(), DS, ThisDecl);
   }
 
-  SmallVector<Decl *, 8> DeclsInGroup;
+  SmallVector<Decl *, 6> DeclsInGroup;
   Decl *FirstDecl = ParseDeclarationAfterDeclaratorAndAttributes(
       D, ParsedTemplateInfo(), FRI);
   if (LateParsedAttrs.size() > 0)
@@ -3599,7 +3870,8 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       isInvalid = DS.SetTypeAltiVecBool(true, Loc, PrevSpec, DiagID, Policy);
       break;
     case tok::kw_pipe:
-      if (!getLangOpts().OpenCL || (getLangOpts().OpenCLVersion < 200)) {
+      if (!getLangOpts().OpenCL ||
+          (getLangOpts().OpenCLVersion < 200 && !getLangOpts().HLSExt)) {
         // OpenCL 2.0 defined this keyword. OpenCL 1.2 and earlier should
         // support the "pipe" word as identifier.
         Tok.getIdentifierInfo()->revertTokenIDToIdentifier();
@@ -3935,6 +4207,15 @@ void Parser::ParseStructUnionBody(SourceLocation RecordLoc,
       AccessSpecifier AS = AS_none;
       ParsedAttributesWithRange Attrs(AttrFactory);
       (void)ParseOpenMPDeclarativeDirectiveWithExtDecl(AS, Attrs);
+      continue;
+    }
+
+    if (Tok.is(tok::annot_pragma_XlxHLS)) {
+      Diag(Tok.getLocation(), diag::err_xlx_pragma_not_in_function_scope);
+      ConsumeAnnotationToken();
+      SkipUntil(tok::annot_pragma_XlxHLS_end, Parser::StopBeforeMatch);
+      // Consume tok::annot_pragma_XlxHLS_end terminator.
+      ConsumeAnyToken();
       continue;
     }
 
@@ -6293,6 +6574,10 @@ void Parser::ParseParameterDeclarationClause(
        ParsedAttributes &FirstArgAttrs,
        SmallVectorImpl<DeclaratorChunk::ParamInfo> &ParamInfo,
        SourceLocation &EllipsisLoc) {
+  LateParsedAttrList LateAttrs;
+  auto LastEnd = LateAttrs.size();
+  bool HLSExt = getLangOpts().HLSExt;
+
   do {
     // FIXME: Issue a diagnostic if we parsed an attribute-specifier-seq
     // before deciding this was a parameter-declaration-clause.
@@ -6331,7 +6616,7 @@ void Parser::ParseParameterDeclarationClause(
     ParseDeclarator(ParmDeclarator);
 
     // Parse GNU attributes, if present.
-    MaybeParseGNUAttributes(ParmDeclarator);
+    MaybeParseGNUAttributes(ParmDeclarator, HLSExt ? &LateAttrs : nullptr);
 
     // Remember this parsed parameter in ParamInfo.
     IdentifierInfo *ParmII = ParmDeclarator.getIdentifier();
@@ -6416,6 +6701,13 @@ void Parser::ParseParameterDeclarationClause(
       ParamInfo.push_back(DeclaratorChunk::ParamInfo(ParmII,
                                           ParmDeclarator.getIdentifierLoc(), 
                                           Param, std::move(DefArgToks)));
+      // Update the late attributes for the current parameter
+      if (HLSExt) {
+        const auto NewLastEnd = LateAttrs.size();
+        while (LastEnd != NewLastEnd)
+          LateAttrs[LastEnd++]->addDecl(Param);
+        LastEnd = NewLastEnd;
+      }
     }
 
     if (TryConsumeToken(tok::ellipsis, EllipsisLoc)) {
@@ -6451,6 +6743,12 @@ void Parser::ParseParameterDeclarationClause(
 
     // If the next token is a comma, consume it and keep reading arguments.
   } while (TryConsumeToken(tok::comma));
+
+  if (HLSExt) {
+    for (auto *LA : LateAttrs)
+      LA->ParseLexedAttributes();
+    llvm::DeleteContainerPointers(LateAttrs);
+  }
 }
 
 /// [C90]   direct-declarator '[' constant-expression[opt] ']'

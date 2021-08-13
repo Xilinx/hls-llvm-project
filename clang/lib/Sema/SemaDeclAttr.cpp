@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements decl-related attribute processing.
@@ -32,6 +37,7 @@
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/SemaInternal.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/MathExtras.h"
@@ -50,6 +56,17 @@ namespace AttributeLangSupport {
 //===----------------------------------------------------------------------===//
 //  Helper functions
 //===----------------------------------------------------------------------===//
+
+/// createIntegerLiteral - create a integer AST node.
+static IntegerLiteral *
+createIntegerLiteral(int64_t i, Sema &S,
+                     SourceLocation Loc = SourceLocation()) {
+  auto &Ctx = S.getASTContext();
+  auto IntTy = Ctx.IntTy;
+  auto Width = Ctx.getIntWidth(IntTy);
+  auto Int = llvm::APInt(Width, i);
+  return IntegerLiteral::Create(Ctx, Int, IntTy, Loc);
+}
 
 /// isFunctionOrMethod - Return true if the given decl has function
 /// type (function or function-typed variable) or an Objective-C
@@ -242,6 +259,22 @@ static const IdentifierInfo *getAttrName(const clang::AttributeList &Attr) {
   return Attr.getName();
 }
 
+template <typename AttrInfo>
+static void DiagnoseIntArgument(Sema &S, const AttrInfo &Attr,
+                                SourceRange Range, unsigned Idx,
+                                bool Warning = false) {
+  if (Idx != UINT_MAX) {
+    S.Diag(getAttrLoc(Attr),
+           Warning ? diag::warn_attribute_argument_n_type
+                   : diag::err_attribute_argument_n_type)
+        << getAttrName(Attr) << Idx << AANT_ArgumentIntegerConstant << Range;
+    return;
+  }
+
+  S.Diag(getAttrLoc(Attr), diag::err_attribute_argument_type)
+      << getAttrName(Attr) << AANT_ArgumentIntegerConstant << Range;
+}
+
 /// \brief If Expr is a valid integer constant, get the value of the integer
 /// expression and return success or failure. May output an error.
 template<typename AttrInfo>
@@ -250,14 +283,34 @@ static bool checkUInt32Argument(Sema &S, const AttrInfo& Attr, const Expr *Expr,
   llvm::APSInt I(32);
   if (Expr->isTypeDependent() || Expr->isValueDependent() ||
       !Expr->isIntegerConstantExpr(I, S.Context)) {
-    if (Idx != UINT_MAX)
-      S.Diag(getAttrLoc(Attr), diag::err_attribute_argument_n_type)
-        << getAttrName(Attr) << Idx << AANT_ArgumentIntegerConstant
-        << Expr->getSourceRange();
-    else
-      S.Diag(getAttrLoc(Attr), diag::err_attribute_argument_type)
-        << getAttrName(Attr) << AANT_ArgumentIntegerConstant
-        << Expr->getSourceRange();
+    DiagnoseIntArgument(S, Attr, Expr->getSourceRange(), Idx);
+    return false;
+  }
+
+  if (!I.isIntN(32)) {
+    S.Diag(Expr->getExprLoc(), diag::err_ice_too_large)
+        << I.toString(10, false) << 32 << /* Unsigned */ 1;
+    return false;
+  }
+
+  Val = (uint32_t)I.getZExtValue();
+  return true;
+}
+
+
+template<typename AttrInfo>
+static bool checkICEArgument(Sema &S, const AttrInfo& Attr, Expr *Expr,
+                             uint32_t &Val, unsigned Idx = UINT_MAX) {
+  llvm::APSInt I(32);
+  if (Expr->isTypeDependent() || Expr->isValueDependent()) {
+    DiagnoseIntArgument(S, Attr, Expr->getSourceRange(), Idx, true);
+    return false;
+  }
+
+  auto ICE = S.VerifyIntegerConstantExpression(
+      Expr, &I, diag::err_align_value_attribute_argument_not_int);
+  if (ICE.isInvalid()) {
+    DiagnoseIntArgument(S, Attr, Expr->getSourceRange(), Idx);
     return false;
   }
 
@@ -297,10 +350,29 @@ static bool checkPositiveIntArgument(Sema &S, const AttrInfo& Attr, const Expr *
 /// declaration. Returns true if diagnosed.
 template <typename AttrTy>
 static bool checkAttrMutualExclusion(Sema &S, Decl *D, SourceRange Range,
-                                     IdentifierInfo *Ident) {
+                                     IdentifierInfo *Ident,
+                                     bool Warning = false) {
   if (AttrTy *A = D->getAttr<AttrTy>()) {
-    S.Diag(Range.getBegin(), diag::err_attributes_are_not_compatible) << Ident
-                                                                      << A;
+    S.Diag(Range.getBegin(),
+           Warning ? diag::warn_attributes_are_not_compatible
+                   : diag::err_attributes_are_not_compatible)
+        << Ident << A;
+    S.Diag(A->getLocation(), diag::note_conflicting_attribute);
+    return true;
+  }
+  return false;
+}
+
+template <typename AttrTy>
+static bool checkAttrMutualExclusion(Sema &S, Decl *D, StringRef Mode,
+                                     SourceRange Range, IdentifierInfo *Ident,
+                                     bool Warning = false) {
+  AttrTy *A = D->getAttr<AttrTy>();
+  if (A && A->getMode().contains_lower(Mode)) {
+    S.Diag(Range.getBegin(),
+           Warning ? diag::warn_attributes_are_not_compatible
+                   : diag::err_attributes_are_not_compatible)
+        << Ident << A;
     S.Diag(A->getLocation(), diag::note_conflicting_attribute);
     return true;
   }
@@ -418,6 +490,32 @@ static void handleSimpleAttributeWithExclusions(Sema &S, Decl *D,
                                                                           Attr);
 }
 
+template <typename AttrType>
+static void handleEnableAttribute(Sema &S, Decl *D, const AttributeList &Attr,
+                                  bool Reverse = true) {
+  if (D->isInvalidDecl())
+    return;
+  if (Attr.getNumArgs() > 1) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << Attr.getName() << 1;
+    return;
+  }
+
+  uint32_t Off = Reverse ? 1 : 0;
+  if (Attr.getNumArgs() == 1) {
+    if (!checkICEArgument(S, Attr, Attr.getArgAsExpr(0), Off, 0)) {
+      D->setInvalidDecl();
+      return;
+    }
+  }
+  // reverse Off for Enabled
+  uint32_t Enabled = Off;
+  if (Reverse)
+    Enabled = Off ? 0 : 1;
+
+  D->addAttr(::new (S.Context) AttrType(Attr.getRange(), S.Context, Enabled,
+                                        Attr.getAttributeSpellingListIndex()));
+}
 /// \brief Check if the passed-in expression is of type int or bool.
 static bool isIntOrBool(Expr *Exp) {
   QualType QT = Exp->getType();
@@ -1326,6 +1424,14 @@ static void handlePackedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     }
 
   } else
+    S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
+}
+
+static void handleUnpackedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (TagDecl *TD = dyn_cast<TagDecl>(D))
+    TD->addAttr(::new (S.Context) UnpackedAttr(Attr.getRange(), S.Context,
+                                        Attr.getAttributeSpellingListIndex()));
+  else
     S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
 }
 
@@ -5941,6 +6047,604 @@ static void handleOpenCLAccessAttr(Sema &S, Decl *D,
       Attr.getRange(), S.Context, Attr.getAttributeSpellingListIndex()));
 }
 
+static void handleFPGASignalNameAttr(Sema &S, Decl *D,
+                                     const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGASignalNameAttr>(S, D, Attr.getRange(),
+                                                   Attr.getName(), true)) {
+    return;
+  }
+
+  auto Name = Attr.getArgAsIdent(0)->Ident->getName();
+
+  D->addAttr(::new (S.Context) FPGASignalNameAttr(
+      Attr.getRange(), S.Context, Name, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGADataFootPrintHintAttr(Sema &S, Decl *D,
+                                            const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGADataFootPrintHintAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  Expr *Depth = Attr.getArgAsExpr(0);
+  if (S.CheckFPGADataFootPrintHintExprs(Depth, Attr.getLoc(),
+                                        Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+
+  D->addAttr(::new (S.Context) FPGADataFootPrintHintAttr(
+      Attr.getRange(), S.Context, Depth, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAMaxiMaxWidenBitwidthAttr(Sema &S, Decl *D,
+                                            const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAMaxiMaxWidenBitwidthAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  Expr *MaxWidenBitwidth = Attr.getArgAsExpr(0);
+  if (S.CheckFPGAMaxiMaxWidenBitwidthExprs(MaxWidenBitwidth, Attr.getLoc(),
+                                        Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+
+  D->addAttr(::new (S.Context) FPGAMaxiMaxWidenBitwidthAttr(
+      Attr.getRange(), S.Context, MaxWidenBitwidth, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAMaxiLatencyAttr(Sema &S, Decl *D,
+                                            const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAMaxiLatencyAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  Expr *Latency = Attr.getArgAsExpr(0);
+  if (S.CheckFPGAMaxiLatencyExprs(Latency, Attr.getLoc(),
+                                        Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+
+  D->addAttr(::new (S.Context) FPGAMaxiLatencyAttr(
+      Attr.getRange(), S.Context, Latency, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAMaxiNumRdOutstandAttr(Sema &S, Decl *D,
+                                            const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAMaxiNumRdOutstandAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  Expr *NumRdOutstand = Attr.getArgAsExpr(0);
+  if (S.CheckFPGAMaxiNumRdOutstandExprs(NumRdOutstand, Attr.getLoc(),
+                                        Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+
+  D->addAttr(::new (S.Context) FPGAMaxiNumRdOutstandAttr(
+      Attr.getRange(), S.Context, NumRdOutstand, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAMaxiNumWtOutstandAttr(Sema &S, Decl *D,
+                                            const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAMaxiNumWtOutstandAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  Expr *NumWtOutstand = Attr.getArgAsExpr(0);
+  if (S.CheckFPGAMaxiNumWtOutstandExprs(NumWtOutstand, Attr.getLoc(),
+                                        Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+
+  D->addAttr(::new (S.Context) FPGAMaxiNumWtOutstandAttr(
+      Attr.getRange(), S.Context, NumWtOutstand, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAMaxiRdBurstLenAttr(Sema &S, Decl *D,
+                                            const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAMaxiRdBurstLenAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  Expr *RdBurstLen = Attr.getArgAsExpr(0);
+  if (S.CheckFPGAMaxiRdBurstLenExprs(RdBurstLen, Attr.getLoc(),
+                                        Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+
+  D->addAttr(::new (S.Context) FPGAMaxiRdBurstLenAttr(
+      Attr.getRange(), S.Context, RdBurstLen, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAMaxiWtBurstLenAttr(Sema &S, Decl *D,
+                                            const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAMaxiWtBurstLenAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  Expr *WtBurstLen = Attr.getArgAsExpr(0);
+  if (S.CheckFPGAMaxiWtBurstLenExprs(WtBurstLen, Attr.getLoc(),
+                                        Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+
+  D->addAttr(::new (S.Context) FPGAMaxiWtBurstLenAttr(
+      Attr.getRange(), S.Context, WtBurstLen, Attr.getAttributeSpellingListIndex()));
+}
+
+template <typename T>
+static bool CheckRedundantAdaptor(Decl *D, StringRef Name) {
+  return llvm::any_of(D->specific_attrs<T>(), [Name](T *A) {
+    if (Name != A->getName())
+      return false;
+
+    // TODO: Check them to have the same parameters
+    return true;
+  });
+}
+
+static void handleMAXIAdaptorAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (Attr.getNumArgs() != 6) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << Attr.getName() << 6;
+    return;
+  }
+
+  auto Name = Attr.getArgAsIdent(0)->Ident->getName();
+  if (Name.empty()) {
+    S.Diag(getAttrLoc(Attr), diag::err_attribute_argument_n_type)
+        << getAttrName(Attr) << 0 << AANT_ArgumentIdentifier
+        << Attr.getArgAsIdent(0)->Loc;
+    return;
+  }
+
+  if (CheckRedundantAdaptor<MAXIAdaptorAttr>(D, Name))
+    return;
+
+  Expr *ReadOutStanding  = Attr.getArgAsExpr(1);
+  Expr *WriteOutStanding = Attr.getArgAsExpr(2);
+  Expr *ReadBurstLength  = Attr.getArgAsExpr(3);
+  Expr *WriteBurstLength = Attr.getArgAsExpr(4);
+  Expr *Latency          = Attr.getArgAsExpr(5);
+
+  if (S.CheckMAXIAdaptorExprs(ReadOutStanding, WriteOutStanding,
+                              ReadBurstLength, WriteBurstLength,
+                              Latency, Attr.getLoc(),
+                              Attr.getName()->getName()))
+    return;
+
+  D->addAttr(::new (S.Context) MAXIAdaptorAttr(
+      Attr.getRange(), S.Context, Name, ReadOutStanding, WriteOutStanding,
+      ReadBurstLength, WriteBurstLength, Latency,
+      Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleAXISAdaptorAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (Attr.getNumArgs() != 3) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << Attr.getName() << 3;
+    return;
+  }
+
+  auto Name = Attr.getArgAsIdent(0)->Ident->getName();
+  if (Name.empty()) {
+    S.Diag(getAttrLoc(Attr), diag::err_attribute_argument_n_type)
+        << getAttrName(Attr) << 0 << AANT_ArgumentIdentifier
+        << Attr.getArgAsIdent(0)->Loc;
+    return;
+  }
+
+  if (CheckRedundantAdaptor<AXISAdaptorAttr>(D, Name))
+    return;
+
+  auto ModeStr = Attr.getArgAsIdent(1)->Ident->getName();
+  auto DirectionStr = Attr.getArgAsIdent(2)->Ident->getName();
+
+  AXISAdaptorAttr::AXISRegisterModeType RegMode = AXISAdaptorAttr::Both;
+  AXISAdaptorAttr::DirectionType Direction = AXISAdaptorAttr::Unknown;
+
+  if (!AXISAdaptorAttr::ConvertStrToAXISRegisterModeType(ModeStr, RegMode)) {
+    S.Diag(Attr.getArgAsIdent(1)->Loc, diag::warn_attribute_type_not_supported)
+        << Attr.getName() << ModeStr;
+    return;
+  }
+
+  if (!AXISAdaptorAttr::ConvertStrToDirectionType(DirectionStr, Direction)) {
+    S.Diag(Attr.getArgAsIdent(2)->Loc, diag::warn_attribute_type_not_supported)
+        << Attr.getName() << DirectionStr;
+    return;
+  }
+
+  D->addAttr(::new (S.Context) AXISAdaptorAttr(
+      Attr.getRange(), S.Context, Name, RegMode, Direction,
+      Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleBRAMAdaptorAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (Attr.getNumArgs() != 5) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << Attr.getName() << 5;
+    return;
+  }
+
+  auto Name = Attr.getArgAsIdent(0)->Ident->getName();
+  if (Name.empty()) {
+    S.Diag(getAttrLoc(Attr), diag::err_attribute_argument_n_type)
+        << getAttrName(Attr) << 0 << AANT_ArgumentIdentifier
+        << Attr.getArgAsIdent(0)->Loc;
+    return;
+  }
+
+  if (CheckRedundantAdaptor<BRAMAdaptorAttr>(D, Name))
+    return;
+
+  auto ModeStr = Attr.getArgAsIdent(1)->Ident->getName().lower();
+  BRAMAdaptorAttr::ModeType Mode = BRAMAdaptorAttr::BRAM;
+  if (!BRAMAdaptorAttr::ConvertStrToModeType(ModeStr, Mode)) {
+    S.Diag(Attr.getArgAsIdent(1)->Loc, diag::warn_attribute_type_not_supported)
+        << Attr.getName() << ModeStr;
+    return;
+  }
+
+  auto op_enum = Attr.getArgAsExpr(2);
+  auto impl_enum = Attr.getArgAsExpr(3);
+
+  Expr *Latency = Attr.getArgAsExpr(4);
+  if (S.CheckBRAMAdaptorExprs(Latency, Attr.getLoc(),
+                              Attr.getName()->getName()))
+    return;
+
+  D->addAttr(::new (S.Context) BRAMAdaptorAttr(
+      Attr.getRange(), S.Context, Name, Mode, op_enum, impl_enum, Latency,
+      Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleXCLReqdPipeDepthAttr(Sema &S, Decl *D,
+                                       const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<XCLReqdPipeDepthAttr>(S, D, Attr.getRange(),
+                                                     Attr.getName(), true)) {
+    return;
+  }
+
+  auto DepthExpr = Attr.getArgAsExpr(0);
+
+  if (S.CheckXCLReqdPipeDepthExprs(DepthExpr, Attr.getLoc(),
+                                 Attr.getName()->getName())) {
+    D->setInvalidDecl();
+    return;
+  }
+  //int64_t offIntVal = 0; 
+  int64_t typeIntVal = 0; 
+
+  //for Opencl Attribute, user may only specify only one depth argument , and off/type argument is missed
+  //we need support it
+  if (Attr.getNumArgs() == 2 ) { 
+    auto TypeExpr = Attr.getArgAsExpr(1);
+  
+    llvm::APSInt Int(32);
+  
+    S.VerifyIntegerConstantExpression(TypeExpr, &Int);
+    typeIntVal = Int.getSExtValue();
+  }
+
+  D->addAttr(::new (S.Context) XCLReqdPipeDepthAttr(
+      Attr.getRange(), S.Context, DepthExpr, typeIntVal, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAAddressInterfaceAttr(Sema &S, Decl *D,
+                                           const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAAddressInterfaceAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  // address interface isnot compatible with ap scalar interface
+  if (checkAttrMutualExclusion<FPGAScalarInterfaceAttr>(
+          S, D, "ap", Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  auto Mode = Attr.getArgAsIdent(0)->Ident->getName();
+  auto Adaptor = Attr.getArgAsIdent(1)->Ident->getName();
+  FPGAAddressInterfaceAttr::OffsetModeType OffsetMode =
+      FPGAAddressInterfaceAttr::Default;
+
+  if (Attr.getNumArgs() > 2) {
+    auto *OffsetModeIL = Attr.getArgAsIdent(2);
+    auto OffsetModeStr = OffsetModeIL->Ident->getName();
+    if (!FPGAAddressInterfaceAttr::ConvertStrToOffsetModeType(OffsetModeStr,
+                                                              OffsetMode)) {
+      S.Diag(OffsetModeIL->Loc, diag::warn_attribute_type_not_supported)
+          << Attr.getName() << OffsetModeStr;
+      return;
+    }
+  }
+
+  D->addAttr(::new (S.Context) FPGAAddressInterfaceAttr(
+      Attr.getRange(), S.Context, Mode, Adaptor, OffsetMode,
+      Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAScalarInterfaceAttr(Sema &S, Decl *D,
+                                          const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  auto Mode = Attr.getArgAsIdent(0)->Ident->getName();
+
+  // FIXME: need better handler for s_axilite
+  // s_axilit is compatible with ap_*
+  if (Mode.equals_lower("s_axilite")) {
+    if (checkAttrMutualExclusion<FPGAScalarInterfaceAttr>(
+            S, D, Mode, Attr.getRange(), Attr.getName(), true)) {
+      return;
+    }
+  } else {
+    // ap scalar interface isnot compatible with address interface
+    if (checkAttrMutualExclusion<FPGAAddressInterfaceAttr>(
+            S, D, Attr.getRange(), Attr.getName(), true)) {
+      return;
+    }
+    // ap scalar interface isnot compatible with other ap scalar interface
+    if (checkAttrMutualExclusion<FPGAScalarInterfaceAttr>(
+            S, D, "ap", Attr.getRange(), Attr.getName(), true)) {
+      return;
+    }
+  }
+
+  auto Adaptor = Attr.getArgAsIdent(1)->Ident->getName();
+
+  D->addAttr(::new (S.Context) FPGAScalarInterfaceAttr(
+      Attr.getRange(), S.Context, Mode, Adaptor,
+      Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAScalarInterfaceWrapperAttr(Sema &S, Decl *D,
+                                                 const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  auto Mode = Attr.getArgAsIdent(0)->Ident->getName();
+
+  // Cannot apply the s_saxilite to the same scalar more than once.
+  if (checkAttrMutualExclusion<FPGAScalarInterfaceWrapperAttr>(
+          S, D, "s_axilite", Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  auto Adaptor = Attr.getArgAsIdent(1)->Ident->getName();
+
+  Expr *Offset = nullptr;
+  if (Attr.getNumArgs() == 3) {
+    Offset = Attr.getArgAsExpr(2);
+    if (S.CheckFPGAScalarInterfaceWrapperExprs(Offset, Attr.getLoc(),
+                                               Attr.getName()->getName()))
+      return;
+  }
+
+  // ignore the offset if the Adaptor is not specified.
+  if (Adaptor.empty() && Offset) {
+    S.Diag(Attr.getLoc(), diag::warn_xlx_attribute_ignore_option)
+        << Attr.getName() << "offset" << "Adaptor is not specified";
+
+    Offset = createIntegerLiteral(-1, S);
+  }
+
+  // set offset to an invalid value if not specified.
+  // Codegen will ingore the invalid offset.
+  // FIXME: maybe fixing the optional in tablegen is better.
+  if (Offset == nullptr) {
+    Offset = createIntegerLiteral(-1, S);
+  }
+
+  D->addAttr(::new (S.Context) FPGAScalarInterfaceWrapperAttr(
+      Attr.getRange(), S.Context, Mode, Adaptor, Offset,
+      Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFPGAFunctionCtrlInterfaceAttr(Sema &S, Decl *D,
+                                                const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+
+  if (checkAttrMutualExclusion<FPGAFunctionCtrlInterfaceAttr>(
+          S, D, Attr.getRange(), Attr.getName(), true)) {
+    return;
+  }
+
+  auto Mode = Attr.getArgAsIdent(0)->Ident->getName();
+  auto Rtlname = Attr.getArgAsIdent(1)->Ident->getName();
+
+  D->addAttr(::new (S.Context) FPGAFunctionCtrlInterfaceAttr(
+      Attr.getRange(), S.Context, Mode, Rtlname,
+      Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleCodeGenTypeAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  auto *TD = dyn_cast<TagDecl>(D);
+  if (!TD) {
+    S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
+    return;
+  }
+  if (!Attr.hasParsedType()) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << Attr.getName() << 1;
+    return;
+  }
+
+  TypeSourceInfo *ParmTSI = nullptr;
+  QualType ParmType = S.GetTypeFromParser(Attr.getTypeArg(), &ParmTSI);
+  assert(ParmTSI && "no type source info for attribute argument");
+
+  if (auto *A = D->getAttr<CodeGenTypeAttr>()) {
+    if (!S.Context.hasSameType(A->getType(), ParmType)) {
+      S.Diag(Attr.getLoc(), diag::warn_duplicate_attribute) << Attr.getName();
+      return;
+    }
+
+    return;
+  }
+
+  // FIXME: Check they have the same size and alignment
+
+  D->addAttr(::new (S.Context)
+                 CodeGenTypeAttr(Attr.getRange(), S.Context, ParmTSI,
+                                 Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleDataFlowAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (D->isInvalidDecl())
+    return;
+  if (Attr.getNumArgs() > 1) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << Attr.getName() << 1;
+    return;
+  }
+
+  if (auto *CurFD = S.getCurFunctionDecl()) {
+    if (CurFD->hasAttr<OpenCLKernelAttr>() &&
+        S.CheckSPMDDataflow(CurFD, Attr.getRange().getBegin()))
+      return;
+  }
+
+  XCLDataFlowAttr::PropagationType Type = XCLDataFlowAttr::StartPropagation;
+  if (Attr.getNumArgs() == 1) {
+    if (!Attr.isArgIdent(0))
+      return;
+    auto TypeStr = Attr.getArgAsIdent(0)->Ident->getName();
+    if (!XCLDataFlowAttr::ConvertStrToPropagationType(TypeStr, Type))
+      return;
+  }
+
+  D->addAttr(::new (S.Context) XCLDataFlowAttr(
+      Attr.getRange(), S.Context, Type, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleFunctionDependenceAttr(Sema &S, Decl*D, const AttributeList &A) { 
+
+  if( A.getNumArgs() != 6 ) { 
+    S.Diag(A.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << A.getName() << 6;
+    return;
+  }
+
+  Expr* dep_variable = NULL ;
+ 
+
+
+  XlxDependenceAttr::XlxDepClass dep_class = XlxDependenceAttr::NO_CLASS;
+  XlxDependenceAttr::XlxDepType dep_type = XlxDependenceAttr::inter;
+  XlxDependenceAttr::XlxDepDirection  dep_direction = XlxDependenceAttr::NO_DIRECTION;
+
+  Expr* dep_distance = nullptr;
+  int dep_compel = 0;
+
+  /* variable( optional ),  poiner/array( optional ), inter/intra, raw/war/waw, INTCONST, bool */
+  if( A.getArgAsExpr(0) ) { 
+    dep_variable = A.getArgAsExpr(0);
+  }
+  else {
+
+    auto &Ctx = S.getASTContext();
+    auto IntTy = Ctx.IntTy;
+    auto Width = Ctx.getIntWidth(IntTy);
+    auto Int = llvm::APInt(Width, 0);
+    dep_variable = IntegerLiteral::Create(Ctx, Int, IntTy, A.getLoc());
+  }
+
+  if( A.getArgAsIdent( 1 ) ) 
+    XlxDependenceAttr::ConvertStrToXlxDepClass( A.getArgAsIdent(1)->Ident->getName(), dep_class );
+
+  if( A.getArgAsIdent( 2 ) )
+    XlxDependenceAttr::ConvertStrToXlxDepType( A.getArgAsIdent(2)->Ident->getName(), dep_type );
+
+  if( A.getArgAsIdent( 3 ) ) 
+    XlxDependenceAttr::ConvertStrToXlxDepDirection( A.getArgAsIdent(3)->Ident->getName(), dep_direction );
+
+
+  if( A.getArgAsExpr( 4 ) ) {
+    llvm::APSInt Int(32);
+    Expr* E = A.getArgAsExpr(4);
+  
+    auto ICE = S.VerifyIntegerConstantExpression(E, &Int);
+    if (ICE.isInvalid()) {
+      S.Diag(A.getLoc(), diag::err_attribute_argument_n_type)
+          << "'dependence'" << 4 << AANT_ArgumentIntegerConstant
+          << E->getSourceRange();
+      return ;
+    }
+    dep_distance = E;
+  }
+  else { 
+    dep_distance = createIntegerLiteral(-1, S, A.getLoc());
+  }
+
+
+  if( A.getArgAsExpr( 5 ) ){ 
+
+    llvm::APSInt Int(32);
+    Expr* E = A.getArgAsExpr(5);
+  
+    auto ICE = S.VerifyIntegerConstantExpression(E, &Int);
+    if (ICE.isInvalid()) {
+      S.Diag(A.getLoc(), diag::err_attribute_argument_n_type)
+          << "'dependence'" << 5 << AANT_ArgumentIntegerConstant
+          << E->getSourceRange();
+      return ;
+    }
+    dep_compel = Int.getSExtValue();
+  }
+
+  D->addAttr( ::new(S.Context) XlxDependenceAttr( A.getRange(), S.Context, dep_variable, dep_class,
+      dep_type, dep_direction, dep_distance, (bool)dep_compel, 
+      A.getAttributeSpellingListIndex()));
+
+}
+
 //===----------------------------------------------------------------------===//
 // Top Level Sema Entry Points
 //===----------------------------------------------------------------------===//
@@ -5976,6 +6680,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
 
   switch (Attr.getKind()) {
   default:
+    if (S.ProcessXlxDeclAttributes(scope, D, Attr))
+      break;
+
     if (!Attr.isStmtAttr()) {
       // Type attributes are handled elsewhere; silently move on.
       assert(Attr.isTypeAttr() && "Non-type attribute not handled");
@@ -5993,6 +6700,84 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_DLLExport:
   case AttributeList::AT_DLLImport:
     handleDLLAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_XCLDataFlow:
+    handleDataFlowAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_XlxDependence:
+    handleFunctionDependenceAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_XCLInline:
+    handleEnableAttribute<XCLInlineAttr>(S, D, Attr, false);
+    break;
+  case AttributeList::AT_XlxFuncInstantiate:
+    handleSimpleAttribute<XlxFuncInstantiateAttr>(S, D, Attr);
+    break;
+  case AttributeList::AT_XlxVarReset:
+    handleEnableAttribute<XlxVarResetAttr>(S, D, Attr);
+    break;
+  case AttributeList::AT_XlxExprBalance:
+    handleEnableAttribute<XlxExprBalanceAttr>(S, D, Attr);
+    break;
+  case AttributeList::AT_XlxMergeLoop:
+    handleEnableAttribute<XlxMergeLoopAttr>(S, D, Attr, false);
+    break;
+  case AttributeList::AT_FPGARegister:
+    handleSimpleAttribute<FPGARegisterAttr>(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGASignalName:
+    handleFPGASignalNameAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGADataFootPrintHint:
+    handleFPGADataFootPrintHintAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAMaxiMaxWidenBitwidth:
+    handleFPGAMaxiMaxWidenBitwidthAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAMaxiLatency:
+    handleFPGAMaxiLatencyAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAMaxiNumRdOutstand:
+    handleFPGAMaxiNumRdOutstandAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAMaxiNumWtOutstand:
+    handleFPGAMaxiNumWtOutstandAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAMaxiRdBurstLen:
+    handleFPGAMaxiRdBurstLenAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAMaxiWtBurstLen:
+    handleFPGAMaxiWtBurstLenAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAAddressInterface:
+    handleFPGAAddressInterfaceAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAScalarInterface:
+    handleFPGAScalarInterfaceAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAScalarInterfaceWrapper:
+    handleFPGAScalarInterfaceWrapperAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_FPGAFunctionCtrlInterface:
+    handleFPGAFunctionCtrlInterfaceAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_XCLReqdPipeDepth:
+    handleXCLReqdPipeDepthAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_MAXIAdaptor:
+    handleMAXIAdaptorAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_AXISAdaptor:
+    handleAXISAdaptorAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_BRAMAdaptor:
+    handleBRAMAdaptorAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_CodeGenType:
+    handleCodeGenTypeAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_Unpacked:
+    handleUnpackedAttr(S, D, Attr);
     break;
   case AttributeList::AT_Mips16:
     handleSimpleAttributeWithExclusions<Mips16Attr, MicroMipsAttr,
@@ -6632,9 +7417,28 @@ void Sema::ProcessDeclAttributeList(Scope *S, Decl *D,
       Diag(D->getLocation(), diag::err_attribute_wrong_decl_type)
         << A << ExpectedKernelFunction;
       D->setInvalidDecl();
+    } else if (Attr *A = D->getAttr<XCLMaxWorkGroupSizeAttr>()) {
+      Diag(D->getLocation(), diag::err_opencl_kernel_attr) << A;
+      D->setInvalidDecl();
+    } else if (Attr *A = D->getAttr<XCLZeroGlobalWorkOffsetAttr>()) {
+      Diag(D->getLocation(), diag::err_opencl_kernel_attr) << A;
+      D->setInvalidDecl();
     } else if (Attr *A = D->getAttr<OpenCLIntelReqdSubGroupSizeAttr>()) {
       Diag(D->getLocation(), diag::err_opencl_kernel_attr) << A;
       D->setInvalidDecl();
+    }
+
+    // check incompatible attributes
+    if (getLangOpts().HLSExt && D->hasAttrs())
+      CheckForIncompatibleXlxAttributes(D->getAttrs());
+    return;
+  }
+
+  if (auto *XDF = D->getAttr<XCLDataFlowAttr>()) {
+    if (D->hasAttr<OpenCLKernelAttr>()) {
+      // xcl_dataflow can only apply to (1,1,1) kernel
+      if (CheckSPMDDataflow(D, XDF->getLocation()))
+        D->setInvalidDecl();
     }
   }
 }

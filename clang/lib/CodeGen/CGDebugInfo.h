@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the source-level debug info generator for llvm translation.
@@ -159,6 +164,7 @@ class CGDebugInfo {
   llvm::DIType *CreateType(const ObjCObjectType *Ty, llvm::DIFile *F);
   llvm::DIType *CreateType(const ObjCTypeParamType *Ty, llvm::DIFile *Unit);
 
+  llvm::DIType *CreateType(const APIntType *Ty, llvm::DIFile *F);
   llvm::DIType *CreateType(const VectorType *Ty, llvm::DIFile *F);
   llvm::DIType *CreateType(const ArrayType *Ty, llvm::DIFile *F);
   llvm::DIType *CreateType(const LValueReferenceType *Ty, llvm::DIFile *F);
@@ -403,7 +409,8 @@ public:
                                             CGBuilderTy &Builder);
 
   /// Emit information about a global variable.
-  void EmitGlobalVariable(llvm::GlobalVariable *GV, const VarDecl *Decl);
+  void EmitGlobalVariable(llvm::GlobalVariable *GV, const VarDecl *Decl,
+                          bool DeclOnly = false);
 
   /// Emit a constant global variable's debug info.
   void EmitGlobalVariable(const ValueDecl *VD, const APValue &Init);

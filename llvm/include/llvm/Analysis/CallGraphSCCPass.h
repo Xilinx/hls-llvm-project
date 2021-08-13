@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the CallGraphSCCPass class, which is used for passes which
@@ -40,6 +45,10 @@ public:
   /// corresponding to a CallGraph.
   Pass *createPrinterPass(raw_ostream &OS,
                           const std::string &Banner) const override;
+
+  /// createGitCommitModulePass - Get a git-commit module pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override;
 
   using llvm::Pass::doInitialization;
   using llvm::Pass::doFinalization;

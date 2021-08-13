@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines two classes: AliasSetTracker and AliasSet. These interfaces
@@ -349,7 +354,8 @@ class AliasSetTracker {
 public:
   /// Create an empty collection of AliasSets, and use the specified alias
   /// analysis object to disambiguate load and store addresses.
-  explicit AliasSetTracker(AliasAnalysis &aa) : AA(aa) {}
+  explicit AliasSetTracker(AliasAnalysis &aa, bool DegradateOnSaturation = true)
+      : AA(aa), DegradateOnSaturation(DegradateOnSaturation) {}
   ~AliasSetTracker() { clear(); }
 
   /// These methods are used to add different types of instructions to the alias
@@ -430,6 +436,9 @@ private:
 
   // The total number of pointers contained in all "may" alias sets.
   unsigned TotalMayAliasSetSize = 0;
+  // Degradate the alias sets when we have too much pointers in the "may" alias
+  // sets.
+  const bool DegradateOnSaturation;
 
   // A non-null value signifies this AST is saturated. A saturated AST lumps
   // all pointers into a single "May" set.

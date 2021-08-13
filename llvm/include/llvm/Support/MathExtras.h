@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains some functions that are useful for math stuff.
@@ -559,6 +564,16 @@ inline uint64_t GreatestCommonDivisor64(uint64_t A, uint64_t B) {
     A = T;
   }
   return A;
+}
+
+/// Return the least common multiple of the values using Euclid's algorithm.
+inline uint64_t LeastCommonMultiple64(uint64_t A, uint64_t B) {
+  if (A == 0 || B == 0)
+    return 0;
+  uint64_t GCD = GreatestCommonDivisor64(A, B);
+  uint64_t LCM = (A / GCD) * B; // Divide first to avoid overflow.
+  assert(LCM >= A && LCM >= B && "LCM overflow");
+  return LCM;
 }
 
 /// This function takes a 64-bit integer and returns the bit equivalent double.

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Scope class, which is used for recording
@@ -93,6 +98,26 @@ void Scope::Init(Scope *parent, unsigned flags) {
   Entity = nullptr;
   ErrorTrap.reset();
   NRVO.setPointerAndInt(nullptr, 0);
+  ParsedHLSPragmas.clear();
+  PendingHLSPragmas.clear();
+}
+
+void Scope::addPendingHLSPragma(VarDecl *D, AttributeList *Attr) {
+  auto *&PendingAttr = PendingHLSPragmas[D];
+  assert(Attr);
+  assert(Attr->getNext() == nullptr);
+  Attr->setNext(PendingAttr);
+  PendingAttr = Attr;
+}
+
+AttributeList *Scope::takePendingHLSPragmas(VarDecl *D) {
+  auto I = PendingHLSPragmas.find(D);
+  if (I == PendingHLSPragmas.end())
+    return nullptr;
+
+  auto *A = I->second;
+  PendingHLSPragmas.erase(I);
+  return A;
 }
 
 bool Scope::containedInPrototypeScope() const {

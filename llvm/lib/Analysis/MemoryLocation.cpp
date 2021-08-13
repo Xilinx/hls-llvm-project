@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryLocation.h"
@@ -62,6 +67,28 @@ MemoryLocation MemoryLocation::get(const AtomicRMWInst *RMWI) {
   return MemoryLocation(RMWI->getPointerOperand(),
                         DL.getTypeStoreSize(RMWI->getValOperand()->getType()),
                         AATags);
+}
+
+MemoryLocation MemoryLocation::get(const SeqBeginInst *SBI) {
+  AAMDNodes AATags;
+  SBI->getAAMetadata(AATags);
+  const auto &DL = SBI->getModule()->getDataLayout();
+  uint64_t Size = SBI->getSmallConstantSizeInBytes(DL);
+  if (Size == 0)
+    Size = MemoryLocation::UnknownSize;
+
+  return MemoryLocation(SBI->getPointerOperand(), Size, AATags);
+}
+
+MemoryLocation MemoryLocation::get(const FPGALoadStoreInst *FLSI) {
+  AAMDNodes AATags;
+  FLSI->getAAMetadata(AATags);
+  const auto &DL = FLSI->getModule()->getDataLayout();
+  return MemoryLocation(
+      FLSI->getPointerOperand(),
+      DL.getTypeStoreSize(
+          FLSI->getPointerOperand()->getType()->getPointerElementType()),
+      AATags);
 }
 
 MemoryLocation MemoryLocation::getForSource(const MemTransferInst *MTI) {

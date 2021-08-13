@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the llc code generator driver. It provides a convenient
@@ -485,7 +490,8 @@ static int compileModule(char **argv, LLVMContext &Context) {
   PM.add(new TargetLibraryInfoWrapperPass(TLII));
 
   // Add the target data from the target machine, if it exists, or the module.
-  M->setDataLayout(Target->createDataLayout());
+  //M->setDataLayout(Target->createDataLayout());
+  errs() << M->getDataLayoutStr();
 
   // Override function attributes based on CPUStr, FeaturesStr, and command line
   // flags.

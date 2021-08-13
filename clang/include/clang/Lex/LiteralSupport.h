@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the NumericLiteralParser, CharLiteralParser, and
@@ -67,7 +72,8 @@ public:
   bool isImaginary : 1;     // 1.0i
   bool isFloat16 : 1;       // 1.0f16
   bool isFloat128 : 1;      // 1.0q
-  uint8_t MicrosoftInteger; // Microsoft suffix extension i8, i16, i32, or i64.
+  uint16_t MicrosoftInteger;// Microsoft suffix extension i8, i16, i32, or i64.
+                            // HLS extension, precision of integers i<bitwidth>
 
   bool isIntegerLiteral() const {
     return !saw_period && !saw_exponent;
@@ -109,6 +115,7 @@ private:
 
   void ParseNumberStartingWithZero(SourceLocation TokLoc);
   void ParseDecimalOrOctalCommon(SourceLocation TokLoc);
+  bool ParseHLSExtSuffix(SourceLocation TokLoc);
 
   static bool isDigitSeparator(char C) { return C == '\''; }
 

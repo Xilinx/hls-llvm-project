@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements all of the non-inline methods for the LLVM instruction
@@ -33,6 +38,7 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -484,6 +490,15 @@ bool CallInst::dataOperandHasImpliedAttr(unsigned i,
 
   assert(hasOperandBundles() && i >= (getBundleOperandsStartIndex() + 1) &&
          "Must be either a call argument or an operand bundle!");
+
+  // HLS uses 'sideeffect' intrinsic to represent pragma. This intrinsic should
+  // not have side effect for the attached values.
+  if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(this)) {
+    if (II->getIntrinsicID() == Intrinsic::sideeffect &&
+        (Kind == Attribute::ReadOnly || Kind == Attribute::NoCapture))
+      return getOperand(i-1)->getType()->isPointerTy();
+  }
+
   return bundleOperandHasAttr(i - 1, Kind);
 }
 
@@ -649,7 +664,7 @@ static Instruction *createFree(Value *Source,
   } else {
     if (Source->getType() != IntPtrTy)
       PtrCast = new BitCastInst(Source, IntPtrTy, "", InsertAtEnd);
-    Result = CallInst::Create(FreeFunc, PtrCast, Bundles, "");
+    Result = CallInst::Create(FreeFunc, PtrCast, Bundles, "", InsertAtEnd);
   }
   Result->setTailCall();
   if (Function *F = dyn_cast<Function>(FreeFunc))

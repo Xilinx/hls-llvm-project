@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the implementation of the scalar evolution analysis
@@ -84,6 +89,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
+#include "llvm/IR/AssemblyAnnotationWriter.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/CallSite.h"
@@ -92,6 +98,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
@@ -117,6 +124,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
@@ -328,6 +336,12 @@ void SCEV::print(raw_ostream &OS) const {
     return;
   }
   llvm_unreachable("Unknown SCEV kind!");
+}
+
+DiagnosticInfoOptimizationBase::Argument::Argument(StringRef Key, const SCEV *S)
+    : Key(Key) {
+  raw_string_ostream OS(Val);
+  OS << *S;
 }
 
 Type *SCEV::getType() const {
@@ -3061,6 +3075,10 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
     // try to analyze it, because the resolution chosen here may differ from
     // the resolution chosen in other parts of the compiler.
     if (!RHSC->getValue()->isZero()) {
+      // (X / C) and (X < C) --> 0
+      if (getUnsignedRangeMax(LHS).ult(RHSC->getAPInt()))
+        return getZero(RHS->getType());
+
       // Determine if the division can be folded into the operands of
       // its operands.
       // TODO: Generalize this to non-constants by using known-bits information.
@@ -5352,16 +5370,6 @@ uint32_t ScalarEvolution::GetMinTrailingZeros(const SCEV *S) {
   return InsertPair.first->second;
 }
 
-/// Helper method to assign a range to V from metadata present in the IR.
-static Optional<ConstantRange> GetRangeFromMetadata(Value *V) {
-  if (Instruction *I = dyn_cast<Instruction>(V))
-    if (MDNode *MD = I->getMetadata(LLVMContext::MD_range))
-      return getConstantRangeFromMetadata(*MD);
-
-  return None;
-}
-
-/// Determine the range for a particular SCEV.  If SignHint is
 /// HINT_RANGE_UNSIGNED (resp. HINT_RANGE_SIGNED) then getRange prefers ranges
 /// with a "cleaner" unsigned (resp. signed) representation.
 const ConstantRange &
@@ -5502,31 +5510,14 @@ ScalarEvolution::getRangeRef(const SCEV *S,
   }
 
   if (const SCEVUnknown *U = dyn_cast<SCEVUnknown>(S)) {
-    // Check if the IR explicitly contains !range metadata.
-    Optional<ConstantRange> MDRange = GetRangeFromMetadata(U->getValue());
-    if (MDRange.hasValue())
-      ConservativeResult = ConservativeResult.intersectWith(MDRange.getValue());
-
-    // Split here to avoid paying the compile-time cost of calling both
-    // computeKnownBits and ComputeNumSignBits.  This restriction can be lifted
-    // if needed.
     const DataLayout &DL = getDataLayout();
-    if (SignHint == ScalarEvolution::HINT_RANGE_UNSIGNED) {
-      // For a SCEVUnknown, ask ValueTracking.
-      KnownBits Known = computeKnownBits(U->getValue(), DL, 0, &AC, nullptr, &DT);
-      if (Known.One != ~Known.Zero + 1)
-        ConservativeResult =
-            ConservativeResult.intersectWith(ConstantRange(Known.One,
-                                                           ~Known.Zero + 1));
-    } else {
-      assert(SignHint == ScalarEvolution::HINT_RANGE_SIGNED &&
-             "generalize as needed!");
-      unsigned NS = ComputeNumSignBits(U->getValue(), DL, 0, &AC, nullptr, &DT);
-      if (NS > 1)
-        ConservativeResult = ConservativeResult.intersectWith(
-            ConstantRange(APInt::getSignedMinValue(BitWidth).ashr(NS - 1),
-                          APInt::getSignedMaxValue(BitWidth).ashr(NS - 1) + 1));
-    }
+    bool ForSigned = (SignHint == ScalarEvolution::HINT_RANGE_SIGNED);
+
+    // For a SCEVUnknown, ask ValueTracking.
+    ConservativeResult =
+        ConservativeResult.intersectWith(
+            computeConstantRangeIncludingKnownBits(
+                U->getValue(), BitWidth, ForSigned, DL, 0, &AC, nullptr, &DT));
 
     return setRange(U, SignHint, std::move(ConservativeResult));
   }
@@ -6224,6 +6215,19 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
                 getConstant(Mul)), OuterTy);
           }
         }
+      }
+
+      const SCEV *Op0SCEV = getSCEV(BO->LHS);
+      if (isKnownNonNegative(Op0SCEV)) {
+        // AShr by a constant is equivalent to LShr by a constant if the value
+        // to be shifted right(Op0) is proved to be non-negative, and the
+        // constant is less than the bitwidth of the Op0 which is checked
+        // earlier. In this case, Turn the arithmetic shift right by a constant
+        // into an unsigned division.
+        ConstantInt *X =
+            ConstantInt::get(CI->getContext(),
+                             APInt::getOneBitSet(BitWidth, CI->getZExtValue()));
+        return getUDivExpr(getSCEV(BO->LHS), getConstant(X));
       }
       break;
     }
@@ -11454,6 +11458,12 @@ public:
                                 SE.getSignExtendExpr(Step, Ty), L,
                                 AR->getNoWrapFlags());
     }
+
+    // If Operand is not negative, use zext instead
+    auto *Zero = SE.getZero(Operand->getType());
+    if (SE.isLoopEntryGuardedByCond(L, ICmpInst::ICMP_SGE, Operand, Zero))
+      return SE.getZeroExtendExpr(Operand, Expr->getType());
+
     return SE.getSignExtendExpr(Operand, Expr->getType());
   }
 

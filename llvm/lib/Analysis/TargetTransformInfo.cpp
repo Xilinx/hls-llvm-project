@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -106,6 +111,10 @@ int TargetTransformInfo::getUserCost(const User *U,
   int Cost = TTIImpl->getUserCost(U, Operands);
   assert(Cost >= 0 && "TTI should not produce negative costs!");
   return Cost;
+}
+
+bool TargetTransformInfo::isRegisterRich() const {
+  return TTIImpl->isRegisterRich();
 }
 
 bool TargetTransformInfo::hasBranchDivergence() const {

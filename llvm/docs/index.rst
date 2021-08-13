@@ -292,6 +292,7 @@ For API clients and LLVM developers.
    XRayFDRFormat
    PDB/index
    CFIVerify
+   Xilinx/index
 
 :doc:`WritingAnLLVMPass`
    Information on how to write LLVM transformations and analyses.

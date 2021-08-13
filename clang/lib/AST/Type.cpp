@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements type-related functionality.
@@ -221,6 +226,47 @@ VectorType::VectorType(TypeClass tc, QualType vecType, unsigned nElements,
       ElementType(vecType) {
   VectorTypeBits.VecKind = vecKind;
   VectorTypeBits.NumElements = nElements;
+}
+
+DependentSizedAPIntType::DependentSizedAPIntType(const ASTContext &Context,
+                                                 QualType ElementType,
+                                                 QualType can, Expr *SizeExpr,
+                                                 SourceLocation loc)
+    : Type(DependentSizedAPInt, can, /*Dependent=*/true,
+           /*InstantiationDependent=*/true,
+           /*VariablyModified=*/false,
+           (ElementType->containsUnexpandedParameterPack() ||
+            (SizeExpr && SizeExpr->containsUnexpandedParameterPack()))),
+      Context(Context), SizeExpr(SizeExpr), ElementType(ElementType), loc(loc) {
+  assert((ElementType->isIntegerType() && ElementType->isBuiltinType()) &&
+         "be builtin integer!");
+}
+
+void DependentSizedAPIntType::Profile(llvm::FoldingSetNodeID &ID,
+                                      const ASTContext &Context,
+                                      QualType ElementType, Expr *SizeExpr) {
+  ID.AddBoolean(ElementType->isSignedIntegerType());
+  SizeExpr->Profile(ID, Context, true);
+}
+
+APIntType::APIntType(unsigned SizeInBits, bool IsSigned)
+    : Type(APInt, QualType(), /*Dependent=*/false,
+           /*InstantiationDependent=*/false,
+           /*VariablyModified=*/false,
+           /*Unexpanded paramter pack=*/false) {
+  assert(!APIntType::isSizeTooLarge(SizeInBits) && "Bad size!");
+  APIntTypeBits.IsSigned = IsSigned;
+  APIntTypeBits.SizeInBits = SizeInBits;
+}
+
+void APIntType::Profile(llvm::FoldingSetNodeID &ID, unsigned SizeInBits,
+                        bool IsSigned) {
+  ID.AddInteger(SizeInBits);
+  ID.AddBoolean(IsSigned);
+}
+
+QualType APIntType::GetElementType(const ASTContext &Context, bool IsSigned) {
+  return IsSigned ? Context.IntTy : Context.UnsignedIntTy;
 }
 
 /// getArrayElementTypeNoTypeQual - If this is an array type, return the
@@ -1654,6 +1700,10 @@ namespace {
       return Visit(T->getElementType());
     }
 
+    Type *VisitDependentSizedAPIntType(const DependentSizedAPIntType *T) {
+      return Visit(T->getElementType());
+    }
+
     Type *VisitVectorType(const VectorType *T) {
       return Visit(T->getElementType());
     }
@@ -1729,7 +1779,7 @@ bool Type::isIntegralType(const ASTContext &Ctx) const {
     if (const EnumType *ET = dyn_cast<EnumType>(CanonicalType))
       return ET->getDecl()->isComplete();
 
-  return false;
+  return isa<APIntType>(CanonicalType);
 }
 
 bool Type::isIntegralOrUnscopedEnumerationType() const {
@@ -1744,7 +1794,7 @@ bool Type::isIntegralOrUnscopedEnumerationType() const {
   if (const EnumType *ET = dyn_cast<EnumType>(CanonicalType))
     return ET->getDecl()->isComplete() && !ET->getDecl()->isScoped();
 
-  return false;
+  return isa<APIntType>(CanonicalType);
 }
 
 bool Type::isCharType() const {
@@ -1810,6 +1860,9 @@ bool Type::isSignedIntegerType() const {
       return ET->getDecl()->getIntegerType()->isSignedIntegerType();
   }
 
+  if (auto *IT = dyn_cast<APIntType>(CanonicalType))
+    return IT->isSigned();
+
   return false;
 }
 
@@ -1823,7 +1876,10 @@ bool Type::isSignedIntegerOrEnumerationType() const {
     if (ET->getDecl()->isComplete())
       return ET->getDecl()->getIntegerType()->isSignedIntegerType();
   }
-  
+
+  if (auto *IT = dyn_cast<APIntType>(CanonicalType))
+    return IT->isSigned();
+
   return false;
 }
 
@@ -1850,6 +1906,9 @@ bool Type::isUnsignedIntegerType() const {
       return ET->getDecl()->getIntegerType()->isUnsignedIntegerType();
   }
 
+  if (auto *IT = dyn_cast<APIntType>(CanonicalType))
+    return !IT->isSigned();
+
   return false;
 }
 
@@ -1863,7 +1922,10 @@ bool Type::isUnsignedIntegerOrEnumerationType() const {
     if (ET->getDecl()->isComplete())
       return ET->getDecl()->getIntegerType()->isUnsignedIntegerType();
   }
-  
+
+  if (auto *IT = dyn_cast<APIntType>(CanonicalType))
+    return !IT->isSigned();
+
   return false;
 }
 
@@ -1902,7 +1964,7 @@ bool Type::isRealType() const {
            BT->getKind() <= BuiltinType::Float128;
   if (const EnumType *ET = dyn_cast<EnumType>(CanonicalType))
       return ET->getDecl()->isComplete() && !ET->getDecl()->isScoped();
-  return false;
+  return isa<APIntType>(CanonicalType);
 }
 
 bool Type::isArithmeticType() const {
@@ -1917,7 +1979,7 @@ bool Type::isArithmeticType() const {
     // false for scoped enumerations since that will disable any
     // unwanted implicit conversions.
     return !ET->getDecl()->isScoped() && ET->getDecl()->isComplete();
-  return isa<ComplexType>(CanonicalType);
+  return isa<ComplexType>(CanonicalType) || isa<APIntType>(CanonicalType);
 }
 
 Type::ScalarTypeKind Type::getScalarTypeKind() const {
@@ -1945,7 +2007,8 @@ Type::ScalarTypeKind Type::getScalarTypeKind() const {
     if (CT->getElementType()->isRealFloatingType())
       return STK_FloatingComplex;
     return STK_IntegralComplex;
-  }
+  } else if (isa<APIntType>(T))
+    return STK_Integral;
 
   llvm_unreachable("unknown scalar type");
 }
@@ -2111,6 +2174,10 @@ bool QualType::isCXX98PODType(const ASTContext &Context) const {
 
     // C struct/union is POD.
     return true;
+
+  // Arbitrary precision integer type is POD-type in HLS extension.
+  case Type::APInt:
+    return Context.getLangOpts().HLSExt;
   }
 }
 
@@ -2406,7 +2473,7 @@ bool Type::isPromotableIntegerType() const {
     
     return true;
   }
-  
+
   return false;
 }
 
@@ -2705,6 +2772,7 @@ StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   case CC_IntelOclBicc: return "intel_ocl_bicc";
   case CC_SpirFunction: return "spir_function";
   case CC_OpenCLKernel: return "opencl_kernel";
+  case CC_FPGAAccel: return "fpga_accel";
   case CC_Swift: return "swiftcall";
   case CC_PreserveMost: return "preserve_most";
   case CC_PreserveAll: return "preserve_all";
@@ -3422,6 +3490,10 @@ static CachedProperties computeCachedProperties(const Type *T) {
     //     - it is a fundamental type (3.9.1); or
     return CachedProperties(ExternalLinkage, false);
 
+  case Type::APInt:
+    // Arbitrary precision integer types are also  fundamental types
+    return CachedProperties(ExternalLinkage, false);
+
   case Type::Record:
   case Type::Enum: {
     const TagDecl *Tag = cast<TagType>(T)->getDecl();
@@ -3514,6 +3586,9 @@ LinkageInfo LinkageComputer::computeTypeLinkageInfo(const Type *T) {
     return LinkageInfo::external();
 
   case Type::Builtin:
+    return LinkageInfo::external();
+
+  case Type::APInt:
     return LinkageInfo::external();
 
   case Type::Auto:
@@ -3703,8 +3778,10 @@ bool Type::canHaveNullability(bool ResultIfUnknown) const {
   case Type::VariableArray:
   case Type::DependentSizedArray:
   case Type::DependentSizedExtVector:
+  case Type::DependentSizedAPInt:
   case Type::Vector:
   case Type::ExtVector:
+  case Type::APInt:
   case Type::DependentAddressSpace:
   case Type::FunctionProto:
   case Type::FunctionNoProto:

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implement StructuralEquivalenceContext class and helper functions
@@ -380,6 +385,17 @@ static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
     break;
   }
 
+  case Type::DependentSizedAPInt: {
+    const auto *Vec1 = cast<DependentSizedAPIntType>(T1);
+    const auto *Vec2 = cast<DependentSizedAPIntType>(T2);
+    if (!IsStructurallyEquivalent(Context, Vec1->getSizeInBitsExpr(),
+                                  Vec2->getSizeInBitsExpr()))
+      return false;
+    if (!IsStructurallyEquivalent(Context, Vec1->getElementType(),
+                                  Vec2->getElementType()))
+      return false;
+    break;
+  }
   case Type::DependentSizedExtVector: {
     const DependentSizedExtVectorType *Vec1 =
         cast<DependentSizedExtVectorType>(T1);
@@ -404,6 +420,16 @@ static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
     if (Vec1->getNumElements() != Vec2->getNumElements())
       return false;
     if (Vec1->getVectorKind() != Vec2->getVectorKind())
+      return false;
+    break;
+  }
+
+  case Type::APInt: {
+    auto *IT1 = cast<APIntType>(T1);
+    auto *IT2 = cast<APIntType>(T2);
+    if (IT1->getSizeInBits() != IT2->getSizeInBits())
+      return false;
+    if (IT1->isSigned() != IT2->isSigned())
       return false;
     break;
   }

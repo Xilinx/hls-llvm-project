@@ -5,6 +5,12 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines some loop unrolling utilities. It does not define any
@@ -59,7 +65,8 @@ LoopUnrollResult UnrollLoop(Loop *L, unsigned Count, unsigned TripCount,
                             unsigned PeelCount, bool UnrollRemainder,
                             LoopInfo *LI, ScalarEvolution *SE,
                             DominatorTree *DT, AssumptionCache *AC,
-                            OptimizationRemarkEmitter *ORE, bool PreserveLCSSA);
+                            OptimizationRemarkEmitter *ORE, bool PreserveLCSSA,
+                            bool AllowUnsafeClone = false);
 
 bool UnrollRuntimeLoopRemainder(Loop *L, unsigned Count,
                                 bool AllowExpensiveTripCount,

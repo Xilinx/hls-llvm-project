@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file declares LLVMContextImpl, the opaque implementation 
@@ -1172,6 +1177,7 @@ public:
   bool RespectDiagnosticFilters = false;
   bool DiagnosticsHotnessRequested = false;
   uint64_t DiagnosticsHotnessThreshold = 0;
+  ToolOutputFile *DiagnosticsToolOutputFile;
   std::unique_ptr<yaml::Output> DiagnosticsOutputFile;
 
   LLVMContext::YieldCallbackTy YieldCallback = nullptr;

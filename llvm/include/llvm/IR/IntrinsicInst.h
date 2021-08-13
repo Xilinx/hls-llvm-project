@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines classes that make it really easy to deal with intrinsic
@@ -833,6 +838,17 @@ namespace llvm {
     }
   };
 
+  class LifeTimeMarkerInst : public IntrinsicInst {
+  public:
+    static bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::lifetime_start ||
+             I->getIntrinsicID() == Intrinsic::lifetime_end;
+    }
+
+    static bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
 } // end namespace llvm
 
 #endif // LLVM_IR_INTRINSICINST_H

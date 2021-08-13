@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the Decl subclasses.
@@ -2461,6 +2466,12 @@ public:
   /// \brief Returns ODRHash of the function.  This value is calculated and
   /// stored on first call, then the stored value returned on the other calls.
   unsigned getODRHash();
+
+  // XMC extensions
+  friend class ASTDeclReader;
+  friend class ASTDeclWriter;
+
+  std::map<std::string, std::string> XMCPortDirection;
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }

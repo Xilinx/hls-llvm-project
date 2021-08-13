@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -1526,6 +1531,20 @@ protected:
     enum { MaxNumElements = (1 << (29 - NumTypeBits)) - 1 };
   };
 
+  class APIntTypeBitfields {
+    friend class APIntType;
+
+    unsigned : NumTypeBits;
+
+    /// Signed-ness of this type 
+    bool IsSigned : 1;
+
+    /// The number of elements in the vector.
+    unsigned SizeInBits : 31 - NumTypeBits;
+
+    enum { MaxSizeInBits = (1 << (31 - NumTypeBits)) - 1 };
+  };
+
   class AttributedTypeBitfields {
     friend class AttributedType;
 
@@ -1555,6 +1574,7 @@ protected:
     ObjCObjectTypeBitfields ObjCObjectTypeBits;
     ReferenceTypeBitfields ReferenceTypeBits;
     TypeWithKeywordBitfields TypeWithKeywordBits;
+    APIntTypeBitfields APIntTypeBits;
     VectorTypeBitfields VectorTypeBits;
   };
 
@@ -1768,6 +1788,7 @@ public:
   bool isComplexIntegerType() const;            // GCC _Complex integer type.
   bool isVectorType() const;                    // GCC vector type.
   bool isExtVectorType() const;                 // Extended vector type.
+  bool isAPIntType() const;                     // Arbitrary-precision integer type.
   bool isDependentAddressSpaceType() const;     // value-dependent address space qualifier
   bool isObjCObjectPointerType() const;         // pointer to ObjC object
   bool isObjCRetainableType() const;            // ObjC object or block pointer
@@ -3050,6 +3071,84 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == ExtVector;
   }
+};
+
+/// Represents an arbitrary-precision integer type where either the type or size
+/// is dependent.
+///
+/// For example:
+/// \code
+/// template<int Size>
+/// class vector {
+///   typedef int __attribute__((bitwidth(Size))) type;
+/// }
+/// \endcode
+class DependentSizedAPIntType : public Type, public llvm::FoldingSetNode {
+  friend class ASTContext;
+
+  const ASTContext &Context;
+  Expr *SizeExpr;
+
+  /// The element type of the array.
+  QualType ElementType;
+
+  SourceLocation loc;
+
+  DependentSizedAPIntType(const ASTContext &Context, QualType ElementType,
+                          QualType can, Expr *SizeExpr, SourceLocation loc);
+
+public:
+  Expr *getSizeInBitsExpr() const { return SizeExpr; }
+  QualType getElementType() const { return ElementType; }
+  SourceLocation getAttributeLoc() const { return loc; }
+
+  bool isSugared() const { return false; }
+  QualType desugar() const { return QualType(this, 0); }
+
+  static bool classof(const Type *T) {
+    return T->getTypeClass() == DependentSizedAPInt;
+  }
+
+  void Profile(llvm::FoldingSetNodeID &ID) {
+    Profile(ID, Context, getElementType(), getSizeInBitsExpr());
+  }
+
+  static void Profile(llvm::FoldingSetNodeID &ID, const ASTContext &Context,
+                      QualType ElementType, Expr *SizeExpr);
+};
+
+/// APIntType - Arbitrary-precision integer type. This type is created using
+/// __attribute__((bitwidth(n))), where "n" is the size in bits of the type.
+class APIntType : public Type, public llvm::FoldingSetNode {
+  APIntType(unsigned SizeInBits, bool IsSigned);
+
+  friend class ASTContext;  // ASTContext creates these.
+
+public:
+
+  unsigned getSizeInBits() const { return APIntTypeBits.SizeInBits; }
+  bool isSigned() const { return APIntTypeBits.IsSigned; }
+  static bool isSizeTooLarge(unsigned SizeInBits) {
+    static_assert(APIntTypeBitfields::MaxSizeInBits >= 4096,
+                  "Bad bitwidth limitation!");
+    return SizeInBits > 4096;
+  }
+
+  bool isSugared() const { return false; }
+  QualType desugar() const { return QualType(this, 0); }
+
+  static QualType GetElementType(const ASTContext &Context, bool IsSigned);
+  QualType getElementType(const ASTContext &Context) const {
+    return GetElementType(Context, isSigned());
+  }
+
+  void Profile(llvm::FoldingSetNodeID &ID) {
+    Profile(ID, getSizeInBits(), isSigned());
+  }
+  static void Profile(llvm::FoldingSetNodeID &ID, unsigned SizeInBits,
+                      bool IsSigned);
+
+  static bool classof(const Type *T) { return T->getTypeClass() == APInt; }
 };
 
 /// FunctionType - C99 6.7.5.3 - Function Declarators.  This is the common base
@@ -6037,6 +6136,8 @@ inline bool Type::isDependentAddressSpaceType() const {
   return isa<DependentAddressSpaceType>(CanonicalType);
 }
 
+inline bool Type::isAPIntType() const { return isa<APIntType>(CanonicalType); }
+
 inline bool Type::isObjCObjectPointerType() const {
   return isa<ObjCObjectPointerType>(CanonicalType);
 }
@@ -6205,7 +6306,7 @@ inline bool Type::isIntegerType() const {
     return IsEnumDeclComplete(ET->getDecl()) &&
       !IsEnumDeclScoped(ET->getDecl());
   }
-  return false;
+  return isa<APIntType>(CanonicalType);
 }
 
 inline bool Type::isScalarType() const {
@@ -6219,7 +6320,7 @@ inline bool Type::isScalarType() const {
   return isa<PointerType>(CanonicalType) ||
          isa<BlockPointerType>(CanonicalType) ||
          isa<MemberPointerType>(CanonicalType) ||
-         isa<ComplexType>(CanonicalType) ||
+         isa<ComplexType>(CanonicalType) || isa<APIntType>(CanonicalType) ||
          isa<ObjCObjectPointerType>(CanonicalType);
 }
 
@@ -6233,7 +6334,7 @@ inline bool Type::isIntegralOrEnumerationType() const {
   if (const EnumType *ET = dyn_cast<EnumType>(CanonicalType))
     return IsEnumDeclComplete(ET->getDecl());
 
-  return false;  
+  return isa<APIntType>(CanonicalType);
 }
 
 inline bool Type::isBooleanType() const {

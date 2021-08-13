@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements some loop unrolling utilities. It does not define any
@@ -16,6 +21,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
@@ -265,6 +271,48 @@ static bool isEpilogProfitable(Loop *L) {
   return false;
 }
 
+/// Reflow specific helper function for ORE to get user specified loop name.
+/// Find the "llvm.loop.name" MDNode to get the loop name.
+/// In Reflow, we store loop name in !llvm.loop. Here the loop name means the
+/// label the user specified in the source C/C++ or OpenCL program. Like below.
+///   loop_name: for (int i = 0; ...)
+/// Note: The name is different from LLVM getName() for loop.
+namespace reflow {
+static llvm::Optional<const std::string> getLoopName(const llvm::Loop *L) {
+  llvm::MDNode *LoopID = L->getLoopID();
+  // Return none if LoopID is false.
+  if (!LoopID)
+    return llvm::None;
+
+  // First operand should refer to the loop id itself.
+  assert(LoopID->getNumOperands() > 0 && "requires at least one operand");
+  assert(LoopID->getOperand(0) == LoopID && "invalid loop id");
+
+  // Iterate over LoopID operands and look for MDString Metadata
+  for (const llvm::MDOperand &Op : LoopID->operands()) {
+    llvm::MDNode *MD = llvm::dyn_cast<llvm::MDNode>(Op);
+    if (!MD)
+      continue;
+    auto *S = llvm::dyn_cast<llvm::MDString>(MD->getOperand(0));
+    if (!S)
+      continue;
+    llvm::StringRef MDLoopName = "llvm.loop.name";
+    if (MDLoopName.equals(S->getString()))
+      switch (MD->getNumOperands()) {
+      case 1:
+        return {};
+      case 2:
+        if (auto *Name = llvm::dyn_cast<llvm::MDString>(MD->getOperand(1)))
+          return (Name->getString()).str();
+        return {};
+      default:
+        llvm_unreachable("loop metadata has 0 or 1 operand");
+      }
+  }
+  return llvm::None;
+}
+} // namespace reflow
+
 /// Unroll the given loop by Count. The loop must be in LCSSA form.  Unrolling
 /// can only fail when the loop's latch block is not terminated by a conditional
 /// branch instruction. However, if the trip count (and multiple) are not known,
@@ -306,7 +354,7 @@ LoopUnrollResult llvm::UnrollLoop(
     bool AllowExpensiveTripCount, bool PreserveCondBr, bool PreserveOnlyFirst,
     unsigned TripMultiple, unsigned PeelCount, bool UnrollRemainder,
     LoopInfo *LI, ScalarEvolution *SE, DominatorTree *DT, AssumptionCache *AC,
-    OptimizationRemarkEmitter *ORE, bool PreserveLCSSA) {
+    OptimizationRemarkEmitter *ORE, bool PreserveLCSSA, bool AllowUnsafeClone) {
 
   BasicBlock *Preheader = L->getLoopPreheader();
   if (!Preheader) {
@@ -321,7 +369,7 @@ LoopUnrollResult llvm::UnrollLoop(
   }
 
   // Loops with indirectbr cannot be cloned.
-  if (!L->isSafeToClone()) {
+  if (!AllowUnsafeClone && !L->isSafeToClone()) {
     DEBUG(dbgs() << "  Can't unroll; Loop body cannot be cloned.\n");
     return LoopUnrollResult::Unmodified;
   }
@@ -474,8 +522,10 @@ LoopUnrollResult llvm::UnrollLoop(
       ORE->emit([&]() {
         return OptimizationRemark(DEBUG_TYPE, "FullyUnrolled", L->getStartLoc(),
                                   L->getHeader())
-               << "completely unrolled loop with "
-               << NV("UnrollCount", TripCount) << " iterations";
+               << "Unrolled all " << NV("UnrollCount", TripCount)
+               << " iterations of the loop \'"
+               << NV("LoopName", reflow::getLoopName(L).getValueOr("anonymous"))
+               << "\'";
       });
   } else if (PeelCount) {
     DEBUG(dbgs() << "PEELING loop %" << Header->getName()
@@ -484,15 +534,19 @@ LoopUnrollResult llvm::UnrollLoop(
       ORE->emit([&]() {
         return OptimizationRemark(DEBUG_TYPE, "Peeled", L->getStartLoc(),
                                   L->getHeader())
-               << " peeled loop by " << NV("PeelCount", PeelCount)
-               << " iterations";
+               << " Peeled " << NV("PeelCount", PeelCount)
+               << " iterations of loop \'"
+               << NV("LoopName", reflow::getLoopName(L).getValueOr("anonymous"))
+               << "\'";
       });
   } else {
     auto DiagBuilder = [&]() {
       OptimizationRemark Diag(DEBUG_TYPE, "PartialUnrolled", L->getStartLoc(),
                               L->getHeader());
-      return Diag << "unrolled loop by a factor of "
-                  << NV("UnrollCount", Count);
+      return Diag << "Partially unrolled "  << NV("UnrollCount", Count)
+             << " iterations of loop \'"
+             << NV("LoopName", reflow::getLoopName(L).getValueOr("anonymous"))
+             << "\'";
     };
 
     DEBUG(dbgs() << "UNROLLING loop %" << Header->getName()

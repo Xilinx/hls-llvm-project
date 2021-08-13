@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements construction of a TargetInfo object from a
@@ -19,6 +24,7 @@
 #include "Targets/ARM.h"
 #include "Targets/AVR.h"
 #include "Targets/BPF.h"
+#include "Targets/FPGA.h"
 #include "Targets/Hexagon.h"
 #include "Targets/Lanai.h"
 #include "Targets/Le64.h"
@@ -542,6 +548,25 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return new PS4OSTargetInfo<X86_64TargetInfo>(Triple, Opts);
     default:
       return new X86_64TargetInfo(Triple, Opts);
+    }
+
+  case llvm::Triple::fpga32:
+    switch (os) {
+    case llvm::Triple::Linux:
+      return new LinuxTargetInfo<FPGA32TargetInfo>(Triple, Opts);
+    case llvm::Triple::Win32:
+        return new WindowsTargetInfo<FPGA32TargetInfo>(Triple, Opts);
+    default:
+      return new FPGA32TargetInfo(Triple, Opts);
+    }
+  case llvm::Triple::fpga64:
+    switch (os) {
+    case llvm::Triple::Linux:
+      return new LinuxTargetInfo<FPGA64TargetInfo>(Triple, Opts);
+    case llvm::Triple::Win32:
+        return new WindowsTargetInfo<FPGA64TargetInfo>(Triple, Opts);
+    default:
+      return new FPGA64TargetInfo(Triple, Opts);
     }
 
   case llvm::Triple::spir: {

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 def ImplicitFunctionDeclare : DiagGroup<"implicit-function-declaration">;
@@ -513,7 +518,11 @@ def Uninitialized  : DiagGroup<"uninitialized", [UninitializedSometimes,
                                                  UninitializedStaticSelfInit]>;
 def IgnoredPragmaIntrinsic : DiagGroup<"ignored-pragma-intrinsic">;
 def UnknownPragmas : DiagGroup<"unknown-pragmas">;
-def IgnoredPragmas : DiagGroup<"ignored-pragmas", [IgnoredPragmaIntrinsic]>;
+def IgnoredXlxPragmas : DiagGroup<"ignored-hls-pragmas">;
+def InvalidXlxPragmas : DiagGroup<"invalid-hls-pragmas">;
+def ObsoleteeXlxPragmas : DiagGroup<"obsoleted-hls-pragmas">;
+def ImplicitHLSStreams : DiagGroup<"implicit-hls-streams">;
+def IgnoredPragmas : DiagGroup<"ignored-pragmas", [IgnoredPragmaIntrinsic, IgnoredXlxPragmas, InvalidXlxPragmas, ImplicitHLSStreams]>;
 def PragmaClangAttribute : DiagGroup<"pragma-clang-attribute">;
 def PragmaPackSuspiciousInclude : DiagGroup<"pragma-pack-suspicious-include">;
 def PragmaPack : DiagGroup<"pragma-pack", [PragmaPackSuspiciousInclude]>;
@@ -524,9 +533,11 @@ def NSobjectAttribute : DiagGroup<"NSObject-attribute">;
 def NSConsumedMismatch : DiagGroup<"nsconsumed-mismatch">;
 def NSReturnsMismatch : DiagGroup<"nsreturns-mismatch">;
 
+def IgnoredDataflowAttr : DiagGroup<"ignored-dataflow-attribute">; 
+def IgnoredInterfaceAttr : DiagGroup<"ignored-interface-attribute">; 
 def IndependentClassAttribute : DiagGroup<"IndependentClass-attribute">;
 def UnknownAttributes : DiagGroup<"unknown-attributes">;
-def IgnoredAttributes : DiagGroup<"ignored-attributes">;
+def IgnoredAttributes : DiagGroup<"ignored-attributes", [IgnoredDataflowAttr, IgnoredInterfaceAttr]>;
 def Attributes : DiagGroup<"attributes", [UnknownAttributes,
                                           IgnoredAttributes]>;
 def UnknownSanitizers : DiagGroup<"unknown-sanitizers">;

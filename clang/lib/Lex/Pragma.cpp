@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the PragmaHandler/PragmaTable interfaces and implements
@@ -932,6 +937,11 @@ void Preprocessor::RemovePragmaHandler(StringRef Namespace,
   }
 }
 
+bool Preprocessor::hasPragmaHandler(StringRef Name) const {
+  assert(!Name.empty() && "Unexpected empty name!");
+  return PragmaHandlers->FindHandler(Name);
+}
+
 bool Preprocessor::LexOnOffSwitch(tok::OnOffSwitch &Result) {
   Token Tok;
   LexUnexpandedToken(Tok);
@@ -1414,10 +1424,14 @@ public:
       return;
     }
 
+    if (MessageString.empty())
+      return;
+
     // Output the message.
-    PP.Diag(MessageLoc, (Kind == PPCallbacks::PMK_Error)
-                          ? diag::err_pragma_message
-                          : diag::warn_pragma_message) << MessageString;
+    PP.Diag(MessageLoc,
+            (Kind == PPCallbacks::PMK_Error) ? diag::err_pragma_message
+                                             : diag::warn_pragma_message)
+        << MessageString;
 
     // If the pragma is lexically sound, notify any interested PPCallbacks.
     if (PPCallbacks *Callbacks = PP.getPPCallbacks())

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements LLVMContext, as a wrapper around the opaque
@@ -145,6 +150,14 @@ void LLVMContext::setDiagnosticHandler(std::unique_ptr<DiagnosticHandler> &&DH,
   pImpl->RespectDiagnosticFilters = RespectFilters;
 }
 
+void LLVMContext::setRespectDiagnosticFilters(bool Respect) {
+  pImpl->RespectDiagnosticFilters = Respect;
+}
+
+bool LLVMContext::getRespectDiagnosticFilters() const {
+  return pImpl->RespectDiagnosticFilters;
+}
+
 void LLVMContext::setDiagnosticsHotnessRequested(bool Requested) {
   pImpl->DiagnosticsHotnessRequested = Requested;
 }
@@ -159,8 +172,16 @@ uint64_t LLVMContext::getDiagnosticsHotnessThreshold() const {
   return pImpl->DiagnosticsHotnessThreshold;
 }
 
+ToolOutputFile *LLVMContext::getOptRemarkFile() {
+  return pImpl->DiagnosticsToolOutputFile;
+}
+
 yaml::Output *LLVMContext::getDiagnosticsOutputFile() {
   return pImpl->DiagnosticsOutputFile.get();
+}
+
+void LLVMContext::setOptRemarkFile(ToolOutputFile* F) {
+  pImpl->DiagnosticsToolOutputFile = F;
 }
 
 void LLVMContext::setDiagnosticsOutputFile(std::unique_ptr<yaml::Output> F) {
@@ -227,6 +248,11 @@ LLVMContext::getDiagnosticMessagePrefix(DiagnosticSeverity Severity) {
 }
 
 void LLVMContext::diagnose(const DiagnosticInfo &DI) {
+  // If the pass is not required from -pass-remarks, -pass-remarks-analysis,
+  // -pass-remarks-missed in opt. Skip recording to file.
+  if (getRespectDiagnosticFilters() && !isDiagnosticEnabled(DI))
+    return;
+
   if (auto *OptDiagBase = dyn_cast<DiagnosticInfoOptimizationBase>(&DI)) {
     yaml::Output *Out = getDiagnosticsOutputFile();
     if (Out) {
@@ -235,6 +261,26 @@ void LLVMContext::diagnose(const DiagnosticInfo &DI) {
       *Out << P;
     }
   }
+
+  if (auto *OptDiagBase = dyn_cast<DiagnosticInfoModuleUnsupportedBase>(&DI)) {
+    yaml::Output *Out = getDiagnosticsOutputFile();
+    if (Out) {
+      // For remarks the << operator takes a reference to a pointer.
+      auto *P = const_cast<DiagnosticInfoModuleUnsupportedBase *>(OptDiagBase);
+      *Out << P;
+    }
+  }
+
+  if (auto *OptDiagBase = dyn_cast<DiagnosticInfoModuleHLSInfo>(&DI)) {
+    yaml::Output *Out = getDiagnosticsOutputFile();
+    if (Out) {
+      // For remarks the << operator takes a reference to a pointer.
+      auto *P = const_cast<DiagnosticInfoModuleHLSInfo *>(OptDiagBase);
+      *Out << P;
+    }
+  }
+
+
   // If there is a report handler, use it.
   if (pImpl->DiagHandler &&
       (!pImpl->RespectDiagnosticFilters || isDiagnosticEnabled(DI)) &&
@@ -249,8 +295,19 @@ void LLVMContext::diagnose(const DiagnosticInfo &DI) {
   errs() << getDiagnosticMessagePrefix(DI.getSeverity()) << ": ";
   DI.print(DP);
   errs() << "\n";
-  if (DI.getSeverity() == DS_Error)
+
+  if (isa<DiagnosticInfoHLSUnsupported>(&DI))
+    return;
+
+  if (DI.getSeverity() == DS_Error) {
+    // Manually flush and keep the YAML file before we exit the compilation
+    auto *OptRemarkFile = getOptRemarkFile();
+    if (OptRemarkFile) {
+      OptRemarkFile->os().close();
+      OptRemarkFile->keep();
+    }
     exit(1);
+  }
 }
 
 void LLVMContext::emitError(unsigned LocCookie, const Twine &ErrorStr) {

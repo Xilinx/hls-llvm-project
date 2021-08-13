@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This family of functions perform various local transformations to the
@@ -16,6 +21,8 @@
 #define LLVM_TRANSFORMS_UTILS_LOCAL_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TinyPtrVector.h"
@@ -349,6 +356,14 @@ void findDbgValues(SmallVectorImpl<DbgValueInst *> &DbgValues, Value *V);
 
 /// Finds the debug info intrinsics describing a value.
 void findDbgUsers(SmallVectorImpl<DbgInfoIntrinsic *> &DbgInsts, Value *V);
+
+// Find debug info from llvm.debug.value if there is exact 1 llvm.debug.value
+// that is related to this Inst in the same basic block this Inst is in.
+Optional<DebugLoc> getDebugLocFromDbgValue(Instruction *I);
+
+// Finds the variable name in source from debug info intrinsics that describes
+// the value.
+std::string getNameFromDbgInfo(Value *V);
 
 /// Replaces llvm.dbg.declare instruction when the address it
 /// describes is replaced with a new value. If Deref is true, an

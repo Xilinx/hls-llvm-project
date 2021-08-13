@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This header file pulls in all transformation and analysis passes for tools
@@ -22,6 +27,7 @@
 #include "llvm/Analysis/CFLAndersAliasAnalysis.h"
 #include "llvm/Analysis/CFLSteensAliasAnalysis.h"
 #include "llvm/Analysis/CallPrinter.h"
+#include "llvm/Analysis/DivergencePrinter.h"
 #include "llvm/Analysis/DomPrinter.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/IntervalPartition.h"
@@ -94,6 +100,10 @@ namespace {
       (void) llvm::createDomPrinterPass();
       (void) llvm::createDomOnlyViewerPass();
       (void) llvm::createDomViewerPass();
+      (void)llvm::createDivergenceOnlyPrinterPass();
+      (void)llvm::createDivergencePrinterPass();
+      (void)llvm::createDivergenceOnlyViewerPass();
+      (void)llvm::createDivergenceViewerPass();
       (void) llvm::createGCOVProfilerPass();
       (void) llvm::createPGOInstrumentationGenLegacyPass();
       (void) llvm::createPGOInstrumentationUseLegacyPass();

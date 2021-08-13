@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the standard builtin function database.  Users of this file
@@ -1404,6 +1409,9 @@ BUILTIN(__builtin_coro_param, "bv*v*", "n")
 LANGBUILTIN(read_pipe, "i.", "tn", OCLC20_LANG)
 LANGBUILTIN(write_pipe, "i.", "tn", OCLC20_LANG)
 
+LANGBUILTIN(read_pipe_block, "i.", "tn", HLS_LANG)
+LANGBUILTIN(write_pipe_block, "i.", "tn", HLS_LANG)
+
 LANGBUILTIN(reserve_read_pipe, "i.", "tn", OCLC20_LANG)
 LANGBUILTIN(reserve_write_pipe, "i.", "tn", OCLC20_LANG)
 
@@ -1451,6 +1459,27 @@ BUILTIN(__builtin_os_log_format, "v*v*cC*.", "p:0:nt")
 // OpenMP 4.0
 LANGBUILTIN(omp_is_initial_device, "i", "nc", OMP_LANG)
 
+// HLS Extensions - Legacy builtins
+LANGBUILTIN(__builtin_bit_concat, "vvC*vC*vC*", "n", HLS_LANG)
+LANGBUILTIN(__builtin_bit_from_string, "vvC*cC*i", "n", HLS_LANG)
+LANGBUILTIN(__builtin_bit_select, "ivC*i", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_bit_set, "vvC*vC*vC*i", "n", HLS_LANG)
+LANGBUILTIN(__builtin_bit_part_select, "vvC*vC*ii", "n", HLS_LANG)
+LANGBUILTIN(__builtin_bit_part_set, "vvC*vC*vC*ii", "n", HLS_LANG)
+LANGBUILTIN(__builtin_bit_and_reduce, "ivC*", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_bit_or_reduce, "ivC*", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_bit_nxor_reduce, "ivC*", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_bit_nand_reduce, "ivC*", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_bit_nor_reduce, "ivC*", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_bit_xor_reduce, "ivC*", "nc", HLS_LANG)
+
+// HLS Extensions - sqrt for half
+LANGBUILTIN(__builtin_sqrth, "hh", "Fne", HLS_LANG)
+LANGBUILTIN(__builtin_recipf, "ff", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_recip, "dd", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_rsqrtf, "ff", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_rsqrt, "dd", "nc", HLS_LANG)
+
 // Builtins for XRay
 BUILTIN(__xray_customevent, "vcC*z", "")
 
@@ -1458,7 +1487,6 @@ BUILTIN(__xray_customevent, "vcC*z", "")
 BUILTIN(__builtin_ms_va_start, "vc*&.", "nt")
 BUILTIN(__builtin_ms_va_end, "vc*&", "n")
 BUILTIN(__builtin_ms_va_copy, "vc*&c*&", "n")
-
 #undef BUILTIN
 #undef LIBBUILTIN
 #undef LANGBUILTIN

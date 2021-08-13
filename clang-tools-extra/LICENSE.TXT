@@ -61,3 +61,6 @@ Program             Directory
 -------             ---------
 clang-tidy          clang-tidy/cert
 clang-tidy          clang-tidy/hicpp
+clang-tidy          clang-tidy/xilinx
+xilinx-dataflow-lawyer xilinx-dataflow-lawyer
+xilinx-legacy-rewriter xilinx-legacy-rewriter

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/APInt.h"
@@ -1768,6 +1773,13 @@ TEST(APIntTest, extractBits) {
             i257.extractBits(128, 1).getSExtValue());
   EXPECT_EQ(static_cast<int64_t>(0xFFFFFFFFFF80007Full),
             i257.extractBits(129, 1).getSExtValue());
+
+  EXPECT_EQ(APInt(48, 0),
+            APInt(144, "281474976710655", 10).extractBits(48, 48));
+  EXPECT_EQ(APInt(48, 0x0000ffffffffffffull),
+            APInt(144, "281474976710655", 10).extractBits(48, 0));
+  EXPECT_EQ(APInt(48, 0x00007fffffffffffull),
+            APInt(144, "281474976710655", 10).extractBits(48, 1));
 }
 
 TEST(APIntTest, getLowBitsSet) {

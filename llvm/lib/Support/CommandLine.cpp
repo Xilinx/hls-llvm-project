@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This class implements a command line argument processor that is useful when
@@ -2047,6 +2052,11 @@ static cl::opt<bool> PrintAllOptions(
     "print-all-options",
     cl::desc("Print all option values after command line parsing"), cl::Hidden,
     cl::init(false), cl::cat(GenericCategory), cl::sub(*AllSubCommands));
+
+cl::opt<bool>
+HLS("hls",
+        cl::desc("enable hls specific transformation"),
+            cl::Hidden, cl::init(false));
 
 void HelpPrinterWrapper::operator=(bool Value) {
   if (!Value)

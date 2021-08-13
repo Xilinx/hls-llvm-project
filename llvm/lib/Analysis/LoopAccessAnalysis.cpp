@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // The implementation for the loop memory dependence that was originally
@@ -121,7 +126,7 @@ static cl::opt<unsigned>
 ///    } else
 ///      ...
 static cl::opt<bool> EnableMemAccessVersioning(
-    "enable-mem-access-versioning", cl::init(true), cl::Hidden,
+    "enable-mem-access-versioning", cl::init(false), cl::Hidden,
     cl::desc("Enable symbolic stride memory access versioning"));
 
 /// \brief Enable store-to-load forwarding conflict detection. This option can

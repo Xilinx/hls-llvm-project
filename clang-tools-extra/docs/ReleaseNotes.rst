@@ -44,18 +44,93 @@ Major New Features
 
 ...
 
-Improvements to clang-query
----------------------------
+  It aims to provide automated insertion of missing ``#includes`` with a single
+  button press in an editor. Integration with Vim and a tool to generate the
+  symbol index used by the tool are also part of this release. See the
+  `include-fixer documentation`_ for more information.
 
-The improvements are...
-
-Improvements to clang-rename
-----------------------------
-
-The improvements are...
+.. _include-fixer documentation: http://clang.llvm.org/extra/include-fixer.html
 
 Improvements to clang-tidy
 --------------------------
+
+- New `xilinx-aggregate-on-hls-vector
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-aggregate-on-hls-vector.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-label-all-loops-check
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-label-all-loops-check.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-stream-in-struct
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-stream-in-struct.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-array-stream-check
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-array-stream-check.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-tb31-process
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-tb31-process.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-tb-xfmat
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-tb-xfmat.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-top-parameters
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-top-parameters.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-xfmat-array-geometry
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-xfmat-array-geometry.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-tb-process
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-tb-process.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-apint-literal-convertation
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-apint-literal-convertation.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-dump-openclkernel
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-dump-openclkernel.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-remove-assert
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-remove-assert.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-resource-pragma-transformer
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-resource-pragma-transformer.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-ssdm-intrinsics-arguments
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-ssdm-intrinsics-arguments.html>`_ check
+
+- New `xilinx-systemc-detector
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-systemc-detector.html>`_ check
+
+  FIXME: add release notes.
+
+- New `xilinx-warn-mayneed-no-ctor-attribute
+  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-warn-mayneed-no-ctor-attribute.html>`_ check
+
+  FIXME: add release notes.
 
 - New `cppcoreguidelines-avoid-goto
   <http://clang.llvm.org/extra/clang-tidy/checks/cppcoreguidelines-avoid-goto.html>`_ check

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass deletes dead arguments from internal functions.  Dead argument
@@ -531,6 +536,23 @@ void DeadArgumentEliminationPass::SurveyFunction(const Function &F) {
     // If the function is PASSED IN as an argument, its address has been
     // taken.
     ImmutableCallSite CS(U.getUser());
+
+    // XILINX, HLS , for the "llvm.side.effect(["xlx_funcation_allocation"(function_pointer, "function", limit)]);
+    // "llvm.directive.scope.entry["xlx_function_allocation"(function_pointer, "function", limit)]);
+    // we just need update the function_pointer , and DeadArgumentEliminate should work well 
+    // so here, skip the "xlx_function_allocation" operandBundleUser
+    if (CS &&(CS.getIntrinsicID() == Intrinsic::sideeffect || CS.getIntrinsicID() == Intrinsic::directive_scope_entry)) {
+      int i = 0; 
+      for (i = 0; i < CS.getNumOperandBundles(); i++) { 
+        auto bundle = CS.getOperandBundleAt(i);
+        if (bundle.getTagName() == "xlx_function_allocation") { 
+          break;
+        }
+      }
+      if (i != CS.getNumOperandBundles()) 
+        continue;
+    }
+
     if (!CS || !CS.isCallee(&U)) {
       MarkLive(F);
       return;
@@ -831,6 +853,12 @@ bool DeadArgumentEliminationPass::RemoveDeadStuffFromFunction(Function *F) {
   while (!F->use_empty()) {
     CallSite CS(F->user_back());
     Instruction *Call = CS.getInstruction();
+    //XILINX , HLS , if the callsite is about "xlx_functino_allocation" (Allocation Pragma )
+    if (CS.getIntrinsicID() == Intrinsic::sideeffect || CS.getIntrinsicID() == Intrinsic::directive_scope_entry) { 
+      CS->replaceUsesOfWith(F, NF);
+      continue;
+    }
+    
 
     ArgAttrVec.clear();
     const AttributeList &CallPAL = CS.getAttributes();
@@ -1055,13 +1083,17 @@ PreservedAnalyses DeadArgumentEliminationPass::run(Module &M,
     // Increment now, because the function will probably get removed (ie.
     // replaced by a new one).
     Function *F = &*I++;
+    
     Changed |= RemoveDeadStuffFromFunction(F);
   }
 
   // Finally, look for any unused parameters in functions with non-local
   // linkage and replace the passed in parameters with undef.
-  for (auto &F : M)
+  for (auto &F : M) {
+    // HLS hack: dont change top arguments in wrapper
+    if (F.hasFnAttribute("fpga.top.func")) continue;
     Changed |= RemoveDeadArgumentsFromCallers(F);
+  }
 
   if (!Changed)
     return PreservedAnalyses::all();

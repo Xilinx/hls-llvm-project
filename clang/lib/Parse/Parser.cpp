@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the Parser interfaces.
@@ -16,6 +21,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Parse/ParseDiagnostic.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "clang/Parse/RAIIObjectsForParser.h"
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/ParsedTemplate.h"
@@ -278,6 +284,9 @@ bool Parser::SkipUntil(ArrayRef<tok::TokenKind> Toks, SkipUntilFlags Flags) {
     case tok::annot_pragma_openmp:
     case tok::annot_pragma_openmp_end:
       // Stop before an OpenMP pragma boundary.
+    case tok::annot_pragma_XlxHLS:
+    case tok::annot_pragma_XlxHLS_end:
+    // Stop before an HLSExt pragma boundary.
     case tok::annot_module_begin:
     case tok::annot_module_end:
     case tok::annot_module_include:
@@ -361,19 +370,26 @@ void Parser::EnterScope(unsigned ScopeFlags) {
     N->Init(getCurScope(), ScopeFlags);
     Actions.CurScope = N;
   } else {
-    Actions.CurScope = new Scope(getCurScope(), ScopeFlags, Diags);
+    Actions.CurScope = new Scope(getCurScope(), ScopeFlags, Diags, AttrFactory);
   }
 }
 
 /// ExitScope - Pop a scope off the scope stack.
-void Parser::ExitScope() {
-  assert(getCurScope() && "Scope imbalance!");
+void Parser::ExitScope(ParsedAttributes *ScopeAttr) {
+  Scope *OldScope = getCurScope();
+  assert(OldScope && "Scope imbalance!");
+
+  if (getLangOpts().HLSExt) {
+    if (ScopeAttr)
+      ScopeAttr->takeAllFrom(OldScope->getParsedHLSPragmasRef());
+    else
+      OldScope->hoistParsedHLSPragmas();
+  }
 
   // Inform the actions module that this scope is going away if there are any
   // decls in it.
-  Actions.ActOnPopScope(Tok.getLocation(), getCurScope());
+  Actions.ActOnPopScope(Tok.getLocation(), OldScope);
 
-  Scope *OldScope = getCurScope();
   Actions.CurScope = OldScope->getParent();
 
   if (NumCachedScopes == ScopeCacheSize)
@@ -586,7 +602,13 @@ bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result) {
   case tok::annot_pragma_attribute:
     HandlePragmaAttribute();
     return false;
-
+  case tok::annot_pragma_XlxHLS:
+    Diag(Tok.getLocation(), diag::err_xlx_pragma_not_in_function_scope);
+    ConsumeAnnotationToken();
+    SkipUntil(tok::annot_pragma_XlxHLS_end, Parser::StopBeforeMatch);
+    // Consume tok::annot_pragma_XlxHLS_end terminator.
+    ConsumeAnyToken();
+    return false;
   case tok::eof:
     // Late template parsing can begin.
     if (getLangOpts().DelayedTemplateParsing)

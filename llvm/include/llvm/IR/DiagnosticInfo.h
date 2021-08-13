@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file declares the different classes involved in low level diagnostics.
@@ -38,6 +43,8 @@ class Instruction;
 class LLVMContext;
 class Module;
 class SMDiagnostic;
+class SCEV;
+class Loop;
 
 /// \brief Defines the different supported severity of a diagnostic.
 enum DiagnosticSeverity : char {
@@ -66,8 +73,9 @@ enum DiagnosticKind {
   DK_OptimizationRemarkAnalysisFPCommute,
   DK_OptimizationRemarkAnalysisAliasing,
   DK_OptimizationFailure,
+  DK_HLSUnsupported,
   DK_FirstRemark = DK_OptimizationRemark,
-  DK_LastRemark = DK_OptimizationFailure,
+  DK_LastRemark = DK_HLSUnsupported,
   DK_MachineOptimizationRemark,
   DK_MachineOptimizationRemarkMissed,
   DK_MachineOptimizationRemarkAnalysis,
@@ -75,6 +83,8 @@ enum DiagnosticKind {
   DK_LastMachineRemark = DK_MachineOptimizationRemarkAnalysis,
   DK_MIRParser,
   DK_PGOProfile,
+  DK_HLSReportFatalError,
+  DK_HLSReportInfo,
   DK_Unsupported,
   DK_FirstPluginKind
 };
@@ -348,6 +358,7 @@ public:
   DiagnosticLocation() = default;
   DiagnosticLocation(const DebugLoc &DL);
   DiagnosticLocation(const DISubprogram *SP);
+  DiagnosticLocation(const DIGlobalVariable *GV);
 
   bool isValid() const { return !Filename.empty(); }
   StringRef getFilename() const { return Filename; }
@@ -413,6 +424,8 @@ public:
     explicit Argument(StringRef Str = "") : Key("String"), Val(Str) {}
     Argument(StringRef Key, const Value *V);
     Argument(StringRef Key, const Type *T);
+    Argument(StringRef Key, const SCEV *S);
+    Argument(StringRef Key, const Loop *L);
     Argument(StringRef Key, StringRef S);
     Argument(StringRef Key, int N);
     Argument(StringRef Key, float N);
@@ -423,6 +436,13 @@ public:
     Argument(StringRef Key, unsigned long long N);
     Argument(StringRef Key, bool B) : Key(Key), Val(B ? "true" : "false") {}
     Argument(StringRef Key, DebugLoc dl);
+
+private:
+    void initFuncArg(const Function *F);
+    void initInstArg(const Instruction *I);
+    void initArgArg(const llvm::Argument *A);
+    void initGVArg(const GlobalValue *G);
+    void initConstantArg(const Constant *C);
   };
 
   /// \p PassName is the name of the pass emitting this diagnostic. \p
@@ -482,6 +502,8 @@ public:
     return (getKind() == DK_OptimizationRemarkAnalysis ||
             getKind() == DK_MachineOptimizationRemarkAnalysis);
   }
+
+  bool isHLSUnsupported() const { return getKind() == DK_HLSUnsupported; }
 
 protected:
   /// Name of the pass that triggers this report. If this matches the
@@ -586,6 +608,198 @@ operator<<(RemarkT &R,
   R.insert(EA);
   return R;
 }
+
+/// Diagnostic information for unsupported feature in the Module.
+/// \brief Common features for diagnostics dealing with unsupported feature
+/// error that are used by IR. Now this is specific for used for HLS.
+class DiagnosticInfoModuleUnsupportedBase : public DiagnosticInfo {
+private:
+  const Module &M;
+  DiagnosticLocation Loc;
+
+public:
+  DiagnosticInfoModuleUnsupportedBase(enum DiagnosticKind Kind,
+                                      const char *PassName,
+                                      StringRef RemarkName, const Module &M,
+                                      const DiagnosticLocation &Loc,
+                                      DiagnosticSeverity Severity = DS_Error)
+      : DiagnosticInfo(Kind, Severity), M(M), Loc(Loc), PassName(PassName),
+        RemarkName(RemarkName) {}
+
+  static bool classof(const DiagnosticInfo *DI) {
+    return DI->getKind() == DK_HLSReportFatalError;
+  }
+
+  void insert(StringRef S);
+  void insert(DiagnosticInfoOptimizationBase::Argument A);
+
+  /// \see DiagnosticInfo::print.
+  void print(DiagnosticPrinter &DP) const override;
+
+  /// Return true if this optimization remark is enabled by one of
+  /// of the LLVM command line flags (-pass-remarks, -pass-remarks-missed,
+  /// or -pass-remarks-analysis). Note that this only handles the LLVM
+  /// flags. We cannot access Clang flags from here (they are handled
+  /// in BackendConsumer::OptimizationRemarkHandler).
+  virtual bool isEnabled() const = 0;
+
+  StringRef getPassName() const { return PassName; }
+  std::string getMsg() const;
+  const Module &getModule() const { return M; }
+  DiagnosticLocation getLocation() const { return Loc; }
+
+protected:
+  /// Name of the pass that triggers this report. If this matches the
+  /// regular expression given in -Rpass=regexp, then the remark will
+  /// be emitted.
+  const char *PassName;
+
+  /// Textual identifier for the remark (single-word, camel-case). Can be used
+  /// by external tools reading the YAML output file for to classfy the remark
+  /// (error).
+  StringRef RemarkName;
+
+  /// Arguments collected via the streaming interface.
+  SmallVector<DiagnosticInfoOptimizationBase::Argument, 4> Args;
+
+  friend struct yaml::MappingTraits<DiagnosticInfoModuleUnsupportedBase *>;
+};
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleUnsupportedBase, RemarkT>::value,
+               StringRef>::type S) {
+  R.insert(S);
+  return R;
+}
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &&R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleUnsupportedBase, RemarkT>::value,
+               StringRef>::type S) {
+  R.insert(S);
+  return R;
+}
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleUnsupportedBase, RemarkT>::value,
+               DiagnosticInfoOptimizationBase::Argument>::type A) {
+  R.insert(A);
+  return R;
+}
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &&R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleUnsupportedBase, RemarkT>::value,
+               DiagnosticInfoOptimizationBase::Argument>::type A) {
+  R.insert(A);
+  return R;
+}
+
+/// Diagnostic information for general message in the Module.
+/// \brief Common features for diagnostics dealing with general message in the Module. 
+/// Now this is specific for used for HLS.
+class DiagnosticInfoModuleHLSInfo : public DiagnosticInfo {
+private:
+  const Module &M;
+  DiagnosticLocation Loc;
+
+public:
+  DiagnosticInfoModuleHLSInfo(const char *PassName,
+                                      StringRef RemarkName, const Module &M,
+                                      const DiagnosticLocation Loc = DiagnosticLocation(),
+                                      DiagnosticSeverity Severity = DS_Remark)
+      : DiagnosticInfo(DK_HLSReportInfo, Severity), M(M), Loc(Loc), PassName(PassName),
+        RemarkName(RemarkName) {}
+
+  static bool classof(const DiagnosticInfo *DI) {
+    return DI->getKind() == DK_HLSReportInfo;
+  }
+
+  void insert(StringRef S);
+  void insert(DiagnosticInfoOptimizationBase::Argument A);
+
+  /// \see DiagnosticInfo::print.
+  void print(DiagnosticPrinter &DP) const override;
+
+  /// Return true if this optimization remark is enabled by one of
+  /// of the LLVM command line flags (-pass-remarks, -pass-remarks-missed,
+  /// or -pass-remarks-analysis). Note that this only handles the LLVM
+  /// flags. We cannot access Clang flags from here (they are handled
+  /// in BackendConsumer::OptimizationRemarkHandler).
+  bool isEnabled() const;
+
+  StringRef getPassName() const { return PassName; }
+  std::string getMsg() const;
+  const Module &getModule() const { return M; }
+  DiagnosticLocation getLocation() const { return Loc; }
+
+protected:
+  /// Name of the pass that triggers this report. If this matches the
+  /// regular expression given in -Rpass=regexp, then the remark will
+  /// be emitted.
+  const char *PassName;
+
+  /// Textual identifier for the remark (single-word, camel-case). Can be used
+  /// by external tools reading the YAML output file for to classfy the remark
+  /// (error).
+  StringRef RemarkName;
+
+  /// Arguments collected via the streaming interface.
+  SmallVector<DiagnosticInfoOptimizationBase::Argument, 4> Args;
+
+  friend struct yaml::MappingTraits<DiagnosticInfoModuleHLSInfo *>;
+};
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleHLSInfo, RemarkT>::value,
+               StringRef>::type S) {
+  R.insert(S);
+  return R;
+}
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &&R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleHLSInfo, RemarkT>::value,
+               StringRef>::type S) {
+  R.insert(S);
+  return R;
+}
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleHLSInfo, RemarkT>::value,
+               DiagnosticInfoOptimizationBase::Argument>::type A) {
+  R.insert(A);
+  return R;
+}
+
+template <class RemarkT>
+RemarkT &
+operator<<(RemarkT &&R,
+           typename std::enable_if<
+               std::is_base_of<DiagnosticInfoModuleHLSInfo, RemarkT>::value,
+               DiagnosticInfoOptimizationBase::Argument>::type A) {
+  R.insert(A);
+  return R;
+}
+
 
 /// \brief Common features for diagnostics dealing with optimization remarks
 /// that are used by IR passes.
@@ -960,6 +1174,68 @@ public:
   bool isEnabled() const override;
 };
 
+/// Diagnostic information for HLS unsupported feature.
+class DiagnosticInfoHLSUnsupported : public DiagnosticInfoIROptimization {
+public:
+  /// \p Fn is the function where the diagnostic is being emitted. \p Loc is
+  /// the location information to use in the diagnostic. If line table
+  /// information is available, the diagnostic will include the source code
+  /// location. \p Msg is the message to show. Note that this class does not
+  /// copy this message, so this reference must be valid for the whole life time
+  /// of the diagnostic.
+  DiagnosticInfoHLSUnsupported(const Function &Fn,
+                               const DiagnosticLocation &Loc, const Twine &Msg)
+      : DiagnosticInfoIROptimization(DK_HLSUnsupported, DS_Error, nullptr, Fn,
+                                     Loc, Msg) {}
+
+  /// \p PassName is the name of the pass emitting this diagnostic.  \p
+  /// RemarkName is a textual identifier for the remark (single-word,
+  /// camel-case).  \p Loc is the debug location and \p CodeRegion is the
+  /// region that the optimization operates on (currently basic block is
+  /// supported).
+  DiagnosticInfoHLSUnsupported(const char *PassName, StringRef RemarkName,
+                               const DiagnosticLocation &Loc,
+                               const Value *CodeRegion);
+
+  /// \brief Same as above but \p Inst is used to derive code region and debug
+  /// location.
+  DiagnosticInfoHLSUnsupported(const char *PassName, StringRef RemarkName,
+                               const Instruction *Inst);
+
+  static bool classof(const DiagnosticInfo *DI) {
+    return DI->getKind() == DK_HLSUnsupported;
+  }
+
+  /// \see DiagnosticInfoOptimizationBase::isEnabled.
+  bool isEnabled() const override;
+};
+
+/// Diagnostic information for HLS to do report_fatal_error.
+class DiagnosticInfoHLSReportFatalError
+    : public DiagnosticInfoModuleUnsupportedBase {
+public:
+  /// \p PassName is the name of the pass emitting this diagnostic. \p
+  /// RemarkName is a textual identifier for he remark (single-word, camel-case)
+  /// \p M is the Module where the diagnostic is being emitted. \p Loc is
+  /// the location information to use in the diagnostic. If line table
+  /// information is available, the diagnostic will include the source code
+  /// location. \p Msg is the message to show. Note that this class does not
+  /// copy this message, so this reference must be valid for the whole life time
+  /// of the diagnostic.
+  DiagnosticInfoHLSReportFatalError(
+      const char *PassName, StringRef RemarkName, const Module &M,
+      const DiagnosticLocation &Loc = DiagnosticLocation())
+      : DiagnosticInfoModuleUnsupportedBase(DK_HLSReportFatalError, PassName,
+                                            RemarkName, M, Loc, DS_Error) {}
+
+  static bool classof(const DiagnosticInfo *DI) {
+    return DI->getKind() == DK_HLSReportFatalError;
+  }
+
+  /// \see DiagnosticInfoModuleUnsupportedBase::isEnabled.
+  bool isEnabled() const override;
+};
+
 /// Diagnostic information for unsupported feature in backend.
 class DiagnosticInfoUnsupported : public DiagnosticInfoWithLocationBase {
 private:
@@ -991,6 +1267,12 @@ public:
 namespace yaml {
 template <> struct MappingTraits<DiagnosticInfoOptimizationBase *> {
   static void mapping(IO &io, DiagnosticInfoOptimizationBase *&OptDiag);
+};
+template <> struct MappingTraits<DiagnosticInfoModuleUnsupportedBase *> {
+  static void mapping(IO &io, DiagnosticInfoModuleUnsupportedBase *&OptDiag);
+};
+template <> struct MappingTraits<DiagnosticInfoModuleHLSInfo *> {
+  static void mapping(IO &io, DiagnosticInfoModuleHLSInfo *&OptDiag);
 };
 } // namespace yaml
 

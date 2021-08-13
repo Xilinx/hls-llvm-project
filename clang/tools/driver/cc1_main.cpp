@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the entry point to the clang -cc1 functionality, which implements the
@@ -167,8 +172,30 @@ static void ensureSufficientStack() {
 static void ensureSufficientStack() {}
 #endif
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+namespace llvm {
+void initializeReflowPasses(llvm::PassRegistry &Registry);
+}
+#endif
+
+#include "argvextra.h"
+
 int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   ensureSufficientStack();
+
+#ifndef NDEBUG
+  // Some extra handling of command line arguments
+  ArgvExtra AE(Argv);
+  if (auto Extra = ::getenv("CLANG_CC1_CMDLINE_EXTRA"))
+    AE.appendExtraArgs(Extra);
+  if (auto Filename = ::getenv("CLANG_CC1_CMDLINE_RECORD")) {
+    AE.recordInit(Filename, {"CLANG_CC1_CMDLINE_EXTRA", "CLANG_CC1_CMDLINE_RECORD"});
+    AE.recordCommand(Filename, Argv0, ::getenv("PWD"));
+  }
+
+  // Replace original Argv with the extended ones
+  Argv = AE.getAllArgv();
+#endif
 
   std::unique_ptr<CompilerInstance> Clang(new CompilerInstance());
   IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
@@ -185,9 +212,18 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   llvm::InitializeAllAsmParsers();
 
 #ifdef LINK_POLLY_INTO_TOOLS
-  llvm::PassRegistry &Registry = *llvm::PassRegistry::getPassRegistry();
-  polly::initializePollyPasses(Registry);
+  {
+    llvm::PassRegistry &Registry = *llvm::PassRegistry::getPassRegistry();
+    polly::initializePollyPasses(Registry);
+  }
 #endif
+
+#ifdef LINK_REFLOW_INTO_TOOLS
+  {
+    llvm::PassRegistry &Registry = *llvm::PassRegistry::getPassRegistry();
+    llvm::initializeReflowPasses(Registry);
+  }
+#endif // LINK_REFLOW_INTO_TOOLS
 
   // Buffer diagnostics from argument parsing so that we can output them using a
   // well formed diagnostic object.

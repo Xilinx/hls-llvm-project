@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the top level handling of macro expansion for the
@@ -1148,6 +1153,8 @@ static bool HasFeature(const Preprocessor &PP, StringRef Feature) {
       .Case("efficiency_sanitizer",
             LangOpts.Sanitize.hasOneOf(SanitizerKind::Efficiency))
       .Case("scudo", LangOpts.Sanitize.hasOneOf(SanitizerKind::Scudo))
+      // Xilinx HLS features
+      .Case("xcl_array_view", LangOpts.HLSExt)
       // Objective-C features
       .Case("objc_arr", LangOpts.ObjCAutoRefCount) // FIXME: REMOVE?
       .Case("objc_arc", LangOpts.ObjCAutoRefCount)

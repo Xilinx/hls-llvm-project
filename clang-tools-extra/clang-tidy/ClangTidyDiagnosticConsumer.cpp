@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 ///  \file This file implements ClangTidyDiagnosticConsumer, ClangTidyContext
@@ -23,6 +28,7 @@
 #include "clang/Frontend/DiagnosticRenderer.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/Support/Path.h"
 #include <tuple>
 #include <vector>
 using namespace clang;
@@ -79,12 +85,12 @@ protected:
       tooling::Replacement Replacement(Loc.getManager(), Range,
                                        FixIt.CodeToInsert);
       llvm::Error Err = Error.Fix[Replacement.getFilePath()].add(Replacement);
-      // FIXME: better error handling (at least, don't let other replacements be
-      // applied).
       if (Err) {
+        // FIXME: better error handling. Now if there are conflicted fixes,
+        //        neither one will be applied.
         llvm::errs() << "Fix conflicts with existing fix! "
                      << llvm::toString(std::move(Err)) << "\n";
-        assert(false && "Fix conflicts with existing fix!");
+        Error.HasConflictedFixes = true;
       }
     }
   }
@@ -109,9 +115,15 @@ private:
 
 ClangTidyError::ClangTidyError(StringRef CheckName,
                                ClangTidyError::Level DiagLevel,
-                               StringRef BuildDirectory, bool IsWarningAsError)
+                               StringRef BuildDirectory, bool IsWarningAsError,
+                               bool HasConflictedFixes = false,
+                               PresumedLoc Loc = PresumedLoc(),
+                               std::string FilePath = std::string())
     : tooling::Diagnostic(CheckName, DiagLevel, BuildDirectory),
-      IsWarningAsError(IsWarningAsError) {}
+      IsWarningAsError(IsWarningAsError),
+      HasConflictedFixes(HasConflictedFixes), RealLoc(Loc),
+      RealFilePath(FilePath) {
+}
 
 // Returns true if GlobList starts with the negative indicator ('-'), removes it
 // from the GlobList.
@@ -267,6 +279,7 @@ ClangTidyDiagnosticConsumer::ClangTidyDiagnosticConsumer(
   Diags = llvm::make_unique<DiagnosticsEngine>(
       IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs), &*DiagOpts, this,
       /*ShouldOwnClient=*/false);
+  DiagOpts->ShowPresumedLoc = 1;
   Context.setDiagnosticsEngine(Diags.get());
 }
 
@@ -379,6 +392,24 @@ static bool LineIsMarkedWithNOLINTinMacro(SourceManager &SM, SourceLocation Loc,
   return false;
 }
 
+static std::string GetAbsoluteFilename(const Diagnostic &Info,
+                                       PresumedLoc PLoc) {
+  if (PLoc.isInvalid() || !Info.hasSourceManager())
+    return std::string();
+  const auto &SM = Info.getSourceManager();
+  StringRef Filename = PLoc.getFilename();
+  SmallVector<char, 128> AbsoluteFilename;
+  const DirectoryEntry *Dir =
+      SM.getFileManager().getDirectory(llvm::sys::path::parent_path(Filename));
+  if (Dir) {
+    StringRef DirName = SM.getFileManager().getCanonicalName(Dir);
+    llvm::sys::path::append(AbsoluteFilename, DirName,
+                            llvm::sys::path::filename(Filename));
+    Filename = StringRef(AbsoluteFilename.data(), AbsoluteFilename.size());
+  }
+  return Filename.str();
+}
+
 void ClangTidyDiagnosticConsumer::HandleDiagnostic(
     DiagnosticsEngine::Level DiagLevel, const Diagnostic &Info) {
   if (LastErrorWasIgnored && DiagLevel == DiagnosticsEngine::Note)
@@ -398,6 +429,12 @@ void ClangTidyDiagnosticConsumer::HandleDiagnostic(
   LastErrorWasIgnored = false;
   // Count warnings/errors.
   DiagnosticConsumer::HandleDiagnostic(DiagLevel, Info);
+  FullSourceLoc Loc =
+      (Info.getLocation().isInvalid())
+          ? FullSourceLoc()
+          : FullSourceLoc(Info.getLocation(), Info.getSourceManager());
+  PresumedLoc PLoc = Loc.getPresumedLoc();
+  auto FilePath = GetAbsoluteFilename(Info, PLoc);
 
   if (DiagLevel == DiagnosticsEngine::Note) {
     assert(!Errors.empty() &&
@@ -440,7 +477,8 @@ void ClangTidyDiagnosticConsumer::HandleDiagnostic(
     bool IsWarningAsError = DiagLevel == DiagnosticsEngine::Warning &&
                             Context.treatAsError(CheckName);
     Errors.emplace_back(CheckName, Level, Context.getCurrentBuildDirectory(),
-                        IsWarningAsError);
+                        IsWarningAsError, false /* HasConflictedFixes */, PLoc,
+                        FilePath);
   }
 
   ClangTidyDiagnosticRenderer Converter(
@@ -448,10 +486,7 @@ void ClangTidyDiagnosticConsumer::HandleDiagnostic(
       Errors.back());
   SmallString<100> Message;
   Info.FormatDiagnostic(Message);
-  FullSourceLoc Loc =
-      (Info.getLocation().isInvalid())
-          ? FullSourceLoc()
-          : FullSourceLoc(Info.getLocation(), Info.getSourceManager());
+
   Converter.emitDiagnostic(Loc, DiagLevel, Message, Info.getRanges(),
                            Info.getFixItHints());
 
@@ -633,6 +668,13 @@ void ClangTidyDiagnosticConsumer::removeIncompatibleErrors(
   }
 
   for (unsigned I = 0; I < Errors.size(); ++I) {
+    if (Errors[I].HasConflictedFixes) {
+      Errors[I].Fix.clear();
+      Errors[I].Notes.emplace_back(
+          "Found multiple fixes which conflict to each other and can not be "
+          "resolved. Fixes will not be applied.");
+    }
+
     if (!Apply[I]) {
       Errors[I].Fix.clear();
       Errors[I].Notes.emplace_back(

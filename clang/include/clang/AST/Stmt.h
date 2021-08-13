@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the Stmt interface and subclasses.
@@ -179,7 +184,7 @@ protected:
 
     unsigned : NumExprBits;
 
-    unsigned Kind : 2;
+    unsigned Kind : 3;
     unsigned IsType : 1; // true if operand is a type, false if an expression.
   };
 
@@ -918,6 +923,7 @@ public:
 
   Stmt *getSubStmt() { return SubStmt; }
   const Stmt *getSubStmt() const { return SubStmt; }
+  void setSubStmt( Stmt*stmt) { SubStmt = stmt; }
 
   SourceLocation getLocStart() const LLVM_READONLY { return AttrLoc; }
   SourceLocation getLocEnd() const LLVM_READONLY { return SubStmt->getLocEnd();}

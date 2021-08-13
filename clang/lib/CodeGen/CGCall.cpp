@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // These classes wrap the information about a call or function
@@ -714,6 +719,7 @@ CodeGenTypes::arrangeCall(const CGFunctionInfo &signature,
 namespace clang {
 namespace CodeGen {
 void computeSPIRKernelABIInfo(CodeGenModule &CGM, CGFunctionInfo &FI);
+void computeFPGAKernelABIInfo(CodeGenModule &CGM, CGFunctionInfo &FI);
 }
 }
 
@@ -757,6 +763,8 @@ CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
     // Force target independent argument handling for the host visible
     // kernel functions.
     computeSPIRKernelABIInfo(CGM, *FI);
+  } else if (info.getCC() == CC_FPGAAccel) {
+    computeFPGAKernelABIInfo(CGM, *FI);
   } else if (info.getCC() == CC_Swift) {
     swiftcall::computeABIInfo(CGM, *FI);
   } else {
@@ -2416,7 +2424,7 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
       }
 
       Address Alloca = CreateMemTemp(Ty, getContext().getDeclAlign(Arg),
-                                     Arg->getName());
+                                     Arg->getName() + ".tmp");
 
       // Pointer to store into.
       Address Ptr = emitAddressAtOffset(*this, Alloca, ArgI);
@@ -2457,7 +2465,10 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
         // Simple case, just do a coerced store of the argument into the alloca.
         assert(NumIRArgs == 1);
         auto AI = FnArgs[FirstIRArg];
-        AI->setName(Arg->getName() + ".coerce");
+        StringRef Posfix = ".coerce";
+        if (getLangOpts().HLSExt)
+          Posfix = "";
+        AI->setName(Arg->getName() + Posfix);
         CreateCoercedStore(AI, Ptr, /*DestIsVolatile=*/false, *this);
       }
 
@@ -2526,6 +2537,7 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
       }
       break;
     }
+
   }
 
   if (getTarget().getCXXABI().areArgsDestroyedLeftToRightInCallee()) {
@@ -2534,6 +2546,26 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
   } else {
     for (unsigned I = 0, E = Args.size(); I != E; ++I)
       EmitParmDecl(*Args[I], ArgVals[I], I + 1);
+  }
+
+  // Annotate the parameter attributes
+  if (getLangOpts().HLSExt) {
+    ArgNo = 0;
+    info_it = FI.arg_begin();
+    for (FunctionArgList::const_iterator i = Args.begin(), e = Args.end();
+         i != e; ++i, ++info_it, ++ArgNo) {
+      const VarDecl *Arg = *i;
+  
+      unsigned FirstIRArg, NumIRArgs;
+      std::tie(FirstIRArg, NumIRArgs) = IRFunctionArgs.getIRArgs(ArgNo);
+      assert( NumIRArgs == 1 && "AST argument and LLVM IR arg is not one to one mapping, can not handle it ");
+      if (auto *Param = dyn_cast<ParmVarDecl>(Arg)){
+        EmitXlxParamAttributes(Param, FnArgs[FirstIRArg]);
+      }
+      else {
+        //llvm_unreachable("-------------------");
+      }
+    }
   }
 }
 

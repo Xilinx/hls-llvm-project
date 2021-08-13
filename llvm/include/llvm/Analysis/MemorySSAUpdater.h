@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // \file
@@ -43,6 +48,7 @@
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -58,7 +64,11 @@ class raw_ostream;
 class MemorySSAUpdater {
 private:
   MemorySSA *MSSA;
-  SmallVector<MemoryPhi *, 8> InsertedPHIs;
+
+  /// We use WeakVH rather than a costly deletion to deal with dangling pointers.
+  /// MemoryPhis are created eagerly and sometimes get zapped shortly afterwards.
+  SmallVector<WeakVH, 8> InsertedPHIs;
+
   SmallPtrSet<BasicBlock *, 8> VisitedBlocks;
 
 public:
@@ -141,12 +151,16 @@ private:
   void moveTo(MemoryUseOrDef *What, BasicBlock *BB, WhereType Where);
   MemoryAccess *getPreviousDef(MemoryAccess *);
   MemoryAccess *getPreviousDefInBlock(MemoryAccess *);
-  MemoryAccess *getPreviousDefFromEnd(BasicBlock *);
-  MemoryAccess *getPreviousDefRecursive(BasicBlock *);
+  MemoryAccess *
+  getPreviousDefFromEnd(BasicBlock *,
+                        DenseMap<BasicBlock *, TrackingVH<MemoryAccess>> &);
+  MemoryAccess *
+  getPreviousDefRecursive(BasicBlock *,
+                          DenseMap<BasicBlock *, TrackingVH<MemoryAccess>> &);
   MemoryAccess *recursePhi(MemoryAccess *Phi);
   template <class RangeType>
   MemoryAccess *tryRemoveTrivialPhi(MemoryPhi *Phi, RangeType &Operands);
-  void fixupDefs(const SmallVectorImpl<MemoryAccess *> &);
+  void fixupDefs(const SmallVectorImpl<WeakVH> &);
 };
 } // end namespace llvm
 

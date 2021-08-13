@@ -1,9 +1,14 @@
-//===--- CGStmt.cpp - Emit LLVM Code from Statements ----------------------===//
+//===--- CGStmt.cpp - Emitzo LLVM Code from Statements ----------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -27,6 +32,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/Support/Debug.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -564,7 +570,105 @@ void CodeGenFunction::EmitLabelStmt(const LabelStmt &S) {
 }
 
 void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
+  auto Attrs = S.getAttrs();
+
+  SmallVector<llvm::OperandBundleDef, 4> ScopeAttrs;
+  if (getLangOpts().HLSExt)
+    EmitBundleForScope(S.getSubStmt(), Attrs, ScopeAttrs);
+
+  llvm::CallInst *Entry = nullptr;
+  // Build the single-entry-single-exit region for the AttributedBlock
+  if (!ScopeAttrs.empty()) {
+    auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
+        CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
+    Entry = Builder.CreateCall(ScopeEntry, None, ScopeAttrs);
+  }
+
+  //HLS Attrirbute binding on NullStmt standfor HLSStmt, which will emit intrinsic 
+  if (isa<NullStmt>(S.getSubStmt())) {
+    for(auto* A: Attrs) {
+      if (XlxDependenceAttr const *dep = dyn_cast<XlxDependenceAttr>(A)){
+        EmitXlxDependenceIntrinsic(dep);
+      }
+      else if (XlxCrossDependenceAttr const *dep = dyn_cast<XlxCrossDependenceAttr>(A)) { 
+        EmitXlxCrossDependenceIntrinsic(dep);
+      }
+      else if (XlxStableAttr const *stable = dyn_cast<XlxStableAttr>(A)) { 
+        EmitStableIntrinsic(stable);
+      }
+      else if (XlxStableContentAttr const* stable_content = dyn_cast<XlxStableContentAttr>(A)) { 
+        EmitStableContentIntrinsic(stable_content);
+      }
+      else if (XlxSharedAttr const *SharedAttr = dyn_cast<XlxSharedAttr>(A)) { 
+        EmitSharedIntrinsic(SharedAttr);
+      }
+      else if (XlxArrayXFormAttr const *arrayXFormAttr = dyn_cast<XlxArrayXFormAttr>(A)) { 
+        EmitArrayXFormIntrinsic(arrayXFormAttr);
+      }
+      else if (XlxReqdPipeDepthAttr const *reqdPipeDepthAttr =  dyn_cast<XlxReqdPipeDepthAttr>(A)) { 
+        EmitReqdPipeDepthIntrinsic(reqdPipeDepthAttr);
+      }
+      else if (auto const *DisaggrAttr = dyn_cast<XlxDisaggrAttr>(A)) { 
+        EmitDisaggrIntrinsic(DisaggrAttr);
+      }
+      else if (auto const *BindStorageAttr = dyn_cast<XlxBindStorageAttr>(A)) { 
+        EmitBindStorageIntrinsic(BindStorageAttr);
+      }
+      else if (auto const *AggregateAttr = dyn_cast<XlxAggregateAttr>(A)) { 
+        EmitAggregateIntrinsic(AggregateAttr);
+      }
+      else if (auto const *DataPackAttr = dyn_cast<XlxDataPackAttr>(A)) { 
+        EmitDataPackIntrinsic(DataPackAttr);
+      }
+      else if (auto const *resourceLimit = dyn_cast<FPGAResourceLimitHintAttr>(A)) {
+        EmitResourceLimitIntrinsic(resourceLimit);
+      }
+      else if (auto const *functionAlloc = dyn_cast<XlxFunctionAllocationAttr>(A)){
+        EmitFunctionAllocationIntrinsic(functionAlloc);
+      }
+      else if (auto const *saxiliteOffset = dyn_cast<SAXILITEOffsetInterfaceAttr>(A)){
+        EmitSAXILITEOffsetIntrinsic(saxiliteOffset);
+      }
+      else if (auto const *apScalar = dyn_cast<APScalarInterfaceAttr>(A)) { 
+        EmitAPScalarInterfaceIntrinsic(apScalar);
+      }
+      else if (auto const *apFifo = dyn_cast<APFifoInterfaceAttr>(A)) { 
+        EmitAPFifoInterfaceIntrinsic(apFifo);
+      }
+      else if (auto const *apMemory = dyn_cast<MemoryInterfaceAttr>(A)) { 
+        EmitMemoryInterfaceIntrinsic(apMemory);
+      }
+      else if (auto const *axiStream = dyn_cast<AXIStreamInterfaceAttr>(A)) { 
+        EmitAXIStreamInterfaceIntrinsic(axiStream);
+      }
+      else if (auto const *maxi = dyn_cast<MAXIInterfaceAttr>(A)){ 
+        EmitMAXIInterfaceIntrinsic(maxi);
+      }
+      else if (auto const *fpga_function_ctrl = dyn_cast<FPGAFunctionCtrlInterfaceAttr>(A)) { 
+        EmitFPGAFunctionCtrlInterfaceIntrinsic(fpga_function_ctrl);
+      }
+      else if (auto const *reset = dyn_cast<XlxResetIntrinsicAttr>(A)){ 
+        EmitResetIntrinsic(reset);
+      }
+ 
+      EmitStopPoint(A->getLocation());
+    }
+  }
+
   EmitStmt(S.getSubStmt(), S.getAttrs());
+
+  // Emit scope exit intrinsic
+  if (Entry) {
+    // Do not insert scope if we met terminate instruction (goto/break/return)
+    if (!Builder.GetInsertBlock()) {
+      Entry->removeFromParent();
+      Entry->dropAllReferences();
+    } else {
+      auto *ScopeExit = llvm::Intrinsic::getDeclaration(
+          CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
+      Builder.CreateCall(ScopeExit, Entry);
+    }
+  }
 }
 
 void CodeGenFunction::EmitGotoStmt(const GotoStmt &S) {
@@ -684,7 +788,7 @@ void CodeGenFunction::EmitWhileStmt(const WhileStmt &S,
   EmitBlock(LoopHeader.getBlock());
 
   const SourceRange &R = S.getSourceRange();
-  LoopStack.push(LoopHeader.getBlock(), CGM.getContext(), WhileAttrs,
+  LoopStack.push(this, LoopHeader.getBlock(), CGM.getContext(), WhileAttrs,
                  SourceLocToDebugLoc(R.getBegin()),
                  SourceLocToDebugLoc(R.getEnd()));
 
@@ -778,7 +882,7 @@ void CodeGenFunction::EmitDoStmt(const DoStmt &S,
   llvm::BasicBlock *LoopBody = createBasicBlock("do.body");
 
   const SourceRange &R = S.getSourceRange();
-  LoopStack.push(LoopBody, CGM.getContext(), DoAttrs,
+  LoopStack.push(this, LoopBody, CGM.getContext(), DoAttrs,
                  SourceLocToDebugLoc(R.getBegin()),
                  SourceLocToDebugLoc(R.getEnd()));
 
@@ -844,7 +948,7 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
   EmitBlock(CondBlock);
 
   const SourceRange &R = S.getSourceRange();
-  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs,
+  LoopStack.push(this, CondBlock, CGM.getContext(), ForAttrs,
                  SourceLocToDebugLoc(R.getBegin()),
                  SourceLocToDebugLoc(R.getEnd()));
 
@@ -900,7 +1004,16 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
     // Create a separate cleanup scope for the body, in case it is not
     // a compound statement.
     RunCleanupsScope BodyScope(*this);
+    if (getLangOpts().HLSExt) {
+      for(auto A: ForAttrs) {
+        XCLDependenceAttr const *dep = dyn_cast<XCLDependenceAttr>( A );
+        if (dep) {
+          EmitXCLDependenceIntrinsic(dep);
+        }
+      }
+    }
     EmitStmt(S.getBody());
+
   }
 
   // If there is an increment, emit it next.
@@ -943,7 +1056,7 @@ CodeGenFunction::EmitCXXForRangeStmt(const CXXForRangeStmt &S,
   EmitBlock(CondBlock);
 
   const SourceRange &R = S.getSourceRange();
-  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs,
+  LoopStack.push(this, CondBlock, CGM.getContext(), ForAttrs,
                  SourceLocToDebugLoc(R.getBegin()),
                  SourceLocToDebugLoc(R.getEnd()));
 
@@ -1106,8 +1219,30 @@ void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
   if (HaveInsertPoint())
     EmitStopPoint(&S);
 
-  for (const auto *I : S.decls())
+  for (const auto *I : S.decls()) {
+    llvm::CallInst *Entry = nullptr;
+    if (auto *dep = I->getAttr<XlxDependenceAttr>()) {
+      EmitXlxDependenceIntrinsic(dep);
+    }
+    else if (auto *dep = I->getAttr<XlxCrossDependenceAttr>()) {
+      EmitXlxCrossDependenceIntrinsic(dep);
+    }
+    else if (I->hasAttr<XlxBindOpExprAttr>()){ 
+      SmallVector<llvm::OperandBundleDef, 6> BundleList;
+      for (auto bindOp: I->specific_attrs<XlxBindOpExprAttr>()) {
+        BundleBindOpAttr(bindOp, BundleList);
+      }
+      auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
+          CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
+      Entry = Builder.CreateCall(ScopeEntry, None, BundleList);
+    }
     EmitDecl(*I);
+    if (I->hasAttr<XlxBindOpExprAttr>()) { 
+      auto *ScopeExit = llvm::Intrinsic::getDeclaration(
+          CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
+      Builder.CreateCall(ScopeExit, Entry);
+    }
+  }
 }
 
 void CodeGenFunction::EmitBreakStmt(const BreakStmt &S) {

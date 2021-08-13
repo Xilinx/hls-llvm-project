@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "Internals.h"
@@ -198,6 +203,7 @@ createInvocationForMigration(CompilerInvocation &origCI,
   CInvok->getLangOpts()->ObjCAutoRefCount = true;
   CInvok->getLangOpts()->setGC(LangOptions::NonGC);
   CInvok->getDiagnosticOpts().ErrorLimit = 0;
+  CInvok->getDiagnosticOpts().WarnLimit = 0;
   CInvok->getDiagnosticOpts().PedanticErrors = 0;
 
   // Ignore -Werror flags when migrating.

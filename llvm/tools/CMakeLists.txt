@@ -17,6 +17,11 @@ else()
   set(LLVM_TOOL_POLLY_BUILD Off)
 endif()
 
+if(LINK_REFLOW_INTO_TOOLS)
+  add_llvm_external_project(reflow)
+endif()
+
+
 if(NOT LLVM_BUILD_LLVM_DYLIB )
   set(LLVM_TOOL_LLVM_SHLIB_BUILD Off)
 endif()

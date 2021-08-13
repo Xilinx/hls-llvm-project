@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This program is an automated compiler debugger tool.  It is used to narrow
@@ -115,6 +120,12 @@ void initializePollyPasses(llvm::PassRegistry &Registry);
 }
 #endif
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+namespace llvm {
+void initializeReflowPasses(llvm::PassRegistry &Registry);
+}
+#endif
+
 int main(int argc, char **argv) {
 #ifndef DEBUG_BUGPOINT
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
@@ -138,6 +149,10 @@ int main(int argc, char **argv) {
 #ifdef LINK_POLLY_INTO_TOOLS
   polly::initializePollyPasses(Registry);
 #endif
+
+#ifdef LINK_REFLOW_INTO_TOOLS
+  initializeReflowPasses(Registry);
+#endif // LINK_REFLOW_INTO_TOOLS
 
   if (std::getenv("bar") == (char*) -1) {
     InitializeAllTargets();

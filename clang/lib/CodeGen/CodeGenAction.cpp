@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/CodeGen/CodeGenAction.h"
@@ -13,6 +18,8 @@
 #include "MacroPPCallbacks.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/Sema/SemaDiagnostic.h"
+#include "clang/Parse/ParseDiagnostic.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclGroup.h"
 #include "clang/Basic/FileManager.h"
@@ -164,8 +171,10 @@ namespace clang {
         if (LLVMIRGenerationRefCount == 1)
           LLVMIRGeneration.startTimer();
       }
-
+      //llvm::dbgs() << "================  HandleTopLevelDecl =====================\n";
       Gen->HandleTopLevelDecl(D);
+
+      //llvm::dbgs() << "==========================================================";
 
       if (llvm::TimePassesIsEnabled) {
         LLVMIRGenerationRefCount -= 1;
@@ -259,7 +268,7 @@ namespace clang {
       std::unique_ptr<DiagnosticHandler> OldDiagnosticHandler =
           Ctx.getDiagnosticHandler();
       Ctx.setDiagnosticHandler(llvm::make_unique<ClangDiagnosticHandler>(
-        CodeGenOpts, this));
+        CodeGenOpts, this), CodeGenOpts.RespectDiagnosticFilters);
       Ctx.setDiagnosticsHotnessRequested(CodeGenOpts.DiagnosticsWithHotness);
       if (CodeGenOpts.DiagnosticsHotnessThreshold != 0)
         Ctx.setDiagnosticsHotnessThreshold(
@@ -276,6 +285,7 @@ namespace clang {
           return;
         }
 
+        Ctx.setOptRemarkFile(OptRecordFile.get());
         Ctx.setDiagnosticsOutputFile(
             llvm::make_unique<yaml::Output>(OptRecordFile->os()));
 
@@ -295,7 +305,8 @@ namespace clang {
 
       Ctx.setInlineAsmDiagnosticHandler(OldHandler, OldContext);
 
-      Ctx.setDiagnosticHandler(std::move(OldDiagnosticHandler));
+      Ctx.setDiagnosticHandler(std::move(OldDiagnosticHandler),
+          CodeGenOpts.RespectDiagnosticFilters);
 
       if (OptRecordFile)
         OptRecordFile->keep();
@@ -314,6 +325,10 @@ namespace clang {
 
     void CompleteTentativeDefinition(VarDecl *D) override {
       Gen->CompleteTentativeDefinition(D);
+    }
+
+    void CompleteExternDeclaration(VarDecl *D) override {
+      Gen->CompleteExternDeclaration(D);
     }
 
     void AssignInheritanceModel(CXXRecordDecl *RD) override {
@@ -356,6 +371,13 @@ namespace clang {
     /// them.
     void EmitOptimizationMessage(const llvm::DiagnosticInfoOptimizationBase &D,
                                  unsigned DiagID);
+    /// \brief Specialized handlers for module based diagnostic.
+    /// Note that these handlers only accept remarks and they always handle
+    /// them.
+    /// TODO: Add DebugInfo support
+    void EmitModuleUnsupportedMessage(
+		    const llvm::DiagnosticInfoModuleUnsupportedBase &D,
+		    unsigned DiagID);
     void
     OptimizationRemarkHandler(const llvm::DiagnosticInfoOptimizationBase &D);
     void OptimizationRemarkHandler(
@@ -364,6 +386,10 @@ namespace clang {
         const llvm::OptimizationRemarkAnalysisAliasing &D);
     void OptimizationFailureHandler(
         const llvm::DiagnosticInfoOptimizationFailure &D);
+    void HLSUnsupportedHandler(
+        const llvm::DiagnosticInfoHLSUnsupported &D);
+    void HLSReportFatalErrorHandler(
+        const llvm::DiagnosticInfoHLSReportFatalError &D);
   };
 
   void BackendConsumer::anchor() {}
@@ -603,7 +629,9 @@ void BackendConsumer::EmitOptimizationMessage(
     const llvm::DiagnosticInfoOptimizationBase &D, unsigned DiagID) {
   // We only support warnings and remarks.
   assert(D.getSeverity() == llvm::DS_Remark ||
-         D.getSeverity() == llvm::DS_Warning);
+         D.getSeverity() == llvm::DS_Warning ||
+         (D.getSeverity() == llvm::DS_Error &&
+          D.getKind() == llvm::DK_HLSUnsupported));
 
   StringRef Filename;
   unsigned Line, Column;
@@ -631,6 +659,12 @@ void BackendConsumer::EmitOptimizationMessage(
         << Filename << Line << Column;
 }
 
+void BackendConsumer::EmitModuleUnsupportedMessage(
+    const llvm::DiagnosticInfoModuleUnsupportedBase &D, unsigned DiagID) {
+  assert(D.getKind() == llvm::DK_HLSReportFatalError);
+  //TODO: Add DebugInfo Support
+}
+
 void BackendConsumer::OptimizationRemarkHandler(
     const llvm::DiagnosticInfoOptimizationBase &D) {
   // Without hotness information, don't show noisy remarks.
@@ -651,6 +685,14 @@ void BackendConsumer::OptimizationRemarkHandler(
         CodeGenOpts.OptimizationRemarkMissedPattern->match(D.getPassName()))
       EmitOptimizationMessage(
           D, diag::remark_fe_backend_optimization_remark_missed);
+  } else if (D.isHLSUnsupported()) {
+    // HLSUnsupported remarks are active only if the -Rpass-missed
+    // flag has a regular expression that matches the name of the pass
+    // name in \p D.
+    // TODO: Probably a separate option to control HLS unsupported feature
+    if (CodeGenOpts.OptimizationRemarkMissedPattern &&
+        CodeGenOpts.OptimizationRemarkMissedPattern->match(D.getPassName()))
+      EmitOptimizationMessage(D, diag::error_fe_backend_hls_unsupported);
   } else {
     assert(D.isAnalysis() && "Unknown remark type");
 
@@ -695,6 +737,16 @@ void BackendConsumer::OptimizationRemarkHandler(
 void BackendConsumer::OptimizationFailureHandler(
     const llvm::DiagnosticInfoOptimizationFailure &D) {
   EmitOptimizationMessage(D, diag::warn_fe_backend_optimization_failure);
+}
+
+void BackendConsumer::HLSUnsupportedHandler(
+    const llvm::DiagnosticInfoHLSUnsupported &D) {
+  EmitOptimizationMessage(D, diag::error_fe_backend_hls_unsupported);
+}
+
+void BackendConsumer::HLSReportFatalErrorHandler(
+    const llvm::DiagnosticInfoHLSReportFatalError &D) {
+  EmitModuleUnsupportedMessage(D, diag::error_fe_backend_hls_report_fatal_err);
 }
 
 /// \brief This function is invoked when the backend needs
@@ -765,6 +817,16 @@ void BackendConsumer::DiagnosticHandlerImpl(const DiagnosticInfo &DI) {
     // Optimization failures are always handled completely by this
     // handler.
     OptimizationFailureHandler(cast<DiagnosticInfoOptimizationFailure>(DI));
+    return;
+  case llvm::DK_HLSUnsupported:
+    // HLS unsupported feature errors are always handled completely by this
+    // handler.
+    HLSUnsupportedHandler(cast<DiagnosticInfoHLSUnsupported>(DI));
+    return;
+  case llvm::DK_HLSReportFatalError:
+    // HLS reported fatal errors are always handled completely by this
+    // handler.
+    HLSReportFatalErrorHandler(cast<DiagnosticInfoHLSReportFatalError>(DI));
     return;
   case llvm::DK_Unsupported:
     UnsupportedDiagHandler(cast<DiagnosticInfoUnsupported>(DI));

@@ -26,3 +26,13 @@ add_subdirectory(ToolDrivers)
 add_subdirectory(XRay)
 add_subdirectory(Testing)
 add_subdirectory(WindowsManifest)
+
+add_llvm_library(LLVMDebugHelpers
+  DebugHelpers.cpp
+
+  ADDITIONAL_HEADER_DIRS
+  ${LLVM_MAIN_INCLUDE_DIR}/llvm
+
+  DEPENDS
+  intrinsics_gen
+  )

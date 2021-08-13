@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the language options. Users of this file must
@@ -78,6 +83,11 @@
 #  define BENIGN_VALUE_LANGOPT(Name, Bits, Default, Description) \
      COMPATIBLE_VALUE_LANGOPT(Name, Bits, Default, Description)
 #endif
+
+LANGOPT(HLSExt, 1, 0, "High-level Synthesis C/C++ extensions")
+LANGOPT(XMCExt, 1, 0, "Model Composer C/C++ extensions")
+LANGOPT(StrictDataflow, 1, 0, "Enable Dataflow canonical form check")
+LANGOPT(FPGAPlatformName, 1, 0, "Access platform DB by name")
 
 // FIXME: A lot of the BENIGN_ options should be COMPATIBLE_ instead.
 LANGOPT(C99               , 1, 0, "C99")

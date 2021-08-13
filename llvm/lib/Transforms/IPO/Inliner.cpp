@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the mechanics required to implement inlining without
@@ -40,6 +45,7 @@
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
@@ -57,6 +63,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ImportedFunctionsInliningStatistics.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -67,6 +74,7 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 
 using namespace llvm;
 
@@ -365,6 +373,24 @@ shouldBeDeferred(Function *Caller, CallSite CS, InlineCost IC,
   return false;
 }
 
+// Check if pair \p P stored in the map \p IMap
+static bool findPair(std::unordered_multimap<std::string, std::string>& IMap,
+                     std::pair<std::string, std::string> P) {
+  // [first pair itr, last pair itr] related to the key.
+  auto PairRange = IMap.equal_range(P.first);
+  auto CurrPair = PairRange.first;
+  auto LastPair = PairRange.second;
+
+  std::pair<std::string, std::string> Cand;
+  while (CurrPair != LastPair) {
+    Cand = *CurrPair;
+    if (Cand == P)
+      return true;
+    CurrPair++;
+  }
+  return false;
+}
+
 /// Return the cost only if the inliner should attempt to inline at the given
 /// CallSite. If we return the cost, we will emit an optimisation remark later
 /// using that cost, so we won't do so from this function.
@@ -459,6 +485,47 @@ bool LegacyInlinerBase::runOnSCC(CallGraphSCC &SCC) {
   if (skipSCC(SCC))
     return false;
   return inlineCalls(SCC);
+}
+
+// Filter out what inline messages to emit.
+static bool
+canEmitMessage(const Function *Callee, const Function *Caller,
+               std::unordered_multimap<std::string, std::string> &IMap) {
+  // Skip inline message if the callee is defined in ap_int/ap_fixed
+  // header files. We don't want to emit too much messages.
+  static const std::set<std::string> HLSHeaders({
+      "ap_common.h",
+      "ap_int.h",
+      "ap_int_base.h",
+      "ap_int_ref.h",
+      "ap_fixed.h",
+      "ap_fixed_base.h",
+      "ap_fixed_ref.h"
+  });
+
+  if (DISubprogram *CalleeDI = Callee->getSubprogram()) {
+    std::string CalleeFilename =
+                    filename(CalleeDI->getFilename(),
+                             sys::path::Style::posix);
+    if (HLSHeaders.count(CalleeFilename))
+      return false;
+
+    StringRef CalleeName = Callee->getName();
+    StringRef CallerName = Caller->getName();
+    if (CalleeName.empty() || CallerName.empty() || CalleeFilename.empty())
+      return true;
+
+    std::string Loc = std::to_string(CalleeDI->getScopeLine()) +
+                      std::to_string(CalleeDI->getLine());
+    std::string Key = CalleeName.str() + CalleeFilename + Loc;
+    if (findPair(IMap, {Key, CallerName.str()}))
+      return false;
+
+    IMap.insert(std::make_pair(Key, CallerName.str()));
+    return true;
+  }
+
+  return true;
 }
 
 static bool
@@ -582,6 +649,9 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
       // just become a regular analysis dependency.
       OptimizationRemarkEmitter ORE(Caller);
 
+      // Record the successful inlining pairs <callee info, caller name>.
+      std::unordered_multimap<std::string, std::string> InlinerMap;
+
       Optional<InlineCost> OIC = shouldInline(CS, GetInlineCost, ORE);
       // If the policy determines that we should inline this function,
       // delete the call instead.
@@ -619,22 +689,21 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
         }
         ++NumInlined;
 
-        ORE.emit([&]() {
-          bool AlwaysInline = OIC->isAlways();
-          StringRef RemarkName = AlwaysInline ? "AlwaysInline" : "Inlined";
-          OptimizationRemark R(DEBUG_TYPE, RemarkName, DLoc, Block);
-          R << NV("Callee", Callee) << " inlined into ";
-          R << NV("Caller", Caller);
-          if (AlwaysInline)
-            R << " with cost=always";
-          else {
-            R << " with cost=" << NV("Cost", OIC->getCost());
-            R << " (threshold=" << NV("Threshold", OIC->getThreshold());
-            R << ")";
-          }
-          return R;
-        });
-
+        if (canEmitMessage(Callee, Caller, InlinerMap)) {
+          ORE.emit([&]() {
+            bool AlwaysInline = OIC->isAlways();
+            StringRef RemarkName = AlwaysInline ? "AlwaysInline" : "Inlined";
+            OptimizationRemark R(DEBUG_TYPE, RemarkName, DLoc, Block);
+            R << "Inlining function \'" << NV("Callee", Callee) << "\' into \'";
+            R << NV("Caller", Caller) << "\'";
+            if (!AlwaysInline) {
+              R << " with cost=" << NV("Cost", OIC->getCost());
+              R << " (threshold=" << NV("Threshold", OIC->getThreshold());
+              R << ")";
+            }
+            return R;
+          });
+        }
         // If inlining this function gave us any new call sites, throw them
         // onto our worklist to process.  They are useful inline candidates.
         if (!InlineInfo.InlinedCalls.empty()) {
@@ -970,11 +1039,9 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
         bool AlwaysInline = OIC->isAlways();
         StringRef RemarkName = AlwaysInline ? "AlwaysInline" : "Inlined";
         OptimizationRemark R(DEBUG_TYPE, RemarkName, DLoc, Block);
-        R << NV("Callee", &Callee) << " inlined into ";
-        R << NV("Caller", &F);
-        if (AlwaysInline)
-          R << " with cost=always";
-        else {
+        R << "Inlining function \'" << NV("Callee", &Callee) << "\' into \'";
+        R << NV("Caller", &F) << "\'";
+        if (!AlwaysInline) {
           R << " with cost=" << NV("Cost", OIC->getCost());
           R << " (threshold=" << NV("Threshold", OIC->getThreshold());
           R << ")";

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines LoopPass class. All loop optimization
@@ -34,6 +39,10 @@ public:
   /// to a Loop.
   Pass *createPrinterPass(raw_ostream &O,
                           const std::string &Banner) const override;
+
+  /// createGitCommitModulePass - Get a git-commit module pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override;
 
   // runOnLoop - This method should be implemented by the subclass to perform
   // whatever action is necessary for the specified Loop.

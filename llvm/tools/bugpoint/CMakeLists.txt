@@ -41,3 +41,7 @@ if(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
   # Ensure LLVMTarget can resolve dependences in Polly.
   target_link_libraries(bugpoint PRIVATE LLVMTarget)
 endif(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
+
+if(LINK_REFLOW_INTO_TOOLS)
+  target_link_libraries(bugpoint PRIVATE Reflow)
+endif(LINK_REFLOW_INTO_TOOLS)

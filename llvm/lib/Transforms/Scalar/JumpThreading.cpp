@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Jump Threading pass.
@@ -280,8 +285,6 @@ bool JumpThreading::runOnFunction(Function &F) {
   if (skipFunction(F))
     return false;
   auto TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
-  // Get DT analysis before LVI. When LVI is initialized it conditionally adds
-  // DT if it's available.
   auto DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto LVI = &getAnalysis<LazyValueInfoWrapperPass>().getLVI();
   auto AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
@@ -297,6 +300,7 @@ bool JumpThreading::runOnFunction(Function &F) {
 
   bool Changed = Impl.runImpl(F, TLI, LVI, AA, &DDT, HasProfileData,
                               std::move(BFI), std::move(BPI));
+
   if (PrintLVIAfterJumpThreading) {
     dbgs() << "LVI for function '" << F.getName() << "':\n";
     LVI->printLVI(F, *DT, dbgs());
@@ -307,8 +311,6 @@ bool JumpThreading::runOnFunction(Function &F) {
 PreservedAnalyses JumpThreadingPass::run(Function &F,
                                          FunctionAnalysisManager &AM) {
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
-  // Get DT analysis before LVI. When LVI is initialized it conditionally adds
-  // DT if it's available.
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &LVI = AM.getResult<LazyValueAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
@@ -457,6 +459,18 @@ static void ReplaceFoldableUses(Instruction *Cond, Value *ToVal) {
     Cond->eraseFromParent();
 }
 
+/// HLS Specific
+/// Return true if \p Call is a region ssdm call.
+static bool isRegionSSDM(const CallInst *Call) {
+  if (auto *F = Call->getCalledFunction()) {
+    auto name = F->getName();
+    return name.equals("_ssdm_RegionBegin") || name.equals("_ssdm_RegionEnd");
+  }
+
+  return false;
+}
+///
+
 /// Return the cost of duplicating a piece of this block from first non-phi
 /// and before StopAt instruction to thread across it. Stop scanning the block
 /// when exceeding the threshold. If duplication is impossible, returns ~0U.
@@ -516,9 +530,12 @@ static unsigned getJumpThreadDuplicationCost(BasicBlock *BB,
     // as having cost of 2 total, and if they are a vector intrinsic, we model
     // them as having cost 1.
     if (const CallInst *CI = dyn_cast<CallInst>(I)) {
-      if (CI->cannotDuplicate() || CI->isConvergent())
+      if (CI->cannotDuplicate() || CI->isConvergent() || isRegionSSDM(CI))
         // Blocks with NoDuplicate are modelled as having infinite cost, so they
-        // are never duplicated.
+        // are never duplicated. HLS NOTE: The directive.scope.begin/end
+	// intrinsics are marked as no duplicate; Howerver, the
+        // ssdm_RegionBegin/End is not understand by LLVM, check explicitly and
+        // do not duplicate them.
         return ~0U;
       else if (!isa<IntrinsicInst>(CI))
         Size += 3;
@@ -1532,6 +1549,14 @@ bool JumpThreadingPass::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
   // thread the edge.
   if (LoopHeaders.count(BB))
     return false;
+
+  // HLS BEGIN
+  // Don't thread across the loop preheader and loop latch
+  for (BasicBlock *SuccBB : successors(BB)) {
+    if (LoopHeaders.count(SuccBB))
+      return false;
+  }
+  // HLS END
 
   PredValueInfoTy PredValues;
   if (!ComputeValueKnownInPredecessors(Cond, BB, PredValues, Preference, CxtI))

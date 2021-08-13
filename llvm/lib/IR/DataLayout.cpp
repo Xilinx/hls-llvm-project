@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines layout properties related to datatype size/offset/alignment
@@ -681,6 +686,15 @@ unsigned DataLayout::getAlignment(Type *Ty, bool abi_or_pref) const {
 
 unsigned DataLayout::getABITypeAlignment(Type *Ty) const {
   return getAlignment(Ty, true);
+}
+
+uint64_t DataLayout::getIntegerTypeStoreSize(unsigned BitWidth) const {
+  return (BitWidth + 7) / 8;
+}
+
+uint64_t DataLayout::getIntegerTypeAllocSize(unsigned BitWidth) const {
+  return alignTo(getIntegerTypeStoreSize(BitWidth),
+                 getABIIntegerTypeAlignment(BitWidth));
 }
 
 /// getABIIntegerTypeAlignment - Return the minimum ABI-required alignment for

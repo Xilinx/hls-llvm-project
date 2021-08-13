@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the IdentifierInfo, IdentifierVisitor, and
@@ -121,8 +126,9 @@ namespace {
     KEYCOROUTINES = 0x80000,
     KEYMODULES = 0x100000,
     KEYCXX2A = 0x200000,
+    KEYHLS = 0x400000,
     KEYALLCXX = KEYCXX | KEYCXX11 | KEYCXX2A,
-    KEYALL = (0x3fffff & ~KEYNOMS18 &
+    KEYALL = (0x7fffff & ~KEYNOMS18 &
               ~KEYNOOPENCL) // KEYNOMS18 and KEYNOOPENCL are used to exclude.
   };
 
@@ -155,6 +161,7 @@ static KeywordStatus getKeywordStatus(const LangOptions &LangOpts,
   if (LangOpts.OpenCL && (Flags & KEYOPENCL)) return KS_Enabled;
   if (!LangOpts.CPlusPlus && (Flags & KEYNOCXX)) return KS_Enabled;
   if (LangOpts.C11 && (Flags & KEYC11)) return KS_Enabled;
+  if (LangOpts.HLSExt && (Flags & KEYHLS)) return KS_Enabled;
   // We treat bridge casts as objective-C keywords so we can warn on them
   // in non-arc mode.
   if (LangOpts.ObjC2 && (Flags & KEYARC)) return KS_Enabled;

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/LowerMemIntrinsics.h"
@@ -42,6 +47,9 @@ void llvm::createMemCpyLoopKnownSize(Instruction *InsertBefore, Value *SrcAddr,
       TTI.getMemcpyLoopLoweringType(Ctx, CopyLen, SrcAlign, DestAlign);
 
   unsigned LoopOpSize = getLoopOperandSizeInBytes(LoopOpType);
+  unsigned LoadAlign = MinAlign(SrcAlign, LoopOpSize);
+  unsigned StoreAlign = MinAlign(DestAlign, LoopOpSize);
+
   uint64_t LoopEndCount = CopyLen->getZExtValue() / LoopOpSize;
 
   unsigned SrcAS = cast<PointerType>(SrcAddr->getType())->getAddressSpace();
@@ -73,10 +81,14 @@ void llvm::createMemCpyLoopKnownSize(Instruction *InsertBefore, Value *SrcAddr,
     // Loop Body
     Value *SrcGEP =
         LoopBuilder.CreateInBoundsGEP(LoopOpType, SrcAddr, LoopIndex);
-    Value *Load = LoopBuilder.CreateLoad(SrcGEP, SrcIsVolatile);
+    auto *Load = LoopBuilder.CreateLoad(SrcGEP, SrcIsVolatile);
+    if (LoadAlign)
+      Load->setAlignment(LoadAlign);
     Value *DstGEP =
         LoopBuilder.CreateInBoundsGEP(LoopOpType, DstAddr, LoopIndex);
-    LoopBuilder.CreateStore(Load, DstGEP, DstIsVolatile);
+    auto *Store = LoopBuilder.CreateStore(Load, DstGEP, DstIsVolatile);
+    if (StoreAlign)
+      Store->setAlignment(StoreAlign);
 
     Value *NewIndex =
         LoopBuilder.CreateAdd(LoopIndex, ConstantInt::get(TypeOfCopyLen, 1U));
@@ -149,6 +161,8 @@ void llvm::createMemCpyLoopUnknownSize(Instruction *InsertBefore,
   Type *LoopOpType =
       TTI.getMemcpyLoopLoweringType(Ctx, CopyLen, SrcAlign, DestAlign);
   unsigned LoopOpSize = getLoopOperandSizeInBytes(LoopOpType);
+  unsigned LoadAlign = MinAlign(SrcAlign, LoopOpSize);
+  unsigned StoreAlign = MinAlign(DestAlign, LoopOpSize);
 
   IRBuilder<> PLBuilder(PreLoopBB->getTerminator());
 
@@ -182,9 +196,13 @@ void llvm::createMemCpyLoopUnknownSize(Instruction *InsertBefore,
   LoopIndex->addIncoming(ConstantInt::get(CopyLenType, 0U), PreLoopBB);
 
   Value *SrcGEP = LoopBuilder.CreateInBoundsGEP(LoopOpType, SrcAddr, LoopIndex);
-  Value *Load = LoopBuilder.CreateLoad(SrcGEP, SrcIsVolatile);
+  auto *Load = LoopBuilder.CreateLoad(SrcGEP, SrcIsVolatile);
+  if (LoadAlign)
+    Load->setAlignment(LoadAlign);
   Value *DstGEP = LoopBuilder.CreateInBoundsGEP(LoopOpType, DstAddr, LoopIndex);
-  LoopBuilder.CreateStore(Load, DstGEP, DstIsVolatile);
+  auto *Store = LoopBuilder.CreateStore(Load, DstGEP, DstIsVolatile);
+  if (StoreAlign)
+    Store->setAlignment(StoreAlign);
 
   Value *NewIndex =
       LoopBuilder.CreateAdd(LoopIndex, ConstantInt::get(CopyLenType, 1U));

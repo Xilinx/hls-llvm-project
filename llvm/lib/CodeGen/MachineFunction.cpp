@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Collect native machine code information for a function.  This allows
@@ -174,9 +179,9 @@ void MachineFunction::init() {
     WinEHInfo = new (Allocator) WinEHFuncInfo();
   }
 
-  assert(Target.isCompatibleDataLayout(getDataLayout()) &&
-         "Can't create a MachineFunction using a Module with a "
-         "Target-incompatible DataLayout attached\n");
+  //assert(Target.isCompatibleDataLayout(getDataLayout()) &&
+         //"Can't create a MachineFunction using a Module with a "
+         //"Target-incompatible DataLayout attached\n");
 
   PSVManager =
     llvm::make_unique<PseudoSourceValueManager>(*(getSubtarget().

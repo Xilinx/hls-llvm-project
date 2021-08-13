@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 ///
@@ -178,6 +183,12 @@ void RegisterPollyPasses(PassBuilder &);
 }
 #endif
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+namespace llvm {
+void RegisterReflowPasses(PassBuilder &PB);
+}
+#endif
+
 bool llvm::runPassPipeline(StringRef Arg0, Module &M, TargetMachine *TM,
                            ToolOutputFile *Out, ToolOutputFile *ThinLTOLinkOut,
                            ToolOutputFile *OptRemarkFile,
@@ -211,6 +222,10 @@ bool llvm::runPassPipeline(StringRef Arg0, Module &M, TargetMachine *TM,
 #ifdef LINK_POLLY_INTO_TOOLS
   polly::RegisterPollyPasses(PB);
 #endif
+
+#ifdef LINK_REFLOW_INTO_TOOLS
+  llvm::RegisterReflowPasses(PB);
+#endif // LINK_REFLOW_INTO_TOOLS
 
   // Specially handle the alias analysis manager so that we can register
   // a custom pipeline of AA passes with it.

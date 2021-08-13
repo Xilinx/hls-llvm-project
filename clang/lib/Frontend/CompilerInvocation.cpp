@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/Frontend/CompilerInvocation.h"
@@ -43,6 +48,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/ScopedPrinter.h"
+#include "llvm/Support/XILINXFPGAPlatformBasic.h"
 #include <atomic>
 #include <memory>
 #include <sys/stat.h>
@@ -456,6 +462,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   llvm::Triple Triple = llvm::Triple(TargetOpts.Triple);
 
   unsigned OptimizationLevel = getOptimizationLevel(Args, IK, Diags);
+
   // TODO: This could be done in Driver
   unsigned MaxOptLevel = 3;
   if (OptimizationLevel > MaxOptLevel) {
@@ -469,7 +476,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
 
   // At O0 we want to fully disable inlining outside of cases marked with
   // 'alwaysinline' that are required for correctness.
-  Opts.setInlining((Opts.OptimizationLevel == 0)
+  // Also, -mhls_ir require normal inlining behavior for now
+  Opts.setInlining((Opts.OptimizationLevel == 0 && !Args.hasArg(OPT_mhls_ir))
                        ? CodeGenOptions::OnlyAlwaysInlining
                        : CodeGenOptions::NormalInlining);
   // Explicit inlining flags can disable some or all inlining even at
@@ -580,6 +588,18 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
       Args.hasFlag(OPT_funroll_loops, OPT_fno_unroll_loops,
                    (Opts.OptimizationLevel > 1));
   Opts.RerollLoops = Args.hasArg(OPT_freroll_loops);
+  Opts.EmitHLSIR = Args.hasArg(OPT_mhls_ir);
+
+//ZhaoKang
+#if 1
+  if (Arg *ALib = Args.getLastArg(options::OPT_hls_platform_name)) { 
+    if (Arg *APath = Args.getLastArg(options::OPT_hls_platform_db_name)) { 
+      //load sqlite3db 
+      platform::SetPlatformDbFile(APath->getValue());
+      platform::PlatformBasic::getInstance()->load( ALib->getValue());
+    }
+  }
+#endif
 
   Opts.DisableIntegratedAS = Args.hasArg(OPT_fno_integrated_as);
   Opts.Autolink = !Args.hasArg(OPT_fno_autolink);
@@ -848,10 +868,12 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
 
   Opts.RelaxELFRelocations = Args.hasArg(OPT_mrelax_relocations);
   Opts.DebugCompilationDir = Args.getLastArgValue(OPT_fdebug_compilation_dir);
-  for (auto A : Args.filtered(OPT_mlink_bitcode_file, OPT_mlink_cuda_bitcode)) {
+  for (auto A : Args.filtered(OPT_mlink_bitcode_file, OPT_mlink_cuda_bitcode,
+                              OPT_mlink_opencl_bitcode)) {
     CodeGenOptions::BitcodeFileToLink F;
     F.Filename = A->getValue();
-    if (A->getOption().matches(OPT_mlink_cuda_bitcode)) {
+    if (A->getOption().matches(OPT_mlink_cuda_bitcode) ||
+        A->getOption().matches(OPT_mlink_opencl_bitcode)) {
       F.LinkFlags = llvm::Linker::Flags::LinkOnlyNeeded;
       // When linking CUDA bitcode, propagate function attributes so that
       // e.g. libdevice gets fast-math attrs if we're building with fast-math.
@@ -995,6 +1017,12 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
         GenerateOptimizationRemarkRegex(Diags, Args, A);
     NeedLocTracking = true;
   }
+
+  // -fsave-optimization-record implies record all optimization remarks.
+  if (Args.hasArg(options::OPT_fsave_optimization_record))
+    Opts.RespectDiagnosticFilters = false;
+  else
+    Opts.RespectDiagnosticFilters = true;
 
   Opts.DiagnosticsWithHotness =
       Args.hasArg(options::OPT_fdiagnostics_show_hotness);
@@ -1236,6 +1264,7 @@ bool clang::ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
   Opts.ElideType = !Args.hasArg(OPT_fno_elide_type);
   Opts.ShowTemplateTree = Args.hasArg(OPT_fdiagnostics_show_template_tree);
   Opts.ErrorLimit = getLastArgIntValue(Args, OPT_ferror_limit, 0, Diags);
+  Opts.WarnLimit = getLastArgIntValue(Args, OPT_fwarn_limit, 0, Diags);
   Opts.MacroBacktraceLimit =
       getLastArgIntValue(Args, OPT_fmacro_backtrace_limit,
                          DiagnosticOptions::DefaultMacroBacktraceLimit, Diags);
@@ -1860,6 +1889,12 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
     Opts.NativeHalfArgsAndReturns = 1;
   }
 
+  if (Opts.HLSExt) {
+    // HLS extension imply native half support
+    Opts.NativeHalfType = 1;
+    Opts.NativeHalfArgsAndReturns = 1;
+  }
+
   // OpenCL and C++ both have bool, true, false keywords.
   Opts.Bool = Opts.OpenCL || Opts.CPlusPlus;
 
@@ -2028,6 +2063,17 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
     else
       LangStd = OpenCLLangStd;
   }
+
+  // -fhls option enable HLS-specific language extensions
+  if (Args.hasArg(options::OPT_fhls))
+    Opts.HLSExt = 1;
+
+  if (Args.hasArg(options::OPT_fstrict_dataflow))
+    Opts.StrictDataflow = 1;
+
+  // -fxmc option enable Model Composer specific language extensions
+  if (Args.hasArg(options::OPT_fxmc))
+    Opts.XMCExt = 1;
 
   Opts.IncludeDefaultHeader = Args.hasArg(OPT_finclude_default_header);
 
@@ -2850,11 +2896,12 @@ bool CompilerInvocation::CreateFromArgs(CompilerInvocation &Res,
   if (LangOpts.OpenMPIsDevice)
     Res.getTargetOpts().HostTriple = Res.getFrontendOpts().AuxTriple;
 
-  // FIXME: Override value name discarding when asan or msan is used because the
+  // FIXME: Override value name discarding when fhls or asan or msan is used
+  // because the
   // backend passes depend on the name of the alloca in order to print out
   // names.
   Res.getCodeGenOpts().DiscardValueNames &=
-      !LangOpts.Sanitize.has(SanitizerKind::Address) &&
+      !LangOpts.HLSExt && !LangOpts.Sanitize.has(SanitizerKind::Address) &&
       !LangOpts.Sanitize.has(SanitizerKind::Memory);
 
   ParsePreprocessorArgs(Res.getPreprocessorOpts(), Args, Diags,

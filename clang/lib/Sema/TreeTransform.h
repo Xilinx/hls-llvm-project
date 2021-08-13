@@ -4,6 +4,11 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
 //===----------------------------------------------------------------------===//
 //
 //  This file implements a semantic tree transformation that takes a given
@@ -27,6 +32,7 @@
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenMP.h"
+#include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/Sema/Designator.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Ownership.h"
@@ -34,6 +40,7 @@
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaDiagnostic.h"
 #include "clang/Sema/SemaInternal.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
@@ -359,7 +366,13 @@ public:
 #define ATTR(X)
 #define PRAGMA_SPELLING_ATTR(X)                                                \
   const X##Attr *Transform##X##Attr(const X##Attr *R) { return R; }
+#define XLX_PRAGMA_SPELLING_ATTR(X)                                            \
+  const X##Attr *Transform##X##Attr(const X##Attr *R) { return R; }
 #include "clang/Basic/AttrList.inc"
+
+  const Attr *instantiateTemplateAttr(const Attr *AT) {
+    return AT;
+  }
 
   /// \brief Transform the given expression.
   ///
@@ -834,6 +847,14 @@ public:
   QualType RebuildDependentSizedExtVectorType(QualType ElementType,
                                               Expr *SizeExpr,
                                               SourceLocation AttributeLoc);
+
+  /// \brief Build a new potentially dependently-sized arbitrary-precision
+  /// integer type given the element type and number of elements.
+  ///
+  /// By default, performs semantic analysis when building the vector type.
+  /// Subclasses may override this routine to provide different behavior.
+  QualType RebuildDependentSizedAPIntType(QualType ElementType, Expr *SizeExpr,
+                                          SourceLocation AttributeLoc);
 
   /// \brief Build a new DependentAddressSpaceType or return the pointee
   /// type variable with the correct address space (retrieved from
@@ -4785,6 +4806,49 @@ QualType TreeTransform<Derived>::TransformDependentSizedExtVectorType(
 }
 
 template <typename Derived>
+QualType TreeTransform<Derived>::TransformDependentSizedAPIntType(
+    TypeLocBuilder &TLB, DependentSizedAPIntTypeLoc TL) {
+  const DependentSizedAPIntType *T = TL.getTypePtr();
+
+  // FIXME: ext vector locs should be nested
+  QualType ElementType = getDerived().TransformType(T->getElementType());
+  if (ElementType.isNull())
+    return QualType();
+
+  // Vector sizes are constant expressions.
+  EnterExpressionEvaluationContext Unevaluated(
+      SemaRef, Sema::ExpressionEvaluationContext::ConstantEvaluated);
+
+  ExprResult Size = getDerived().TransformExpr(T->getSizeInBitsExpr());
+  Size = SemaRef.ActOnConstantExpression(Size);
+  if (Size.isInvalid())
+    return QualType();
+
+  QualType Result = TL.getType();
+  if (getDerived().AlwaysRebuild() || ElementType != T->getElementType() ||
+      Size.get() != T->getSizeInBitsExpr()) {
+    Result = getDerived().RebuildDependentSizedAPIntType(
+        ElementType, Size.get(), T->getAttributeLoc());
+    if (Result.isNull())
+      return QualType();
+  }
+
+  // Result might be dependent or not.
+  if (isa<DependentSizedAPIntType>(Result)) {
+    auto NewTL = TLB.push<DependentSizedAPIntTypeLoc>(Result);
+    NewTL.setNameLoc(TL.getNameLoc());
+  } else if (isa<APIntType>(Result)) {
+    auto NewTL = TLB.push<APIntTypeLoc>(Result);
+    NewTL.setNameLoc(TL.getNameLoc());
+  } else {
+    auto NewTL = TLB.push<BuiltinTypeLoc>(Result);
+    NewTL.setBuiltinLoc(TL.getNameLoc());
+  }
+
+  return Result;
+}
+
+template <typename Derived>
 QualType TreeTransform<Derived>::TransformDependentAddressSpaceType(
     TypeLocBuilder &TLB, DependentAddressSpaceTypeLoc TL) {
   const DependentAddressSpaceType *T = TL.getTypePtr();
@@ -5999,6 +6063,14 @@ TreeTransform<Derived>::TransformElaboratedType(TypeLocBuilder &TLB,
   return Result;
 }
 
+template <typename Derived>
+QualType TreeTransform<Derived>::TransformAPIntType(TypeLocBuilder &TLB,
+                                                    APIntTypeLoc T) {
+  APIntTypeLoc NewT = TLB.push<APIntTypeLoc>(T.getType());
+  NewT.setNameLoc(T.getNameLoc());
+  return T.getType();
+}
+
 template<typename Derived>
 QualType TreeTransform<Derived>::TransformAttributedType(
                                                 TypeLocBuilder &TLB,
@@ -6538,6 +6610,27 @@ TreeTransform<Derived>::TransformLabelStmt(LabelStmt *S) {
                                        SubStmt.get());
 }
 
+namespace {
+  class MarkDeclIsUsed: public EvaluatedExprVisitor<MarkDeclIsUsed>{
+    Sema& S;
+  public: 
+    typedef EvaluatedExprVisitor<MarkDeclIsUsed> Inherited;
+    MarkDeclIsUsed(Sema& s): Inherited(s.Context), S(s){ }
+    void VisitDeclRefExpr(DeclRefExpr* expr) {
+      auto decl =  expr->getDecl();
+      if ( isa<ParmVarDecl>(decl)){
+        decl->markUsed(S.Context);
+        return ;
+      }
+      else if(isa<VarDecl>(decl)){ 
+        decl->markUsed(S.Context);
+        return;
+      }
+    }
+  };
+}
+
+
 template <typename Derived>
 const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   if (!R)
@@ -6549,7 +6642,203 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
 #define PRAGMA_SPELLING_ATTR(X)                                                \
   case attr::X:                                                                \
     return getDerived().Transform##X##Attr(cast<X##Attr>(R));
+#define XLX_PRAGMA_SPELLING_ATTR(X)                                            \
+  case attr::X:                                                                \
+    return getDerived().Transform##X##Attr(cast<X##Attr>(R));
 #include "clang/Basic/AttrList.inc"
+  // FIXME: we may want to create a special macro like PRAGMA_SPELLING_ATTR
+  // such that we can automatically generate the HLS specific attributes
+  // cases requiring substitution.
+  case attr::XlxPipeline:
+  case attr::XlxLoopTripCount:
+  case attr::XlxArrayView:
+  case attr::XlxResetIntrinsic:
+  case attr::XlxArrayGeometry:
+  case attr::XlxAggregate:
+  case attr::XlxStable:
+  case attr::XlxStableContent:
+  case attr::XlxDataPack:
+  case attr::XlxUnrollHint:
+  case attr::XlxCrossDependence:
+  case attr::FPGAResourceLimitHint:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    return attr;
+  }
+  case attr::XlxFunctionAllocation:
+  {
+#if 0
+    llvm::dbgs() << "FunctionAllocationAttr: \n";
+    dyn_cast<XlxFunctionAllocationAttr>(R)->getFunction()->dump();
+#endif
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    const XlxFunctionAllocationAttr* function_alloc = dyn_cast<XlxFunctionAllocationAttr>(attr);
+    Expr * tempInstFunction;
+    {
+      tempInstFunction = function_alloc->getFunction();
+      if (!tempInstFunction){ 
+        auto func_pointer = dyn_cast<XlxFunctionAllocationAttr>(R)->getFunction();
+        getSema().Diag(func_pointer->getLocStart(),
+               diag::warn_xlx_attribute_ignore_because_invalid_option)
+            << "ALLOCATION"
+            << "Instances value is not valid function pointer expression";
+
+        return nullptr;
+      }
+#if 0
+      llvm::dbgs() << "function_pointer, after dump tree transform\n";
+      tempInstFunction->dump();
+      llvm::dbgs() << "after resolve: \n";
+#endif
+      if (isa<UnaryOperator>(tempInstFunction)) {
+        if (cast<UnaryOperator>(tempInstFunction)->getOpcode() == UO_AddrOf) {
+          tempInstFunction = cast<UnaryOperator>(tempInstFunction)->getSubExpr();
+        }
+        else {
+          getSema().Diag(tempInstFunction->getLocStart(),
+                 diag::warn_xlx_attribute_ignore_because_invalid_option)
+              << "ALLOCATION"
+              << "Instances value is not valid function pointer expression";
+          return nullptr;
+        }
+      }
+  
+      if (isa<UnresolvedLookupExpr>(tempInstFunction) || isa<UnresolvedMemberExpr>(tempInstFunction)) { 
+        OverloadExpr * ovl_expr = dyn_cast<OverloadExpr>(tempInstFunction);
+        FunctionDecl *decl = SemaRef.ResolveSingleFunctionTemplateSpecialization(ovl_expr);
+        if (!decl) { 
+          getSema().Diag(tempInstFunction->getLocStart(),
+               diag::warn_xlx_attribute_ignore_because_invalid_option)
+            << "ALLOCATION"
+            << "Instances value is not valid function pointer expression";
+          //can not return  nullptr,  later, codegen will ignore the invalid Attribute 
+        }
+        else { 
+          ExprResult ret = getSema().BuildDeclRefExpr(decl, decl->getType(), VK_LValue, tempInstFunction->getLocStart());
+          tempInstFunction = ret.get();
+        }
+      }
+#if   0
+      tempInstFunction->dump();
+#endif 
+    }
+    return new (SemaRef.getASTContext()) XlxFunctionAllocationAttr(function_alloc->getLocation(), SemaRef.getASTContext(), tempInstFunction, function_alloc->getLimit(), function_alloc->getSpellingListIndex());
+
+
+#if  0
+    Expr* func_ref = dyn_cast<XlxFunctionAllocationAttr>(attr)->getFunction();
+    MarkDeclIsUsed marker(SemaRef);
+    marker.Visit(func_ref);
+    Expr* limit = dyn_cast<XlxFunctionAllocationAttr>(attr)->getLimit();
+    marker.Visit(limit);
+    EnterExpressionEvaluationContext potentiallyEval(SemaRef, Sema::ExpressionEvaluationContext::PotentiallyEvaluated);
+    SemaRef.MarkDeclarationsReferencedInExpr(limit);
+#endif
+  }
+  case attr::XlxDependence:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxDependenceAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::XlxBindStorage:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxBindStorageAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::XlxArrayXForm:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxArrayXFormAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::XlxDisaggr: 
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxDisaggrAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::XlxBindOp:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxBindOpAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::XlxReqdPipeDepth:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxReqdPipeDepthAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+
+  case attr::MAXIInterface: 
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<MAXIInterfaceAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::SAXILITEOffsetInterface: 
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<SAXILITEOffsetInterfaceAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::AXIStreamInterface:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<AXIStreamInterfaceAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::MemoryInterface:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<MemoryInterfaceAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::APFifoInterface:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<APFifoInterfaceAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::APScalarInterface:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<APScalarInterfaceAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::FPGAFunctionCtrlInterface:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    return attr;
+  }
+    
+
   default:
     return R;
   }
@@ -6564,7 +6853,9 @@ StmtResult TreeTransform<Derived>::TransformAttributedStmt(AttributedStmt *S) {
   for (const auto *I : S->getAttrs()) {
     const Attr *R = getDerived().TransformAttr(I);
     AttrsChanged |= (I != R);
-    Attrs.push_back(R);
+    if (R) { 
+      Attrs.push_back(R);
+    }
   }
 
   StmtResult SubStmt = getDerived().TransformStmt(S->getSubStmt());
@@ -6573,9 +6864,14 @@ StmtResult TreeTransform<Derived>::TransformAttributedStmt(AttributedStmt *S) {
 
   if (SubStmt.get() == S->getSubStmt() && !AttrsChanged)
     return S;
+  if (Attrs.size() > 0) { 
 
-  return getDerived().RebuildAttributedStmt(S->getAttrLoc(), Attrs,
+    return getDerived().RebuildAttributedStmt(S->getAttrLoc(), Attrs,
                                             SubStmt.get());
+  }
+  else {
+    return SubStmt;
+  }
 }
 
 template<typename Derived>
@@ -8845,6 +9141,8 @@ TreeTransform<Derived>::TransformDeclRefExpr(DeclRefExpr *E) {
   ValueDecl *ND
     = cast_or_null<ValueDecl>(getDerived().TransformDecl(E->getLocation(),
                                                          E->getDecl()));
+
+
   if (!ND)
     return ExprError();
 
@@ -12390,10 +12688,15 @@ TreeTransform<Derived>::RebuildDependentSizedExtVectorType(QualType ElementType,
   return SemaRef.BuildExtVectorType(ElementType, SizeExpr, AttributeLoc);
 }
 
-template<typename Derived>
+template <typename Derived>
+QualType TreeTransform<Derived>::RebuildDependentSizedAPIntType(
+    QualType ElementType, Expr *SizeExpr, SourceLocation AttributeLoc) {
+  return SemaRef.BuildAPIntType(ElementType, SizeExpr, AttributeLoc);
+}
+
+template <typename Derived>
 QualType TreeTransform<Derived>::RebuildFunctionProtoType(
-    QualType T,
-    MutableArrayRef<QualType> ParamTypes,
+    QualType T, MutableArrayRef<QualType> ParamTypes,
     const FunctionProtoType::ExtProtoInfo &EPI) {
   return SemaRef.BuildFunctionType(T, ParamTypes,
                                    getDerived().getBaseLocation(),

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the AST type info database. Each type node is
@@ -74,8 +79,10 @@ TYPE(VariableArray, ArrayType)
 DEPENDENT_TYPE(DependentSizedArray, ArrayType)
 DEPENDENT_TYPE(DependentSizedExtVector, Type)
 DEPENDENT_TYPE(DependentAddressSpace, Type)
+DEPENDENT_TYPE(DependentSizedAPInt, Type)
 TYPE(Vector, Type)
 TYPE(ExtVector, VectorType)
+TYPE(APInt, Type) // Arbitrary-precision integer type
 ABSTRACT_TYPE(Function, Type)
 TYPE(FunctionProto, FunctionType)
 TYPE(FunctionNoProto, FunctionType)

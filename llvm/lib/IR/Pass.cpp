@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the LLVM Pass infrastructure.  It is primarily
@@ -17,11 +22,13 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GitCommitModule.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassNameParser.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/OptBisect.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/PassInfo.h"
 #include "llvm/PassRegistry.h"
 #include "llvm/PassSupport.h"
@@ -49,6 +56,14 @@ ModulePass::~ModulePass() = default;
 Pass *ModulePass::createPrinterPass(raw_ostream &OS,
                                     const std::string &Banner) const {
   return createPrintModulePass(OS, Banner);
+}
+
+static Module &getModule(Module &M) { return M; }
+GIT_COMMIT_MODULE_PASS_WRAPPER(Module, getModule)
+
+Pass *ModulePass::createGitCommitModulePass(const std::string &GitRepo,
+                                            const std::string &Message) const {
+  return new GitCommitModulePassWrapper(GitRepo, Message);
 }
 
 PassManagerType ModulePass::getPotentialPassManagerType() const {
@@ -150,6 +165,15 @@ Pass *FunctionPass::createPrinterPass(raw_ostream &OS,
   return createPrintFunctionPass(OS, Banner);
 }
 
+static Module &getModule(Function &F) { return *F.getParent(); }
+GIT_COMMIT_MODULE_PASS_WRAPPER(Function, getModule)
+
+Pass *
+FunctionPass::createGitCommitModulePass(const std::string &GitRepo,
+                                        const std::string &Message) const {
+  return new GitCommitFunctionPassWrapper(GitRepo, Message);
+}
+
 PassManagerType FunctionPass::getPotentialPassManagerType() const {
   return PMT_FunctionPassManager;
 }
@@ -173,6 +197,18 @@ bool FunctionPass::skipFunction(const Function &F) const {
 Pass *BasicBlockPass::createPrinterPass(raw_ostream &OS,
                                         const std::string &Banner) const {
   return createPrintBasicBlockPass(OS, Banner);
+}
+
+static Module &getModule(BasicBlock &BB) {
+  return *BB.getParent()->getParent();
+}
+
+GIT_COMMIT_MODULE_PASS_WRAPPER(BasicBlock, getModule)
+
+Pass *
+BasicBlockPass::createGitCommitModulePass(const std::string &GitRepo,
+                                          const std::string &Message) const {
+  return new GitCommitBasicBlockPassWrapper(GitRepo, Message);
 }
 
 bool BasicBlockPass::doInitialization(Function &) {

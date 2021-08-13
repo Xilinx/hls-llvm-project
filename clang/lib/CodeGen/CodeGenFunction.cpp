@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This coordinates the per-function state used while generating code.
@@ -230,6 +235,7 @@ TypeEvaluationKind CodeGenFunction::getEvaluationKind(QualType type) {
     case Type::MemberPointer:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::APInt:
     case Type::FunctionProto:
     case Type::FunctionNoProto:
     case Type::Enum:
@@ -398,6 +404,7 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
         &CGM.getModule(), llvm::Intrinsic::localescape);
     CGBuilderTy(*this, AllocaInsertPt).CreateCall(FrameEscapeFn, EscapeArgs);
   }
+
 
   // Remove the AllocaInsertPt instruction, which is just a convenience for us.
   llvm::Instruction *Ptr = AllocaInsertPt;
@@ -755,6 +762,19 @@ void CodeGenFunction::EmitOpenCLKernelMetadata(const FunctionDecl *FD,
     Fn->setMetadata("intel_reqd_sub_group_size",
                     llvm::MDNode::get(Context, AttrMDArgs));
   }
+
+  if (const auto *A = FD->getAttr<XCLMaxWorkGroupSizeAttr>()) {
+    llvm::Metadata *attrMDArgs[] = {
+        llvm::ConstantAsMetadata::get(Builder.getInt32(A->getXDim())),
+        llvm::ConstantAsMetadata::get(Builder.getInt32(A->getYDim())),
+        llvm::ConstantAsMetadata::get(Builder.getInt32(A->getZDim()))};
+    Fn->setMetadata("xcl_max_work_group_size",
+                    llvm::MDNode::get(Context, attrMDArgs));
+  }
+
+  if (FD->hasAttr<XCLZeroGlobalWorkOffsetAttr>())
+    Fn->setMetadata("xcl_zero_global_work_offset",
+                    llvm::MDNode::get(Context, None));
 }
 
 /// Determine whether the function F ends with a return stmt.
@@ -919,6 +939,12 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     // Add metadata for a kernel function.
     if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D))
       EmitOpenCLKernelMetadata(FD, Fn);
+  }
+
+  // Xilinx specific function attributes
+  if (getLangOpts().HLSExt) {
+    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D))
+      EmitXlxFunctionAttributes(FD, Fn);
   }
 
   // If we are checking function types, emit a function type signature as
@@ -1151,6 +1177,7 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
   // Emit a location at the end of the prologue.
   if (CGDebugInfo *DI = getDebugInfo())
     DI->EmitLocation(Builder, StartLoc);
+
 }
 
 void CodeGenFunction::EmitFunctionBody(FunctionArgList &Args,
@@ -1242,7 +1269,6 @@ QualType CodeGenFunction::BuildFunctionArgList(GlobalDecl GD,
 
   return ResTy;
 }
-
 static bool
 shouldUseUndefinedBehaviorReturnOptimization(const FunctionDecl *FD,
                                              const ASTContext &Context) {
@@ -1277,6 +1303,7 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     BodyRange = FD->getLocation();
   CurEHLocation = BodyRange.getEnd();
 
+
   // Use the location of the start of the function to determine where
   // the function definition is located. By default use the location
   // of the declaration as the location for the subprogram. A function
@@ -1291,6 +1318,13 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
       Loc = SpecDecl->getLocation();
 
   Stmt *Body = FD->getBody();
+  if (getLangOpts().HLSExt) {
+    SmallVector<const XlxBindOpAttr*, 4> attrs;
+    for( auto attr : FD->specific_attrs<XlxBindOpAttr>()){
+      attrs.push_back(attr);
+    }
+    LowerBindOpScope(Body, attrs);
+  }
 
   // Initialize helper which will detect jumps which can cause invalid lifetime
   // markers.
@@ -1985,6 +2019,7 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
     case Type::Complex:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::APInt:
     case Type::Record:
     case Type::Enum:
     case Type::Elaborated:

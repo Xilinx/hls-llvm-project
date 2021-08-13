@@ -108,6 +108,9 @@ struct ClangTidyOptions {
 
   /// \brief Add extra compilation arguments to the start of the list.
   llvm::Optional<ArgList> ExtraArgsBefore;
+
+  /// \brief file path for json format directive.
+  llvm::Optional<std::string> ImportDirective;
 };
 
 /// \brief Abstract interface for retrieving various ClangTidy options.

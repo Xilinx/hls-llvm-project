@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -185,6 +190,7 @@ private:
   bool ShowColors;               // Color printing is enabled.
   OverloadsShown ShowOverloads;  // Which overload candidates to show.
   unsigned ErrorLimit;           // Cap of # errors emitted, 0 -> no limit.
+  unsigned WarnLimit;            // Cap of # warnings emitted, 0 -> no limit.
   unsigned TemplateBacktraceLimit; // Cap on depth of template backtrace stack,
                                    // 0 -> no limit.
   unsigned ConstexprBacktraceLimit; // Cap on depth of constexpr evaluation
@@ -472,7 +478,13 @@ public:
   ///
   /// Zero disables the limit.
   void setErrorLimit(unsigned Limit) { ErrorLimit = Limit; }
-  
+
+  /// \brief Specify a limit for the number of warings we should
+  /// emit before giving up.
+  ///
+  /// Zero disables the limit.
+  void setWarnLimit(unsigned Limit) { WarnLimit = Limit; }
+
   /// \brief Specify the maximum number of template instantiation
   /// notes to emit along with a given diagnostic.
   void setTemplateBacktraceLimit(unsigned Limit) {

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This coordinates the debug information generation while generating code.
@@ -828,6 +833,12 @@ CGDebugInfo::getOrCreateRecordFwdDecl(const RecordType *Ty,
   uint64_t Size = 0;
   uint32_t Align = 0;
 
+  const RecordDecl *D = RD->getDefinition();
+  if (D && D->isCompleteDefinition()) {
+    Size = CGM.getContext().getTypeSize(Ty);
+    Align = CGM.getContext().getTypeAlign(Ty);
+  }
+
   // Create the type.
   SmallString<256> FullName = getUniqueTagTypeName(Ty, CGM, TheCU);
   llvm::DICompositeType *RetTy = DBuilder.createReplaceableCompositeType(
@@ -991,6 +1002,7 @@ static unsigned getDwarfCC(CallingConv CC) {
   case CC_IntelOclBicc:
   case CC_SpirFunction:
   case CC_OpenCLKernel:
+  case CC_FPGAAccel:
   case CC_Swift:
   case CC_PreserveMost:
   case CC_PreserveAll:
@@ -1098,8 +1110,14 @@ CGDebugInfo::createFieldType(StringRef name, QualType type, SourceLocation loc,
   if (!type->isIncompleteArrayType()) {
     TypeInfo TI = CGM.getContext().getTypeInfo(type);
     SizeInBits = TI.Width;
+
     if (!Align)
       Align = getTypeAlignIfRequired(type, CGM.getContext());
+
+    if (auto *IT = type->getAs<APIntType>()) {
+      SizeInBits = IT->getSizeInBits();
+      Align = TI.Align;
+    }
   }
 
   llvm::DINode::DIFlags flags = getAccessFlag(AS, RD);
@@ -1868,6 +1886,10 @@ static bool shouldOmitDefinition(codegenoptions::DebugInfoKind DebugKind,
     if (ES->hasExternalDefinitions(RD) == ExternalASTSource::EK_Always)
       return true;
 
+  if (LangOpts.HLSExt && isa<CXXRecordDecl>(RD) &&
+      !RD->isCompleteDefinitionRequired())
+    return true;
+
   if (DebugKind > codegenoptions::LimitedDebugInfo)
     return false;
 
@@ -2306,6 +2328,16 @@ llvm::DIType *CGDebugInfo::CreateType(const VectorType *Ty,
   return DBuilder.createVectorType(Size, Align, ElementTy, SubscriptArray);
 }
 
+llvm::DIType *CGDebugInfo::CreateType(const APIntType *Ty, llvm::DIFile *Unit) {
+  bool IsSigned = Ty->isSigned();
+  unsigned Encoding =
+      IsSigned ? llvm::dwarf::DW_ATE_signed : llvm::dwarf::DW_ATE_unsigned;
+  std::string Name = IsSigned ? "int" : "uint";
+  unsigned SizeInBits = Ty->getSizeInBits();
+  Name += llvm::utostr(SizeInBits);
+  return DBuilder.createBasicType(Name, SizeInBits, Encoding);
+}
+
 llvm::DIType *CGDebugInfo::CreateType(const ArrayType *Ty, llvm::DIFile *Unit) {
   uint64_t Size;
   uint32_t Align;
@@ -2684,6 +2716,8 @@ llvm::DIType *CGDebugInfo::CreateTypeNode(QualType Ty, llvm::DIFile *Unit) {
   case Type::ExtVector:
   case Type::Vector:
     return CreateType(cast<VectorType>(Ty), Unit);
+  case Type::APInt:
+    return CreateType(cast<APIntType>(Ty), Unit);
   case Type::ObjCObjectPointer:
     return CreateType(cast<ObjCObjectPointerType>(Ty), Unit);
   case Type::ObjCObject:
@@ -3886,7 +3920,7 @@ llvm::DIGlobalVariableExpression *CGDebugInfo::CollectAnonRecordDecls(
 }
 
 void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
-                                     const VarDecl *D) {
+                                     const VarDecl *D, bool DeclOnly) {
   assert(DebugKind >= codegenoptions::LimitedDebugInfo);
   if (D->hasAttr<NoDebugAttr>())
     return;
@@ -3909,6 +3943,16 @@ void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
   // Attempt to store one global variable for the declaration - even if we
   // emit a lot of fields.
   llvm::DIGlobalVariableExpression *GVE = nullptr;
+
+  const RecordDecl *RD = nullptr;
+  bool DefRequired = false;
+
+  // The parent struct of "extern" static data member is not required
+  if (DeclOnly && D->isStaticDataMember()) {
+    RD = cast<RecordDecl>(D->getDeclContext());
+    DefRequired = RD->isCompleteDefinitionRequired();
+    const_cast<RecordDecl *>(RD)->setCompleteDefinitionRequired(false);
+  }
 
   // If this is an anonymous union then we'll want to emit a global
   // variable for each member of the anonymous union so that it's possible
@@ -3934,6 +3978,9 @@ void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
     Var->addDebugInfo(GVE);
   }
   DeclCache[D->getCanonicalDecl()].reset(GVE);
+
+  if (RD && DefRequired)
+    const_cast<RecordDecl *>(RD)->setCompleteDefinitionRequired();
 }
 
 void CGDebugInfo::EmitGlobalVariable(const ValueDecl *VD, const APValue &Init) {

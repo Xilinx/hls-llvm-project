@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 class BackendInfo : CatBackend, ShowInSystemHeader;
@@ -58,6 +63,8 @@ def remark_fe_backend_optimization_remark_analysis_aliasing : Remark<"%0; "
     BackendInfo, InGroup<BackendOptimizationRemarkAnalysis>;
 def warn_fe_backend_optimization_failure : Warning<"%0">, BackendInfo,
     InGroup<BackendOptimizationFailure>, DefaultWarn;
+def error_fe_backend_hls_unsupported: Error<"%0">, BackendInfo;
+def error_fe_backend_hls_report_fatal_err: Error<"%0">, BackendInfo;
 def note_fe_backend_invalid_loc : Note<"could "
   "not determine the original source location for %0:%1:%2">, BackendInfo;
 

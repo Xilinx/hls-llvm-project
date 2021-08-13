@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the CanQual class template, which provides access to
@@ -470,7 +475,15 @@ struct CanProxyAdaptor<DependentSizedExtVectorType>
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(SourceLocation, getAttributeLoc)
 };
 
-template<>
+template <>
+struct CanProxyAdaptor<DependentSizedAPIntType>
+    : public CanProxyBase<DependentSizedAPIntType> {
+  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(const Expr *, getSizeInBitsExpr)
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(SourceLocation, getAttributeLoc)
+};
+
+template <>
 struct CanProxyAdaptor<VectorType> : public CanProxyBase<VectorType> {
   LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getNumElements)
@@ -480,6 +493,11 @@ template<>
 struct CanProxyAdaptor<ExtVectorType> : public CanProxyBase<ExtVectorType> {
   LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getNumElements)
+};
+
+template <> struct CanProxyAdaptor<APIntType> : public CanProxyBase<APIntType> {
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getSizeInBits)
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(bool, isSigned)
 };
 
 template<>

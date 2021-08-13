@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the CloneModule interface which makes a copy of an
@@ -50,10 +55,10 @@ std::unique_ptr<Module> llvm::CloneModule(
   // First off, we need to create the new module.
   std::unique_ptr<Module> New =
       llvm::make_unique<Module>(M->getModuleIdentifier(), M->getContext());
+  New->setSourceFileName(M->getSourceFileName());
   New->setDataLayout(M->getDataLayout());
   New->setTargetTriple(M->getTargetTriple());
   New->setModuleInlineAsm(M->getModuleInlineAsm());
-   
   // Loop over all of the global variables, making corresponding globals in the
   // new module.  Here we add them to the VMap and to the new Module.  We
   // don't worry about attributes or initializers, they will come later.

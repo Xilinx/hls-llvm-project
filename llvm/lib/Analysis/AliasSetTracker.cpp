@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the AliasSetTracker and AliasSet classes.
@@ -594,7 +599,8 @@ AliasSet &AliasSetTracker::addPointer(Value *P, uint64_t Size,
   AliasSet &AS = getAliasSetForPointer(P, Size, AAInfo);
   AS.Access |= E;
 
-  if (!AliasAnyAS && (TotalMayAliasSetSize > SaturationThreshold)) {
+  if (DegradateOnSaturation &&
+      (!AliasAnyAS && (TotalMayAliasSetSize > SaturationThreshold))) {
     // The AST is now saturated. From here on, we conservatively consider all
     // pointers to alias each-other.
     return mergeAllAliasSets();

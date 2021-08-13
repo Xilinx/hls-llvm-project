@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -1077,6 +1082,9 @@ public:
   void AddPragmaHandler(PragmaHandler *Handler) {
     AddPragmaHandler(StringRef(), Handler);
   }
+
+  /// \brief Return true if a specified pragma handler is added.
+  bool hasPragmaHandler(StringRef Name) const;
 
   /// \brief Remove the specific pragma handler from this preprocessor.
   ///

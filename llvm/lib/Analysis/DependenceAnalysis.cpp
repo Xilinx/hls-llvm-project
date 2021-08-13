@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // DependenceAnalysis is an LLVM pass that analyses dependences between memory
@@ -1076,7 +1081,9 @@ bool DependenceInfo::strongSIVtest(const SCEV *Coeff, const SCEV *SrcConst,
   DEBUG(dbgs() << "\t    DstConst = " << *DstConst);
   DEBUG(dbgs() << ", " << *DstConst->getType() << "\n");
   ++StrongSIVapplications;
-  assert(0 < Level && Level <= CommonLevels && "level out of range");
+  // assert(0 < Level && Level <= CommonLevels && "level out of range");
+  if (Level <= 0 || Level > CommonLevels)
+    return false;
   Level--;
 
   const SCEV *Delta = SE->getMinusSCEV(SrcConst, DstConst);
@@ -1209,7 +1216,9 @@ bool DependenceInfo::weakCrossingSIVtest(
   DEBUG(dbgs() << "\t    SrcConst = " << *SrcConst << "\n");
   DEBUG(dbgs() << "\t    DstConst = " << *DstConst << "\n");
   ++WeakCrossingSIVapplications;
-  assert(0 < Level && Level <= CommonLevels && "Level out of range");
+  // assert(0 < Level && Level <= CommonLevels && "Level out of range");
+  if (Level <= 0 || Level > CommonLevels)
+    return false;
   Level--;
   Result.Consistent = false;
   const SCEV *Delta = SE->getMinusSCEV(DstConst, SrcConst);
@@ -1422,7 +1431,9 @@ bool DependenceInfo::exactSIVtest(const SCEV *SrcCoeff, const SCEV *DstCoeff,
   DEBUG(dbgs() << "\t    SrcConst = " << *SrcConst << "\n");
   DEBUG(dbgs() << "\t    DstConst = " << *DstConst << "\n");
   ++ExactSIVapplications;
-  assert(0 < Level && Level <= CommonLevels && "Level out of range");
+  // assert(0 < Level && Level <= CommonLevels && "Level out of range");
+  if (Level <= 0 || Level > CommonLevels)
+    return false;
   Level--;
   Result.Consistent = false;
   const SCEV *Delta = SE->getMinusSCEV(DstConst, SrcConst);
@@ -2084,8 +2095,10 @@ bool DependenceInfo::testSIV(const SCEV *Src, const SCEV *Dst, unsigned &Level,
     const SCEV *SrcCoeff = SrcAddRec->getStepRecurrence(*SE);
     const SCEV *DstCoeff = DstAddRec->getStepRecurrence(*SE);
     const Loop *CurLoop = SrcAddRec->getLoop();
-    assert(CurLoop == DstAddRec->getLoop() &&
-           "both loops in SIV should be same");
+    if (CurLoop != DstAddRec->getLoop())
+      return false;
+    // assert(CurLoop == DstAddRec->getLoop() &&
+    //       "both loops in SIV should be same");
     Level = mapSrcLoop(CurLoop);
     bool disproven;
     if (SrcCoeff == DstCoeff)

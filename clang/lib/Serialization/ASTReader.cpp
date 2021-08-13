@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the ASTReader class, which reads AST files.
@@ -6000,6 +6005,18 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     return Context.getExtVectorType(ElementType, NumElements);
   }
 
+  case TYPE_APINT: {
+    if (Record.size() != 2) {
+      Error(
+          "incorrect encoding of arbitrary-precision integer type in AST file");
+      return QualType();
+    }
+
+    unsigned SizeInBits = Record[0];
+    bool IsSigned = Record[1];
+    return Context.getAPIntType(SizeInBits, IsSigned);
+  }
+
   case TYPE_FUNCTION_NO_PROTO: {
     if (Record.size() != 7) {
       Error("incorrect encoding of no-proto function type");
@@ -6355,6 +6372,17 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
                                                   AttrLoc);
   }
 
+  case TYPE_DEPENDENT_SIZED_APINT: {
+    unsigned Idx = 0;
+
+    // DependentSizedExtVectorType
+    QualType ElementType = readType(*Loc.F, Record, Idx);
+    Expr *SizeExpr = ReadExpr(*Loc.F);
+    SourceLocation AttrLoc = ReadSourceLocation(*Loc.F, Record, Idx);
+
+    return Context.geDependentSizedAPIntType(ElementType, SizeExpr, AttrLoc);
+  }
+
   case TYPE_DEPENDENT_ADDRESS_SPACE: {
     unsigned Idx = 0;
 
@@ -6519,11 +6547,20 @@ void TypeLocReader::VisitDependentSizedExtVectorTypeLoc(
   TL.setNameLoc(ReadSourceLocation());
 }
 
+void TypeLocReader::VisitDependentSizedAPIntTypeLoc(
+    DependentSizedAPIntTypeLoc TL) {
+  TL.setNameLoc(ReadSourceLocation());
+}
+
 void TypeLocReader::VisitVectorTypeLoc(VectorTypeLoc TL) {
   TL.setNameLoc(ReadSourceLocation());
 }
 
 void TypeLocReader::VisitExtVectorTypeLoc(ExtVectorTypeLoc TL) {
+  TL.setNameLoc(ReadSourceLocation());
+}
+
+void TypeLocReader::VisitAPIntTypeLoc(APIntTypeLoc TL) {
   TL.setNameLoc(ReadSourceLocation());
 }
 

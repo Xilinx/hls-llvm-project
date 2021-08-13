@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the RecursiveASTVisitor interface, which recursively
@@ -999,9 +1004,17 @@ DEF_TRAVERSE_TYPE(DependentSizedExtVectorType, {
   TRY_TO(TraverseType(T->getElementType()));
 })
 
+DEF_TRAVERSE_TYPE(DependentSizedAPIntType, {
+  if (T->getSizeInBitsExpr())
+    TRY_TO(TraverseStmt(T->getSizeInBitsExpr()));
+  TRY_TO(TraverseType(T->getElementType()));
+})
+
 DEF_TRAVERSE_TYPE(VectorType, { TRY_TO(TraverseType(T->getElementType())); })
 
 DEF_TRAVERSE_TYPE(ExtVectorType, { TRY_TO(TraverseType(T->getElementType())); })
+
+DEF_TRAVERSE_TYPE(APIntType, {})
 
 DEF_TRAVERSE_TYPE(FunctionNoProtoType,
                   { TRY_TO(TraverseType(T->getReturnType())); })
@@ -1216,10 +1229,18 @@ DEF_TRAVERSE_TYPELOC(DependentSizedExtVectorType, {
   TRY_TO(TraverseType(TL.getTypePtr()->getElementType()));
 })
 
+DEF_TRAVERSE_TYPELOC(DependentSizedAPIntType, {
+  if (TL.getTypePtr()->getSizeInBitsExpr())
+    TRY_TO(TraverseStmt(TL.getTypePtr()->getSizeInBitsExpr()));
+  TRY_TO(TraverseType(TL.getTypePtr()->getElementType()));
+})
+
 // FIXME: VectorTypeLoc is unfinished
 DEF_TRAVERSE_TYPELOC(VectorType, {
   TRY_TO(TraverseType(TL.getTypePtr()->getElementType()));
 })
+
+DEF_TRAVERSE_TYPELOC(APIntType, {})
 
 // FIXME: size and attributes
 // FIXME: base VectorTypeLoc is unfinished

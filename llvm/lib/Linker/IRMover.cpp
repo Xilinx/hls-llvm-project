@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Linker/IRMover.h"
@@ -937,8 +942,12 @@ Expected<Constant *> IRLinker::linkGlobalValueProto(GlobalValue *SGV,
   // names. If we renamed overloaded types we should rename the intrinsic
   // as well.
   if (Function *F = dyn_cast<Function>(NewGV))
-    if (auto Remangled = Intrinsic::remangleIntrinsicFunction(F))
+    if (auto Remangled = Intrinsic::remangleIntrinsicFunction(F)) {
+      auto *OrigGV = NewGV;
       NewGV = Remangled.getValue();
+      if (NewGV != OrigGV) // which means \v OrigGV is invalid.
+        OrigGV->eraseFromParent();
+    }
 
   if (ShouldLink || ForAlias) {
     if (const Comdat *SC = SGV->getComdat()) {

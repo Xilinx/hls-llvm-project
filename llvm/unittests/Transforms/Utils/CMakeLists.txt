@@ -15,4 +15,5 @@ add_llvm_unittest(UtilsTests
   Local.cpp
   OrderedInstructions.cpp
   ValueMapperTest.cpp
+  CloneModule.cpp
   )

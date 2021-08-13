@@ -5,10 +5,17 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LLVMContext.h"
@@ -22,35 +29,49 @@ using namespace llvm;
 
 namespace {
 
-class MatchSelectPatternTest : public testing::Test {
+static Instruction &findInstructionByName(Function *F, StringRef Name) {
+  for (Instruction &I : instructions(F))
+    if (I.getName() == Name)
+      return I;
+
+  llvm_unreachable("Expected value not found");
+}
+
+class ValueTrackingTest : public testing::Test {
 protected:
-  void parseAssembly(const char *Assembly) {
+  std::unique_ptr<Module> parseModule(StringRef Assembly) {
     SMDiagnostic Error;
-    M = parseAssemblyString(Assembly, Error, Context);
+    std::unique_ptr<Module> M = parseAssemblyString(Assembly, Error, Context);
 
     std::string errMsg;
     raw_string_ostream os(errMsg);
     Error.print("", os);
+    EXPECT_TRUE(M) << os.str();
 
-    // A failure here means that the test itself is buggy.
-    if (!M)
-      report_fatal_error(os.str());
-
-    Function *F = M->getFunction("test");
-    if (F == nullptr)
-      report_fatal_error("Test must have a function named @test");
-
-    A = nullptr;
-    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-      if (I->hasName()) {
-        if (I->getName() == "A")
-          A = &*I;
-      }
-    }
-    if (A == nullptr)
-      report_fatal_error("@test must have an instruction %A");
+    return M;
   }
 
+  void parseAssembly(StringRef Assembly) {
+    M = parseModule(Assembly);
+    ASSERT_TRUE(M);
+
+    F = M->getFunction("test");
+    ASSERT_TRUE(F) << "Test must have a function @test";
+    if (!F)
+      return;
+
+    A = &findInstructionByName(F, "A");
+    ASSERT_TRUE(A) << "@test must have an instruction %A";
+  }
+
+  LLVMContext Context;
+  std::unique_ptr<Module> M;
+  Function *F = nullptr;
+  Instruction *A = nullptr;
+};
+
+class MatchSelectPatternTest : public ValueTrackingTest {
+protected:
   void expectPattern(const SelectPatternResult &P) {
     Value *LHS, *RHS;
     Instruction::CastOps CastOp;
@@ -59,10 +80,6 @@ protected:
     EXPECT_EQ(P.NaNBehavior, R.NaNBehavior);
     EXPECT_EQ(P.Ordered, R.Ordered);
   }
-
-  LLVMContext Context;
-  std::unique_ptr<Module> M;
-  Instruction *A, *B;
 };
 
 }
@@ -312,4 +329,241 @@ TEST(ValueTracking, ComputeKnownMulBits) {
   ASSERT_FALSE(Known.hasConflict());
   EXPECT_EQ(Known.One.getZExtValue(), 32u);
   EXPECT_EQ(Known.Zero.getZExtValue(), 95u);
+}
+
+TEST_F(ValueTrackingTest, ComputeKnownBitsPtrToIntTrunc) {
+  // ptrtoint truncates the pointer type.
+  parseAssembly(
+      "define void @test(i8** %p) {\n"
+      "  %A = load i8*, i8** %p\n"
+      "  %i = ptrtoint i8* %A to i32\n"
+      "  %m = and i32 %i, 31\n"
+      "  %c = icmp eq i32 %m, 0\n"
+      "  call void @llvm.assume(i1 %c)\n"
+      "  ret void\n"
+      "}\n"
+      "declare void @llvm.assume(i1)\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(
+      A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 31u);
+  EXPECT_EQ(Known.One.getZExtValue(), 0u);
+}
+
+TEST_F(ValueTrackingTest, ComputeKnownBitsPtrToIntZext) {
+  // ptrtoint zero extends the pointer type.
+  parseAssembly(
+      "define void @test(i8** %p) {\n"
+      "  %A = load i8*, i8** %p\n"
+      "  %i = ptrtoint i8* %A to i128\n"
+      "  %m = and i128 %i, 31\n"
+      "  %c = icmp eq i128 %m, 0\n"
+      "  call void @llvm.assume(i1 %c)\n"
+      "  ret void\n"
+      "}\n"
+      "declare void @llvm.assume(i1)\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(
+      A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 31u);
+  EXPECT_EQ(Known.One.getZExtValue(), 0u);
+}
+
+TEST_F(ValueTrackingTest, ComputeKnownBitsAssumeOnArg) {
+  parseAssembly(
+      "define void @test(i64 %sqrt_size) {\n"
+      "  %rem = urem i64 %sqrt_size, 8"
+      "  %c = icmp eq i64 %rem, 0\n"
+      "  call void @llvm.assume(i1 %c)\n"
+      "  %A = mul i64 %sqrt_size, %sqrt_size"
+      "  ret void\n"
+      "}\n"
+      "declare void @llvm.assume(i1)\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(
+      A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 63u);
+  EXPECT_EQ(Known.One.getZExtValue(), 0u);
+}
+
+TEST_F(ValueTrackingTest, ComputeKnownBitsAssumeOnArgNonPowerOfTwoRHS) {
+  parseAssembly(
+      "define void @test(i64 %s) {\n"
+      "  %rem = urem i64 %s, 3"
+      "  %c = icmp eq i64 %rem, 0\n"
+      "  call void @llvm.assume(i1 %c)\n"
+      "  %A = mul i64 %s, 1\n"
+      "  ret void\n"
+      "}\n"
+      "declare void @llvm.assume(i1)\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(
+      A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 0u);
+  EXPECT_EQ(Known.One.getZExtValue(), 0u);
+}
+
+TEST_F(ValueTrackingTest, ComputeConstantRange) {
+  {
+    // Assumptions:
+    //  * stride >= 5
+    //  * stride < 10
+    //
+    // stride = [5, 10)
+    auto M = parseModule(R"(
+  declare void @llvm.assume(i1)
+
+  define i32 @test(i32 %stride) {
+    %gt = icmp uge i32 %stride, 5
+    call void @llvm.assume(i1 %gt)
+    %lt = icmp ult i32 %stride, 10
+    call void @llvm.assume(i1 %lt)
+    %stride.plus.one = add nsw nuw i32 %stride, 1
+    ret i32 %stride.plus.one
+  })");
+    Function *F = M->getFunction("test");
+
+    AssumptionCache AC(*F);
+    Value *Stride = &*F->arg_begin();
+    ConstantRange CR1 = computeConstantRange(Stride, &AC, nullptr);
+    EXPECT_TRUE(CR1.isFullSet());
+
+    Instruction *I = &findInstructionByName(F, "stride.plus.one");
+    ConstantRange CR2 = computeConstantRange(Stride, &AC, I);
+    EXPECT_EQ(5, CR2.getLower());
+    EXPECT_EQ(10, CR2.getUpper());
+  }
+
+  {
+    // Assumptions:
+    //  * stride >= 5
+    //  * stride < 200
+    //  * stride == 99
+    //
+    // stride = [99, 100)
+    auto M = parseModule(R"(
+  declare void @llvm.assume(i1)
+
+  define i32 @test(i32 %stride) {
+    %gt = icmp uge i32 %stride, 5
+    call void @llvm.assume(i1 %gt)
+    %lt = icmp ult i32 %stride, 200
+    call void @llvm.assume(i1 %lt)
+    %eq = icmp eq i32 %stride, 99
+    call void @llvm.assume(i1 %eq)
+    %stride.plus.one = add nsw nuw i32 %stride, 1
+    ret i32 %stride.plus.one
+  })");
+    Function *F = M->getFunction("test");
+
+    AssumptionCache AC(*F);
+    Value *Stride = &*F->arg_begin();
+    Instruction *I = &findInstructionByName(F, "stride.plus.one");
+    ConstantRange CR = computeConstantRange(Stride, &AC, I);
+    EXPECT_EQ(99, *CR.getSingleElement());
+  }
+
+  {
+    // Assumptions:
+    //  * stride >= 5
+    //  * stride >= 50
+    //  * stride < 100
+    //  * stride < 200
+    //
+    // stride = [50, 100)
+    auto M = parseModule(R"(
+  declare void @llvm.assume(i1)
+
+  define i32 @test(i32 %stride, i1 %cond) {
+    %gt = icmp uge i32 %stride, 5
+    call void @llvm.assume(i1 %gt)
+    %gt.2 = icmp uge i32 %stride, 50
+    call void @llvm.assume(i1 %gt.2)
+    br i1 %cond, label %bb1, label %bb2
+
+  bb1:
+    %lt = icmp ult i32 %stride, 200
+    call void @llvm.assume(i1 %lt)
+    %lt.2 = icmp ult i32 %stride, 100
+    call void @llvm.assume(i1 %lt.2)
+    %stride.plus.one = add nsw nuw i32 %stride, 1
+    ret i32 %stride.plus.one
+
+  bb2:
+    ret i32 0
+  })");
+    Function *F = M->getFunction("test");
+
+    AssumptionCache AC(*F);
+    Value *Stride = &*F->arg_begin();
+    Instruction *GT2 = &findInstructionByName(F, "gt.2");
+    ConstantRange CR = computeConstantRange(Stride, &AC, GT2);
+    EXPECT_EQ(5, CR.getLower());
+    EXPECT_EQ(0, CR.getUpper());
+
+    Instruction *I = &findInstructionByName(F, "stride.plus.one");
+    ConstantRange CR2 = computeConstantRange(Stride, &AC, I);
+    EXPECT_EQ(50, CR2.getLower());
+    EXPECT_EQ(100, CR2.getUpper());
+  }
+
+  {
+    // Assumptions:
+    //  * stride > 5
+    //  * stride < 5
+    //
+    // stride = empty range, as the assumptions contradict each other.
+    auto M = parseModule(R"(
+  declare void @llvm.assume(i1)
+
+  define i32 @test(i32 %stride, i1 %cond) {
+    %gt = icmp ugt i32 %stride, 5
+    call void @llvm.assume(i1 %gt)
+    %lt = icmp ult i32 %stride, 5
+    call void @llvm.assume(i1 %lt)
+    %stride.plus.one = add nsw nuw i32 %stride, 1
+    ret i32 %stride.plus.one
+  })");
+    Function *F = M->getFunction("test");
+
+    AssumptionCache AC(*F);
+    Value *Stride = &*F->arg_begin();
+
+    Instruction *I = &findInstructionByName(F, "stride.plus.one");
+    ConstantRange CR = computeConstantRange(Stride, &AC, I);
+    EXPECT_TRUE(CR.isEmptySet());
+  }
+
+  {
+    // Assumptions:
+    //  * x.1 >= 5
+    //  * x.2 < x.1
+    //
+    // stride = [0, 5)
+    auto M = parseModule(R"(
+  declare void @llvm.assume(i1)
+
+  define i32 @test(i32 %x.1, i32 %x.2) {
+    %gt = icmp uge i32 %x.1, 5
+    call void @llvm.assume(i1 %gt)
+    %lt = icmp ult i32 %x.2, %x.1
+    call void @llvm.assume(i1 %lt)
+    %stride.plus.one = add nsw nuw i32 %x.1, 1
+    ret i32 %stride.plus.one
+  })");
+    Function *F = M->getFunction("test");
+
+    AssumptionCache AC(*F);
+    Value *X2 = &*std::next(F->arg_begin());
+
+    Instruction *I = &findInstructionByName(F, "stride.plus.one");
+    ConstantRange CR1 = computeConstantRange(X2, &AC, I);
+    EXPECT_EQ(0, CR1.getLower());
+    EXPECT_EQ(5, CR1.getUpper());
+
+    // Check the depth cutoff results in a conservative result (full set) by
+    // passing Depth == MaxDepth == 6.
+    ConstantRange CR2 = computeConstantRange(X2, &AC, I, 6);
+    EXPECT_TRUE(CR2.isFullSet());
+  }
 }

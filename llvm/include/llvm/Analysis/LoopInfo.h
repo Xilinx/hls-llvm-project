@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the LoopInfo class that is used to identify natural loops
@@ -55,6 +60,8 @@ namespace llvm {
 class DominatorTree;
 class LoopInfo;
 class Loop;
+class DILocation;
+class DebugLoc;
 class MDNode;
 class PHINode;
 class raw_ostream;
@@ -581,13 +588,15 @@ public:
     return "<unnamed loop>";
   }
 
-private:
+  // For the WorkItemSCEV hack
   Loop() = default;
+  ~Loop() = default;
+
+private:
 
   friend class LoopInfoBase<BasicBlock, Loop>;
   friend class LoopBase<BasicBlock, Loop>;
   explicit Loop(BasicBlock *BB) : LoopBase<BasicBlock, Loop>(BB) {}
-  ~Loop() = default;
 };
 
 //===----------------------------------------------------------------------===//

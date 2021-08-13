@@ -125,6 +125,7 @@ static cl::opt<unsigned>
 MaxArraySize("instcombine-maxarray-size", cl::init(1024),
              cl::desc("Maximum array size considered when doing a combine"));
 
+// HLS close lower on llvm.dbg.declare, because of CR1038754 
 // FIXME: Remove this flag when it is no longer necessary to convert
 // llvm.dbg.declare to avoid inaccurate debug info. Setting this to false
 // increases variable availability at the cost of accuracy. Variables that
@@ -133,7 +134,7 @@ MaxArraySize("instcombine-maxarray-size", cl::init(1024),
 // delete stores to the alloca, leading to misleading and inaccurate debug
 // information. This flag can be removed when those passes are fixed.
 static cl::opt<unsigned> ShouldLowerDbgDeclare("instcombine-lower-dbg-declare",
-                                               cl::Hidden, cl::init(true));
+                                               cl::Hidden, cl::init(false));
 
 Value *InstCombiner::EmitGEPOffset(User *GEP) {
   return llvm::EmitGEPOffset(&Builder, DL, GEP);
@@ -2925,7 +2926,21 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   return true;
 }
 
-bool InstCombiner::run() {
+Instruction *InstCombiner::combine(Instruction &I,
+                                   CustomCombineCallback CustomCombine) {
+  if (CustomCombine) {
+    if (auto MaybeNewI = CustomCombine(I, Builder, DL)) {
+      auto NewI = *MaybeNewI;
+      if (NewI)
+        return replaceInstUsesWith(I, NewI);
+      return nullptr;
+    }
+  }
+
+  return visit(I);
+}
+
+bool InstCombiner::run(CustomCombineCallback CustomCombine) {
   while (!Worklist.isEmpty()) {
     Instruction *I = Worklist.RemoveOne();
     if (I == nullptr) continue;  // skip null values.
@@ -2978,8 +2993,9 @@ bool InstCombiner::run() {
       }
     }
 
+    // HLS comment out sink part, because of region directives 
     // See if we can trivially sink this instruction to a successor basic block.
-    if (I->hasOneUse()) {
+    /*if (I->hasOneUse()) {
       BasicBlock *BB = I->getParent();
       Instruction *UserInst = cast<Instruction>(*I->user_begin());
       BasicBlock *UserParent;
@@ -3016,7 +3032,7 @@ bool InstCombiner::run() {
           }
         }
       }
-    }
+    }*/
 
     // Now that we have an instruction, try combining it to simplify it.
     Builder.SetInsertPoint(I);
@@ -3028,7 +3044,7 @@ bool InstCombiner::run() {
     DEBUG(raw_string_ostream SS(OrigI); I->print(SS); OrigI = SS.str(););
     DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
-    if (Instruction *Result = visit(*I)) {
+    if (Instruction *Result = combine(*I, CustomCombine)) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
@@ -3226,8 +3242,8 @@ static bool prepareICWorklistFromFunction(Function &F, const DataLayout &DL,
 static bool combineInstructionsOverFunction(
     Function &F, InstCombineWorklist &Worklist, AliasAnalysis *AA,
     AssumptionCache &AC, TargetLibraryInfo &TLI, DominatorTree &DT,
-    OptimizationRemarkEmitter &ORE, bool ExpensiveCombines = true,
-    LoopInfo *LI = nullptr) {
+    OptimizationRemarkEmitter &ORE, CustomCombineCallback CustomCombine,
+    bool ExpensiveCombines = true, LoopInfo *LI = nullptr) {
   auto &DL = F.getParent()->getDataLayout();
   ExpensiveCombines |= EnableExpensiveCombines;
 
@@ -3260,7 +3276,7 @@ static bool combineInstructionsOverFunction(
                     AC, TLI, DT, ORE, DL, LI);
     IC.MaxArraySizeForCombine = MaxArraySize;
 
-    if (!IC.run())
+    if (!IC.run(CustomCombine))
       break;
   }
 
@@ -3278,7 +3294,7 @@ PreservedAnalyses InstCombinePass::run(Function &F,
 
   auto *AA = &AM.getResult<AAManager>(F);
   if (!combineInstructionsOverFunction(F, Worklist, AA, AC, TLI, DT, ORE,
-                                       ExpensiveCombines, LI))
+                                       CustomCombine, ExpensiveCombines, LI))
     // No changes, all analyses are preserved.
     return PreservedAnalyses::all();
 
@@ -3320,7 +3336,7 @@ bool InstructionCombiningPass::runOnFunction(Function &F) {
   auto *LI = LIWP ? &LIWP->getLoopInfo() : nullptr;
 
   return combineInstructionsOverFunction(F, Worklist, AA, AC, TLI, DT, ORE,
-                                         ExpensiveCombines, LI);
+                                         CustomCombine, ExpensiveCombines, LI);
 }
 
 char InstructionCombiningPass::ID = 0;

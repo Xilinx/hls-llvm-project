@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the language specific #pragma handlers.
@@ -147,6 +152,23 @@ struct PragmaNoOpenMPHandler : public PragmaHandler {
 
 struct PragmaOpenMPHandler : public PragmaHandler {
   PragmaOpenMPHandler() : PragmaHandler("omp") { }
+  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+                    Token &FirstToken) override;
+};
+
+struct PragmaModelComposerHandler : public PragmaHandler {
+  PragmaModelComposerHandler(Sema &Actions)
+      : PragmaHandler("XMC"), Actions(Actions) {}
+  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+                    Token &FirstToken) override;
+
+private:
+  Sema &Actions;
+};
+
+/// PragmaXlxHLSHandler - "\#pragma HLS ...".
+struct PragmaXlxHandler : public PragmaHandler {
+  PragmaXlxHandler(StringRef Name) : PragmaHandler(Name) {}
   void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
                     Token &FirstToken) override;
 };
@@ -295,6 +317,43 @@ void Parser::initializePragmaHandlers() {
     OpenMPHandler.reset(new PragmaNoOpenMPHandler());
   PP.AddPragmaHandler(OpenMPHandler.get());
 
+  if (getLangOpts().XMCExt) {
+    ModelComposerHandler.reset(new PragmaModelComposerHandler(Actions));
+    PP.AddPragmaHandler(ModelComposerHandler.get());
+  }
+
+  if (getLangOpts().HLSExt) {
+    if (!PP.hasPragmaHandler("HLS")) {
+      XlxHLSHandler.reset(new PragmaXlxHandler("HLS"));
+      PP.AddPragmaHandler(XlxHLSHandler.get());
+    }
+
+    if (!PP.hasPragmaHandler("hls")) {
+      XlxhlsHandler.reset(new PragmaXlxHandler("hls"));
+      PP.AddPragmaHandler(XlxhlsHandler.get());
+    }
+
+    if (!PP.hasPragmaHandler("AP")) {
+      XlxAPHandler.reset(new PragmaXlxHandler("AP"));
+      PP.AddPragmaHandler(XlxAPHandler.get());
+    }
+
+    if (!PP.hasPragmaHandler("ap")) {
+      XlxapHandler.reset(new PragmaXlxHandler("ap"));
+      PP.AddPragmaHandler(XlxapHandler.get());
+    }
+
+    if (!PP.hasPragmaHandler("AUTOPILOT")) {
+      XlxAUTOPILOTHandler.reset(new PragmaXlxHandler("AUTOPILOT"));
+      PP.AddPragmaHandler(XlxAUTOPILOTHandler.get());
+    }
+
+    if (!PP.hasPragmaHandler("autopilot")) {
+      XlxautopilotHandler.reset(new PragmaXlxHandler("autopilot"));
+      PP.AddPragmaHandler(XlxautopilotHandler.get());
+    }
+  }
+
   if (getLangOpts().MicrosoftExt || getTargetInfo().getTriple().isPS4()) {
     MSCommentHandler.reset(new PragmaCommentHandler(Actions));
     PP.AddPragmaHandler(MSCommentHandler.get());
@@ -376,6 +435,38 @@ void Parser::resetPragmaHandlers() {
   }
   PP.RemovePragmaHandler(OpenMPHandler.get());
   OpenMPHandler.reset();
+
+  if (getLangOpts().XMCExt) {
+    PP.RemovePragmaHandler(ModelComposerHandler.get());
+    ModelComposerHandler.reset();
+  }
+
+  if (getLangOpts().HLSExt) {
+    if (XlxHLSHandler) {
+      PP.RemovePragmaHandler(XlxHLSHandler.get());
+      XlxHLSHandler.reset();
+    }
+    if (XlxhlsHandler) {
+      PP.RemovePragmaHandler(XlxhlsHandler.get());
+      XlxhlsHandler.reset();
+    }
+    if (XlxAPHandler) {
+      PP.RemovePragmaHandler(XlxAPHandler.get());
+      XlxAPHandler.reset();
+    }
+    if (XlxapHandler) {
+      PP.RemovePragmaHandler(XlxapHandler.get());
+      XlxapHandler.reset();
+    }
+    if (XlxAUTOPILOTHandler) {
+      PP.RemovePragmaHandler(XlxAUTOPILOTHandler.get());
+      XlxAUTOPILOTHandler.reset();
+    }
+    if (XlxautopilotHandler) {
+      PP.RemovePragmaHandler(XlxautopilotHandler.get());
+      XlxautopilotHandler.reset();
+    }
+  }
 
   if (getLangOpts().MicrosoftExt || getTargetInfo().getTriple().isPS4()) {
     PP.RemovePragmaHandler(MSCommentHandler.get());
@@ -3050,4 +3141,61 @@ void PragmaAttributeHandler::HandlePragma(Preprocessor &PP,
   TokenArray[0].setAnnotationValue(static_cast<void *>(Info));
   PP.EnterTokenStream(std::move(TokenArray), 1,
                       /*DisableMacroExpansion=*/false);
+}
+
+/// \brief Handle Model Composer pragmas.
+///  #pragma XMC [INPORT | OUTPORT] name [, name]*
+void PragmaModelComposerHandler::HandlePragma(Preprocessor &PP,
+                                              PragmaIntroducerKind Introducer,
+                                              Token &Tok) {
+  PP.Lex(Tok);
+  if (Tok.getIdentifierInfo()->isStr("INPORT") ||
+      Tok.getIdentifierInfo()->isStr("OUTPORT") ||
+      Tok.getIdentifierInfo()->isStr("INPUT") ||
+      Tok.getIdentifierInfo()->isStr("OUTPUT")) {
+    std::string direction = Tok.getIdentifierInfo()->getName().str();
+    PP.Lex(Tok);
+    while (Tok.isNot(tok::eod)) {
+      if (Tok.isNot(tok::identifier)) {
+        // PP.Diag(Tok.getLocation(), diag::warn_xmc_expected) << "name [,
+        // name]*";
+        return;
+      }
+      std::string param_name = Tok.getIdentifierInfo()->getName().str();
+      Actions.XMC_portDirection[param_name] = direction;
+      PP.Lex(Tok);
+      if (Tok.is(tok::comma)) {
+        PP.Lex(Tok);
+      }
+    }
+  }
+}
+
+/// \brief Handle '#pragma HLS|AP|AUTOPILOT ...' when HLSExt is enabled.
+///
+//
+void PragmaXlxHandler::HandlePragma(Preprocessor &PP,
+                                    PragmaIntroducerKind Introducer,
+                                    Token &FirstTok) {
+  SmallVector<Token, 16> Pragma;
+  Token Tok;
+  Tok.startToken();
+  Tok.setKind(tok::annot_pragma_XlxHLS);
+  Tok.setLocation(FirstTok.getLocation());
+
+  while (Tok.isNot(tok::eod)) {
+    Pragma.push_back(Tok);
+    PP.Lex(Tok);
+  }
+
+  SourceLocation EodLoc = Tok.getLocation();
+  Tok.startToken();
+  Tok.setKind(tok::annot_pragma_XlxHLS_end);
+  Tok.setLocation(EodLoc);
+  Pragma.push_back(Tok);
+
+  auto Toks = llvm::make_unique<Token[]>(Pragma.size());
+  std::copy(Pragma.begin(), Pragma.end(), Toks.get());
+  PP.EnterTokenStream(std::move(Toks), Pragma.size(),
+                      /*DisableMacroExpansion=*/true);
 }

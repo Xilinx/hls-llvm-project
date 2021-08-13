@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the generic AliasAnalysis interface, which is used as the
@@ -649,6 +654,10 @@ public:
                            uint64_t Size) {
     return getModRefInfo(I, MemoryLocation(P, Size));
   }
+
+  /// Return information about whether an instruction \p I1 and an instruction
+  /// \p I2 may refer to the same memory locations.
+  ModRefInfo getModRefInfo(Instruction *I1, Instruction *I2);
 
   /// Return information about whether a call and an instruction may refer to
   /// the same memory locations.

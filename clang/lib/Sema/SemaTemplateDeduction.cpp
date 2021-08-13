@@ -4,6 +4,11 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
 //  This file implements C++ template argument deduction.
@@ -1792,6 +1797,39 @@ DeduceTemplateArgumentsByTypeMatch(Sema &S,
       return Sema::TDK_NonDeducedMismatch;
     }
 
+    //     (hls extension)
+    //
+    //     T __attribute__(((bitwidth(<integral constant>))))
+    case Type::APInt: {
+      // Both are not dependent.
+      if (isa<APIntType>(Arg)) {
+        if (TDF & TDF_SkipNonDependent)
+          return Sema::TDK_Success;
+
+        if (TDF & TDF_IgnoreQualifiers) {
+          Param = Param.getUnqualifiedType();
+          Arg = Arg.getUnqualifiedType();
+        }
+
+        return Param == Arg ? Sema::TDK_Success : Sema::TDK_NonDeducedMismatch;
+      }
+
+      const auto *APIntParam = cast<APIntType>(Param);
+      if (const auto *APIntArg = dyn_cast<DependentSizedAPIntType>(Arg)) {
+        // We can't check the number of elements, since the argument has a
+        // dependent number of elements. This can only occur during partial
+        // ordering.
+        auto &Ctx = S.getASTContext();
+        auto ParamEltType = APIntParam->getElementType(Ctx);
+        auto ArgEltType = APIntArg->getElementType();
+        // Perform deduction on the element types.
+        return DeduceTemplateArgumentsByTypeMatch(
+            S, TemplateParams, ParamEltType, ArgEltType, Info, Deduced, TDF);
+      }
+
+      return Sema::TDK_NonDeducedMismatch;
+    }
+
     //     (clang extension)
     //
     //     T __attribute__(((ext_vector_type(N))))
@@ -1842,6 +1880,62 @@ DeduceTemplateArgumentsByTypeMatch(Sema &S,
 
         return DeduceNonTypeTemplateArgument(S, TemplateParams, NTTP,
                                              VectorArg->getSizeExpr(),
+                                             Info, Deduced);
+      }
+
+      return Sema::TDK_NonDeducedMismatch;
+    }
+
+    //     (hls extension)
+    //
+    //     T __attribute__(((bitwidth(N))))
+    case Type::DependentSizedAPInt: {
+      const auto *APIntParam = cast<DependentSizedAPIntType>(Param);
+
+      if (const auto *APIntArg = dyn_cast<APIntType>(Arg)) {
+        auto &Ctx = S.getASTContext();
+        auto ArgEltType = APIntArg->getElementType(Ctx);
+        auto ParamEltType = APIntParam->getElementType();
+
+        // Perform deduction on the element types.
+        if (Sema::TemplateDeductionResult Result =
+                DeduceTemplateArgumentsByTypeMatch(S, TemplateParams,
+                                                   ParamEltType, ArgEltType,
+                                                   Info, Deduced, TDF))
+          return Result;
+
+        // Perform deduction on the vector size, if we can.
+        NonTypeTemplateParmDecl *NTTP =
+            getDeducedParameterFromExpr(Info, APIntParam->getSizeInBitsExpr());
+        if (!NTTP)
+          return Sema::TDK_Success;
+
+        llvm::APSInt ArgSize(S.Context.getTypeSize(S.Context.IntTy), false);
+        ArgSize = APIntArg->getSizeInBits();
+        // Note that we use the "array bound" rules here; just like in that
+        // case, we don't have any particular type for the vector size, but
+        // we can provide one if necessary.
+        return DeduceNonTypeTemplateArgument(S, TemplateParams, NTTP, ArgSize,
+                                             S.Context.IntTy, true, Info,
+                                             Deduced);
+      }
+
+      if (const auto *APIntArg = dyn_cast<DependentSizedAPIntType>(Arg)) {
+        // Perform deduction on the element types.
+        if (Sema::TemplateDeductionResult Result =
+                DeduceTemplateArgumentsByTypeMatch(
+                    S, TemplateParams, APIntParam->getElementType(),
+                    APIntArg->getElementType(), Info, Deduced, TDF))
+          return Result;
+
+        // Perform deduction on the size in bits, if we can.
+        NonTypeTemplateParmDecl *NTTP =
+            getDeducedParameterFromExpr(Info, APIntParam->getSizeInBitsExpr());
+        if (!NTTP)
+          return Sema::TDK_Success;
+
+        return DeduceNonTypeTemplateArgument(S, TemplateParams, NTTP,
+                                             APIntArg->getSizeInBitsExpr(),
                                              Info, Deduced);
       }
 
@@ -5182,6 +5276,15 @@ MarkUsedTemplateParameters(ASTContext &Ctx, QualType T,
     break;
   }
 
+  case Type::DependentSizedAPInt: {
+    const auto *IntType = cast<DependentSizedAPIntType>(T);
+    MarkUsedTemplateParameters(Ctx, IntType->getElementType(), OnlyDeduced,
+                               Depth, Used);
+    MarkUsedTemplateParameters(Ctx, IntType->getSizeInBitsExpr(), OnlyDeduced,
+                               Depth, Used);
+    break;
+  }
+
   case Type::DependentAddressSpace: {
     const DependentAddressSpaceType *DependentASType =
         cast<DependentAddressSpaceType>(T);
@@ -5336,6 +5439,7 @@ MarkUsedTemplateParameters(ASTContext &Ctx, QualType T,
 
   // None of these types have any template parameters in them.
   case Type::Builtin:
+  case Type::APInt:
   case Type::VariableArray:
   case Type::FunctionNoProto:
   case Type::Record:

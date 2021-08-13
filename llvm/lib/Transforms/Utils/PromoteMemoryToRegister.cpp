@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file promotes memory references to be register references.  It promotes
@@ -42,6 +47,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
 #include "llvm/Support/Casting.h"
@@ -54,6 +60,7 @@
 #include <vector>
 
 using namespace llvm;
+using namespace PatternMatch;
 
 #define DEBUG_TYPE "mem2reg"
 
@@ -321,7 +328,10 @@ static void addAssumeNonNull(AssumptionCache *AC, LoadInst *LI) {
   AC->registerAssumption(CI);
 }
 
-static void removeLifetimeIntrinsicUsers(AllocaInst *AI) {
+static void
+removeLifetimeIntrinsicUsers(AllocaInst *AI,
+                             SmallVectorImpl<BasicBlock *> &LifeTimeStarts) {
+  LifeTimeStarts.clear();
   // Knowing that this alloca is promotable, we know that it's safe to kill all
   // instructions except for load and store.
 
@@ -336,11 +346,15 @@ static void removeLifetimeIntrinsicUsers(AllocaInst *AI) {
       // Follow the use/def chain to erase them now instead of leaving it for
       // dead code elimination later.
       for (auto UUI = I->user_begin(), UUE = I->user_end(); UUI != UUE;) {
-        Instruction *Inst = cast<Instruction>(*UUI);
+        auto *Inst = cast<Instruction>(*UUI);
         ++UUI;
+        if (match(Inst, m_Intrinsic<Intrinsic::lifetime_start>()))
+          LifeTimeStarts.push_back(Inst->getParent());
         Inst->eraseFromParent();
       }
     }
+    if (match(I, m_Intrinsic<Intrinsic::lifetime_start>()))
+      LifeTimeStarts.push_back(I->getParent());
     I->eraseFromParent();
   }
 }
@@ -547,6 +561,7 @@ void PromoteMem2Reg::run() {
   AllocaDbgDeclares.resize(Allocas.size());
 
   AllocaInfo Info;
+  SmallVector<BasicBlock *, 32> LifetimeStarts;
   LargeBlockInfo LBI;
   ForwardIDFCalculator IDF(DT);
 
@@ -557,7 +572,7 @@ void PromoteMem2Reg::run() {
     assert(AI->getParent()->getParent() == &F &&
            "All allocas should be in the same function, which is same as DF!");
 
-    removeLifetimeIntrinsicUsers(AI);
+    removeLifetimeIntrinsicUsers(AI, LifetimeStarts);
 
     if (AI->use_empty()) {
       // If there are no uses of the alloca, just delete it now.
@@ -616,6 +631,8 @@ void PromoteMem2Reg::run() {
     // Unique the set of defining blocks for efficient lookup.
     SmallPtrSet<BasicBlock *, 32> DefBlocks;
     DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
+    // Pretend writing undef at lifetime starts
+    DefBlocks.insert(LifetimeStarts.begin(), LifetimeStarts.end());
 
     // Determine which blocks the value is live in.  These are blocks which lead
     // to uses.

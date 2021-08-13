@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the internal per-translation-unit state used for llvm translation.
@@ -1073,6 +1078,8 @@ public:
   StringRef getMangledName(GlobalDecl GD);
   StringRef getBlockMangledName(GlobalDecl GD, const BlockDecl *BD);
 
+  void EmitGlobalVarDeclaration(const VarDecl *D);
+
   void EmitTentativeDefinition(const VarDecl *D);
 
   void EmitVTable(CXXRecordDecl *Class);
@@ -1180,6 +1187,9 @@ public:
   ///
   /// NOTE: This should only be called for definitions.
   void SetCommonAttributes(const Decl *D, llvm::GlobalValue *GV);
+
+  /// Set Xilinx specific attributes for global variable
+  void SetXlxAttributes(const VarDecl *D, llvm::GlobalVariable *GV);
 
   /// Set attributes which must be preserved by an alias. This includes common
   /// attributes (i.e. it includes a call to SetCommonAttributes).

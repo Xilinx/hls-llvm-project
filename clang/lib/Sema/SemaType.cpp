@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements type-related semantic analysis.
@@ -23,6 +28,7 @@
 #include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeLocVisitor.h"
 #include "clang/Basic/PartialDiagnostic.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/DeclSpec.h"
@@ -1530,6 +1536,11 @@ static QualType ConvertDeclSpecToType(TypeProcessingState &state) {
 
 #define GENERIC_IMAGE_TYPE(ImgType, Id) \
   case DeclSpec::TST_##ImgType##_t: \
+    if (S.getLangOpts().HLSExt) {                                              \
+      S.Diag(DeclLoc, diag::err_xocc_wrong_compiler_version)                   \
+          << #ImgType << DS.getSourceRange();                                  \
+      declarator.setInvalidType(true);                                         \
+    }                                                                          \
     switch (getImageAccess(DS.getAttributes().getList())) { \
     case OpenCLAccessAttr::Keyword_write_only: \
       Result = Context.Id##WOTy; break; \
@@ -2279,6 +2290,44 @@ QualType Sema::BuildExtVectorType(QualType T, Expr *ArraySize,
   }
 
   return Context.getDependentSizedExtVectorType(T, ArraySize, AttrLoc);
+}
+
+QualType Sema::BuildAPIntType(QualType T, Expr *SizeInBits,
+                              SourceLocation AttrLoc) {
+  // the base type must be builtin integer.
+  if (!T->isIntegerType() || !T->isBuiltinType()) {
+    // TODO: Point to the source range of the declaration
+    Diag(AttrLoc, diag::err_attribute_wrong_decl_type) << "'bitwidth'"
+                                                       << ExpectedInteger;
+    return QualType();
+  }
+
+  bool IsSigned = T->isSignedIntegerType();
+
+  if (!SizeInBits->isTypeDependent() && !SizeInBits->isValueDependent()) {
+    llvm::APSInt bitWidth(32);
+    if (!SizeInBits->isIntegerConstantExpr(bitWidth, Context)) {
+      Diag(AttrLoc, diag::err_attribute_argument_type)
+          << "'bitwidth'" << AANT_ArgumentIntegerConstant
+          << SizeInBits->getSourceRange();
+      return QualType();
+    }
+
+    // Unlike gcc's vector_size attribute, the size is specified as the
+    // number of elements, not the number of bytes.
+    unsigned typeSize = static_cast<unsigned>(bitWidth.getZExtValue());
+
+    if (typeSize == 0 || APIntType::isSizeTooLarge(typeSize)) {
+      Diag(AttrLoc, diag::err_attribute_argument_outof_range)
+          << "'bitwidth'" << 1 << 4096 << SizeInBits->getSourceRange();
+      return QualType();
+    }
+
+    return Context.getAPIntType(typeSize, IsSigned);
+  }
+
+  auto Can = APIntType::GetElementType(Context, IsSigned);
+  return Context.geDependentSizedAPIntType(Can, SizeInBits, AttrLoc);
 }
 
 bool Sema::CheckFunctionReturnType(QualType T, SourceLocation Loc) {
@@ -3312,6 +3361,16 @@ getCCForDeclaratorChunk(Sema &S, Declarator &D,
          Attr; Attr = Attr->getNext()) {
       if (Attr->getKind() == AttributeList::AT_OpenCLKernel) {
         CC = CC_OpenCLKernel;
+        break;
+      }
+    }
+  }
+
+  if (S.getLangOpts().HLSExt) {
+    for (const AttributeList *Attr = D.getDeclSpec().getAttributes().getList();
+         Attr; Attr = Attr->getNext()) {
+      if (Attr->getKind() == AttributeList::AT_SDxKernel) {
+        CC = CC_FPGAAccel;
         break;
       }
     }
@@ -4734,6 +4793,9 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
 
     case DeclaratorChunk::Pipe: {
       T = S.BuildReadPipeType(T, DeclType.Loc);
+      // Pipe has implicit const quantifier
+      if (LangOpts.HLSExt)
+        T = T.withConst();
       processTypeAttrs(state, T, TAL_DeclSpec,
                        D.getDeclSpec().getAttributes().getList());
       break;
@@ -6795,6 +6857,48 @@ void Sema::adjustMemberFunctionCC(QualType &T, bool IsStatic, bool IsCtorOrDtor,
   T = Context.getAdjustedType(T, Wrapped);
 }
 
+/// HandleBitwidthAttr - This attribute specifies the bit width of a
+/// integer type. It is only applicable to integral builtin types, although
+/// arrays, pointers, and function return values are allowed in conjunction
+/// with this construct.
+/// The raw attribute should contain exactly 1 argument, the size for the type,
+/// in number of bits. If CurType and Attr are well formed, this routine will
+/// return the corresponding arbitrary precision integer type .
+static void HandleBitWidthAttr(QualType &CurType, const AttributeList &Attr,
+                               Sema &S) {
+  // check the attribute arguments.
+  if (Attr.getNumArgs() != 1) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << Attr.getName() << 1;
+    Attr.setInvalid();
+    return;
+  }
+
+  Expr *sizeExpr;
+
+  // Special case where the argument is a template id.
+  if (Attr.isArgIdent(0)) {
+    CXXScopeSpec SS;
+    SourceLocation TemplateKWLoc;
+    UnqualifiedId id;
+    id.setIdentifier(Attr.getArgAsIdent(0)->Ident, Attr.getLoc());
+
+    ExprResult Size = S.ActOnIdExpression(S.getCurScope(), SS, TemplateKWLoc,
+                                          id, false, false);
+    if (Size.isInvalid())
+      return;
+
+    sizeExpr = Size.get();
+  } else {
+    sizeExpr = Attr.getArgAsExpr(0);
+  }
+
+  // Create the arbitrary-precision integer type
+  QualType T = S.BuildAPIntType(CurType, sizeExpr, Attr.getLoc());
+  if (!T.isNull())
+    CurType = T;
+}
+
 /// HandleVectorSizeAttribute - this attribute is only applicable to integral
 /// and float scalars, although arrays, pointers, and function return values are
 /// allowed in conjunction with this construct. Aggregates with this attribute
@@ -7196,6 +7300,10 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
       break;
     case AttributeList::AT_VectorSize:
       HandleVectorSizeAttr(type, attr, state.getSema());
+      attr.setUsedAsTypeAttr();
+      break;
+    case AttributeList::AT_BitWidth:
+      HandleBitWidthAttr(type, attr, state.getSema());
       attr.setUsedAsTypeAttr();
       break;
     case AttributeList::AT_ExtVectorType:

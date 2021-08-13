@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements name lookup for C, C++, Objective-C, and
@@ -2725,6 +2730,10 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result, QualType Ty) {
     case Type::Vector:
     case Type::ExtVector:
     case Type::Complex:
+      break;
+
+    // Yet another fundamental type
+    case Type::APInt:
       break;
 
     // Non-deduced auto types only get here for error cases.

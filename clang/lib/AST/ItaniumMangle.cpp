@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Implements C++ name mangling according to the Itanium C++ ABI,
@@ -1932,8 +1937,10 @@ bool CXXNameMangler::mangleUnresolvedTypeOrSimpleId(QualType Ty,
   case Type::DependentSizedArray:
   case Type::DependentAddressSpace:
   case Type::DependentSizedExtVector:
+  case Type::DependentSizedAPInt:
   case Type::Vector:
   case Type::ExtVector:
+  case Type::APInt:
   case Type::FunctionProto:
   case Type::FunctionNoProto:
   case Type::Paren:
@@ -2627,6 +2634,7 @@ StringRef CXXNameMangler::getCallingConvQualifierName(CallingConv CC) {
   case CC_IntelOclBicc:
   case CC_SpirFunction:
   case CC_OpenCLKernel:
+  case CC_FPGAAccel:
   case CC_PreserveMost:
   case CC_PreserveAll:
     // FIXME: we should be mangling all of the above.
@@ -3035,6 +3043,13 @@ void CXXNameMangler::mangleAArch64NeonVectorType(const VectorType *T) {
   Out << TypeName.length() << TypeName;
 }
 
+void CXXNameMangler::mangleType(const APIntType *T) {
+  unsigned SizeInBits = T->getSizeInBits();
+  Out << "Dq" << SizeInBits << '_';
+  mangleType(T->isSigned() ? getASTContext().IntTy
+                           : getASTContext().UnsignedIntTy);
+}
+
 // GNU extension: vector types
 // <type>                  ::= <vector-type>
 // <vector-type>           ::= Dv <positive dimension number> _
@@ -3070,6 +3085,13 @@ void CXXNameMangler::mangleType(const ExtVectorType *T) {
 void CXXNameMangler::mangleType(const DependentSizedExtVectorType *T) {
   Out << "Dv";
   mangleExpression(T->getSizeExpr());
+  Out << '_';
+  mangleType(T->getElementType());
+}
+
+void CXXNameMangler::mangleType(const DependentSizedAPIntType *T) {
+  Out << "Dqe";
+  mangleExpression(T->getSizeInBitsExpr());
   Out << '_';
   mangleType(T->getElementType());
 }
@@ -3794,6 +3816,14 @@ recurse:
     case UETT_SizeOf:
       Out << 's';
       break;
+    case UETT_BitwidthOf: {
+      DiagnosticsEngine &Diags = Context.getDiags();
+      unsigned DiagID =
+          Diags.getCustomDiagID(DiagnosticsEngine::Error,
+                                "cannot yet mangle __bitwidthof expression");
+      Diags.Report(DiagID);
+      return;
+    }
     case UETT_AlignOf:
       Out << 'a';
       break;

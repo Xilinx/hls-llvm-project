@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Statement and Block portions of the Parser
@@ -21,7 +26,21 @@
 #include "clang/Sema/PrettyDeclStackTrace.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/TypoCorrection.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "clang/Basic/HLSDiagnostic.h"
 using namespace clang;
+static bool isHLSStmt( Stmt* stmt){
+  if (isa<AttributedStmt>(stmt)) { 
+     auto sub_stmt = dyn_cast<AttributedStmt>(stmt)->getSubStmt();
+     if (isa<NullStmt>(sub_stmt)) 
+       return true;
+     else 
+       return false;
+  }
+  else { 
+    return false;
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // C99 6.8: Statements and Blocks.
@@ -104,7 +123,7 @@ Parser::ParseStatementOrDeclaration(StmtVector &Stmts,
 
   ParsedAttributesWithRange Attrs(AttrFactory);
   MaybeParseCXX11Attributes(Attrs, nullptr, /*MightBeObjCMessageSend*/ true);
-  if (!MaybeParseOpenCLUnrollHintAttribute(Attrs))
+  if (!MaybeParseOpenCLLoopAttribute(Attrs))
     return StmtError();
 
   StmtResult Res = ParseStatementOrDeclarationAfterAttributes(
@@ -217,8 +236,8 @@ Retry:
     }
 
     if (Tok.is(tok::r_brace)) {
-      Diag(Tok, diag::err_expected_statement);
-      return StmtError();
+        Diag(Tok, diag::err_expected_statement);
+        return StmtError();
     }
 
     return ParseExprStatement();
@@ -230,7 +249,7 @@ Retry:
     return ParseDefaultStatement();
 
   case tok::l_brace:                // C99 6.8.2: compound-statement
-    return ParseCompoundStatement();
+    return ParseCompoundStatement(false, &Attrs);
   case tok::semi: {                 // C99 6.8.3p3: expression[opt] ';'
     bool HasLeadingEmptyMacro = Tok.hasLeadingEmptyMacro();
     return Actions.ActOnNullStmt(ConsumeToken(), HasLeadingEmptyMacro);
@@ -242,14 +261,14 @@ Retry:
     return ParseSwitchStatement(TrailingElseLoc);
 
   case tok::kw_while:               // C99 6.8.5.1: while-statement
-    return ParseWhileStatement(TrailingElseLoc);
+    return ParseWhileStatement(Attrs, TrailingElseLoc);
   case tok::kw_do:                  // C99 6.8.5.2: do-statement
-    Res = ParseDoStatement();
+    Res = ParseDoStatement(Attrs);
     SemiError = "do/while";
     break;
-  case tok::kw_for:                 // C99 6.8.5.3: for-statement
-    return ParseForStatement(TrailingElseLoc);
-
+  case tok::kw_for: { // C99 6.8.5.3: for-statement
+    return ParseForStatement(Attrs, TrailingElseLoc);
+  }
   case tok::kw_goto:                // C99 6.8.6.1: goto-statement
     Res = ParseGotoStatement();
     SemiError = "goto";
@@ -357,6 +376,23 @@ Retry:
     ProhibitAttributes(Attrs);
     return HandlePragmaCaptured();
 
+  case tok::annot_pragma_XlxHLS:
+    //TODO, should we support __attribute__(( ...)) { #pragma HLS .... 
+    //currently, we don't support it, error out directly
+    ProhibitAttributes(Attrs);
+    //generate ParseAttributeList for HLS pragma
+    HandleXlxPragma();
+    //for Dependence Pragma, get the ParsedAttributeList 
+    //and add to "Attrs" list,  the statment following the pragma
+    //will be bind with the HLS attribute
+    if (!getCurScope()->getDependencePragmasRef().empty()) {
+        Attrs.addAll(getCurScope()->getDependencePragmas());
+        getCurScope()->getDependencePragmasRef().clear();
+        return Actions.ActOnNullStmt(Tok.getLocation());
+    }
+    else { 
+        return StmtEmpty();
+    }
   case tok::annot_pragma_openmp:
     ProhibitAttributes(Attrs);
     return ParseOpenMPDeclarativeOrExecutableDirective(Allowed);
@@ -434,7 +470,7 @@ StmtResult Parser::ParseExprStatement() {
 
   // Otherwise, eat the semicolon.
   ExpectAndConsumeSemi(diag::err_expected_semi_after_expr);
-  return Actions.ActOnExprStmt(Expr);
+  return Actions.ActOnExprStmt(Expr, getCurScope());
 }
 
 /// ParseSEHTryBlockCommon
@@ -617,9 +653,38 @@ StmtResult Parser::ParseLabeledStatement(ParsedAttributesWithRange &attrs) {
     }
   }
 
+  ParsedAttributesWithRange StmtAttrs(AttrFactory);
+  StmtAttrs.Range = attrs.Range;
+
+  if (getLangOpts().HLSExt)
+    SinkLabelAttributes(StmtAttrs, attrs, IdentTok);
+
   // If we've not parsed a statement yet, parse one now.
-  if (!SubStmt.isInvalid() && !SubStmt.isUsable())
-    SubStmt = ParseStatement();
+  if (!SubStmt.isInvalid() && !SubStmt.isUsable()) {
+    if (/*getLangOpts().HLSExt && */ !StmtAttrs.empty()) {
+      StmtVector Stmts;
+      ParsedAttributesWithRange TmpAttrs(AttrFactory);
+      TmpAttrs.Range = attrs.Range;
+
+      SubStmt = ParseStatementOrDeclarationAfterAttributes(
+          Stmts, /*Allowed=*/ACK_StatementsOpenMPNonStandalone, nullptr,
+          TmpAttrs);
+
+      if (!SubStmt.isInvalid()) {
+        // only sink attribute to for/while stmt or compoundstmt for now
+        if (!isa<ForStmt>(SubStmt.get()) && !isa<WhileStmt>(SubStmt.get()) &&
+            !isa<DoStmt>(SubStmt.get()) &&
+            !isa<clang::CompoundStmt>(SubStmt.get()))
+          StmtAttrs.clear();
+
+        StmtAttrs.takeAllFrom(TmpAttrs);
+        if (!StmtAttrs.empty())
+          SubStmt = Actions.ProcessStmtAttributes(
+              SubStmt.get(), StmtAttrs.getList(), StmtAttrs.Range);
+      }
+    } else
+      SubStmt = ParseStatement();
+  }
 
   // Broken substmt shouldn't prevent the label from being added to the AST.
   if (SubStmt.isInvalid())
@@ -840,9 +905,11 @@ StmtResult Parser::ParseDefaultStatement() {
                                   SubStmt.get(), getCurScope());
 }
 
-StmtResult Parser::ParseCompoundStatement(bool isStmtExpr) {
-  return ParseCompoundStatement(isStmtExpr,
-                                Scope::DeclScope | Scope::CompoundStmtScope);
+StmtResult
+Parser::ParseCompoundStatement(bool isStmtExpr,
+                               ParsedAttributesWithRange *ScopeAttr) {
+  return ParseCompoundStatement(
+      isStmtExpr, Scope::DeclScope | Scope::CompoundStmtScope, ScopeAttr);
 }
 
 /// ParseCompoundStatement - Parse a "{}" block.
@@ -867,16 +934,20 @@ StmtResult Parser::ParseCompoundStatement(bool isStmtExpr) {
 /// [GNU] label-declaration:
 /// [GNU]   '__label__' identifier-list ';'
 ///
-StmtResult Parser::ParseCompoundStatement(bool isStmtExpr,
-                                          unsigned ScopeFlags) {
+StmtResult
+Parser::ParseCompoundStatement(bool isStmtExpr, unsigned ScopeFlags,
+                               ParsedAttributesWithRange *ScopeAttr) {
   assert(Tok.is(tok::l_brace) && "Not a compount stmt!");
 
   // Enter a scope to hold everything within the compound stmt.  Compound
   // statements can always hold declarations.
   ParseScope CompoundScope(this, ScopeFlags);
-
-  // Parse the statements in the body.
-  return ParseCompoundStatementBody(isStmtExpr);
+  auto StmtResult = ParseCompoundStatementBody(isStmtExpr);
+  // take all hls pragma attr to ScopeAttr when parent scope is not control
+  // scope
+  getCurScope()->hoistParsedHLSPragmas();
+  CompoundScope.Exit(ScopeAttr);
+  return StmtResult;
 }
 
 /// Parse any pragmas at the start of the compound expression. We handle these
@@ -988,7 +1059,7 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
 
     ExpectAndConsumeSemi(diag::err_expected_semi_declaration);
     if (R.isUsable())
-      Stmts.push_back(R.get());
+      Stmts.push_back(AssertSuccess(R));
   }
 
   while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
@@ -1042,7 +1113,7 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
     }
 
     if (R.isUsable())
-      Stmts.push_back(R.get());
+      Stmts.push_back(AssertSuccess(R));
   }
 
   SourceLocation CloseLoc = Tok.getLocation();
@@ -1053,8 +1124,8 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
     // instead of dropping everything and returning StmtError();
     CloseLoc = T.getCloseLocation();
 
-  return Actions.ActOnCompoundStmt(T.getOpenLocation(), CloseLoc,
-                                   Stmts, isStmtExpr);
+  return Actions.ActOnCompoundStmt(T.getOpenLocation(), CloseLoc, Stmts,
+                                   isStmtExpr);
 }
 
 /// ParseParenExprOrCondition:
@@ -1355,7 +1426,8 @@ StmtResult Parser::ParseSwitchStatement(SourceLocation *TrailingElseLoc) {
 ///       while-statement: [C99 6.8.5.1]
 ///         'while' '(' expression ')' statement
 /// [C++]   'while' '(' condition ')' statement
-StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc) {
+StmtResult Parser::ParseWhileStatement(ParsedAttributesWithRange &ScopeAttr,
+                                       SourceLocation *TrailingElseLoc) {
   assert(Tok.is(tok::kw_while) && "Not a while stmt!");
   SourceLocation WhileLoc = Tok.getLocation();
   ConsumeToken();  // eat the 'while'.
@@ -1408,14 +1480,54 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc) {
   ParseScope InnerScope(this, Scope::DeclScope, C99orCXX, Tok.is(tok::l_brace));
 
   // Read the body statement.
-  StmtResult Body(ParseStatement(TrailingElseLoc));
+  StmtResult Body;
+  {
+    /* ------- HLS special syntax --------------
+     * to support HLS statment in while-loop body without bracket
+     * as following show: (while loop is without bracket)
+     * -------------------
+     * while( condition) 
+     *   #pragma HLS pipeline II=xxx
+     *   #pragma HLS tripcount II = yyy
+     *   #pramga HLS latency max =zzz
+     *   a[i] = subFoo(arg1, arg2, arg3)
+     *
+     * -------------------
+     *  following code will parse HLSStatement one by one 
+     *  and collect all HLS statements 
+     *  finaly, generate CompoundStatment as body of while loop
+     */
+    SmallVector<Stmt*, 8> stmts;
+    auto stmt_ret = ParseStatement(TrailingElseLoc, false);
+    while (stmt_ret.isUsable() && isHLSStmt(stmt_ret.get())) {
+      stmts.push_back(stmt_ret.get());
+      stmt_ret = ParseStatement(TrailingElseLoc, false);
+    }
+    if (stmt_ret.isInvalid()) { 
+      //TODO, How to diagnostic error  ?
+      Body = stmt_ret;
+    }
+    else if (stmts.size()){
+      stmts.push_back(stmt_ret.get());
+      Body = Actions.ActOnCompoundStmt(stmts.front()->getLocStart(), stmts.back()->getLocEnd(), stmts, false);
+    }
+    else { 
+      Body = stmt_ret;
+    }
+  }
+
 
   // Pop the body scope if needed.
   InnerScope.Exit();
-  WhileScope.Exit();
+  WhileScope.Exit(&ScopeAttr);
 
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
+
+  // add opencl_unroll_hint whether xlx_unroll_region_hint is in
+  // ParsedHLSPragmas
+  if (getLangOpts().HLSExt)
+    SinkParsedHLSUnrollPragmas(ScopeAttr, getCurScope());
 
   return Actions.ActOnWhileStmt(WhileLoc, Cond, Body.get());
 }
@@ -1424,7 +1536,7 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc) {
 ///       do-statement: [C99 6.8.5.2]
 ///         'do' statement 'while' '(' expression ')' ';'
 /// Note: this lets the caller parse the end ';'.
-StmtResult Parser::ParseDoStatement() {
+StmtResult Parser::ParseDoStatement(ParsedAttributesWithRange &ScopeAttr) {
   assert(Tok.is(tok::kw_do) && "Not a do stmt!");
   SourceLocation DoLoc = ConsumeToken();  // eat the 'do'.
 
@@ -1450,7 +1562,41 @@ StmtResult Parser::ParseDoStatement() {
   ParseScope InnerScope(this, Scope::DeclScope, C99orCXX, Tok.is(tok::l_brace));
 
   // Read the body statement.
-  StmtResult Body(ParseStatement());
+  StmtResult Body;
+  {
+    /* ------- HLS special syntax --------------
+     * to support HLS statment in do-while-loop body without bracket
+     * as following show: (do loop is without bracket)
+     * -------------------
+     *  do
+     *   #pragma HLS pipeline II=xxx
+     *   #pragma HLS tripcount II = yyy
+     *   #pramga HLS latency max =zzz
+     *   a[i] = subFoo(arg1, arg2, arg3)
+     * while( condition) 
+     *
+     * -------------------
+     *  following code will parse HLSStatement one by one 
+     *  and collect all HLS statements 
+     *  finaly, generate CompoundStatment as body of do-while loop
+     */
+    SmallVector<Stmt*, 8> stmts;
+    auto stmt_ret = ParseStatement(nullptr, false);
+    while (stmt_ret.isUsable() && isHLSStmt(stmt_ret.get())) {
+      stmts.push_back(stmt_ret.get());
+      stmt_ret = ParseStatement(nullptr, false);
+    }
+    if (stmt_ret.isInvalid()) { 
+      Body = stmt_ret;
+    }
+    else if (stmts.size()){
+      stmts.push_back(stmt_ret.get());
+      Body = Actions.ActOnCompoundStmt(stmts.front()->getLocStart(), stmts.back()->getLocEnd(), stmts, false);
+    }
+    else { 
+      Body = stmt_ret;
+    }
+  }
 
   // Pop the body scope if needed.
   InnerScope.Exit();
@@ -1483,10 +1629,15 @@ StmtResult Parser::ParseDoStatement() {
   if (Cond.isUsable())
     Cond = Actions.CorrectDelayedTyposInExpr(Cond);
   T.consumeClose();
-  DoScope.Exit();
+  DoScope.Exit(&ScopeAttr);
 
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
+
+  // add opencl_unroll_hint whether xlx_unroll_region_hint is in
+  // ParsedHLSPragmas
+  if (getLangOpts().HLSExt)
+    SinkParsedHLSUnrollPragmas(ScopeAttr, getCurScope());
 
   return Actions.ActOnDoStmt(DoLoc, Body.get(), WhileLoc, T.getOpenLocation(),
                              Cond.get(), T.getCloseLocation());
@@ -1533,7 +1684,8 @@ bool Parser::isForRangeIdentifier() {
 /// [C++0x] for-range-initializer:
 /// [C++0x]   expression
 /// [C++0x]   braced-init-list            [TODO]
-StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc) {
+StmtResult Parser::ParseForStatement(ParsedAttributesWithRange &ScopeAttr,
+                                     SourceLocation *TrailingElseLoc) {
   assert(Tok.is(tok::kw_for) && "Not a for stmt!");
   SourceLocation ForLoc = ConsumeToken();  // eat the 'for'.
 
@@ -1792,7 +1944,7 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc) {
   // See comments in ParseIfStatement for why we create a scope for
   // for-init-statement/condition and a new scope for substatement in C++.
   //
-  ParseScope InnerScope(this, Scope::DeclScope, C99orCXXorObjC,
+  ParseScope InnerScope(this, Scope::DeclScope | Scope::CompoundStmtScope, C99orCXXorObjC,
                         Tok.is(tok::l_brace));
 
   // The body of the for loop has the same local mangling number as the
@@ -1803,16 +1955,53 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc) {
     getCurScope()->decrementMSManglingNumber();
 
   // Read the body statement.
-  StmtResult Body(ParseStatement(TrailingElseLoc));
+  StmtResult Body;
+  {
+    /* ------- HLS special syntax --------------
+     * to support HLS statment in for-loop body without bracket
+     * as following show: (for loop is without bracket)
+     * -----------------------------
+     * for ( i = 0; i < cond; i++ ) 
+     *   #pragma HLS pipeline II=xxx
+     *   #pragma HLS tripcount II = yyy
+     *   #pramga HLS latency max =zzz
+     *   a[i] = subFoo(arg1, arg2, arg3)
+     * -----------------------------
+     *  following code will parse HLSStatement one by one 
+     *  and collect all HLS statements 
+     *  finaly, generate CompoundStatment as body of for loop
+     */
+    SmallVector<Stmt*, 8> stmts;
+    auto stmt_ret = ParseStatement(TrailingElseLoc, false);
+    while (stmt_ret.isUsable() && isHLSStmt(stmt_ret.get())) {
+      stmts.push_back(stmt_ret.get());
+      stmt_ret = ParseStatement(TrailingElseLoc, false);
+    }
+    if (stmt_ret.isInvalid()) { 
+      Body = stmt_ret;
+    }
+    else if (stmts.size()){
+      stmts.push_back(stmt_ret.get());
+      Body = Actions.ActOnCompoundStmt(stmts.front()->getLocStart(), stmts.back()->getLocEnd(), stmts, false);
+    }
+    else { 
+      Body = stmt_ret;
+    }
+  }
 
   // Pop the body scope if needed.
   InnerScope.Exit();
 
   // Leave the for-scope.
-  ForScope.Exit();
+  ForScope.Exit(&ScopeAttr);
 
   if (Body.isInvalid())
     return StmtError();
+
+  // add opencl_unroll_hint whether xlx_unroll_region_hint is in
+  // ParsedHLSPragmas
+  if (getLangOpts().HLSExt)
+    SinkParsedHLSUnrollPragmas(ScopeAttr, getCurScope());
 
   if (ForEach)
    return Actions.FinishObjCForCollectionStmt(ForEachStmt.get(),
@@ -1953,6 +2142,38 @@ StmtResult Parser::ParsePragmaLoopHint(StmtVector &Stmts,
   return S;
 }
 
+template <typename T> static void RemoveInterfaceAttr(Decl *Decl, Parser *P) {
+  if (Decl->hasAttr<T>()) {
+    for (auto *A : Decl->specific_attrs<T>())
+      P->Diag(A->getLocation(), diag::warn_remove_interface_specific_attr)
+          << FixItHint::CreateRemoval(A->getRange());
+    Decl->dropAttr<T>();
+  }
+}
+
+static void CheckInterfaceAttr(FunctionDecl *Decl, Parser *P) {
+  for (auto &parm : Decl->parameters()) {
+    RemoveInterfaceAttr<FPGAScalarInterfaceAttr>(parm, P);
+    RemoveInterfaceAttr<FPGAAddressInterfaceAttr>(parm, P);
+    RemoveInterfaceAttr<FPGARegisterAttr>(parm, P);
+    RemoveInterfaceAttr<FPGADataFootPrintHintAttr>(parm, P);
+    RemoveInterfaceAttr<FPGASignalNameAttr>(parm, P);
+    RemoveInterfaceAttr<FPGAMaxiMaxWidenBitwidthAttr>(parm, P);
+    RemoveInterfaceAttr<FPGAMaxiLatencyAttr>(parm, P);
+    RemoveInterfaceAttr<FPGAMaxiNumRdOutstandAttr>(parm, P);
+    RemoveInterfaceAttr<FPGAMaxiNumWtOutstandAttr>(parm, P);
+    RemoveInterfaceAttr<FPGAMaxiRdBurstLenAttr>(parm, P);
+    RemoveInterfaceAttr<FPGAMaxiWtBurstLenAttr>(parm, P);
+  }
+
+  // return attr
+  RemoveInterfaceAttr<FPGAScalarInterfaceAttr>(Decl, P);
+  // AXI
+  RemoveInterfaceAttr<MAXIAdaptorAttr>(Decl, P);
+  RemoveInterfaceAttr<AXISAdaptorAttr>(Decl, P);
+  RemoveInterfaceAttr<SAXIAdaptorAttr>(Decl, P);
+}
+
 Decl *Parser::ParseFunctionStatementBody(Decl *Decl, ParseScope &BodyScope) {
   assert(Tok.is(tok::l_brace));
   SourceLocation LBraceLoc = Tok.getLocation();
@@ -1969,12 +2190,25 @@ Decl *Parser::ParseFunctionStatementBody(Decl *Decl, ParseScope &BodyScope) {
   // Do not enter a scope for the brace, as the arguments are in the same scope
   // (the function body) as the body itself.  Instead, just read the statement
   // list and put it into a CompoundStmt for safe keeping.
-  StmtResult FnBody(ParseCompoundStatementBody());
+  StmtResult FnBody(ParseCompoundStatementBody(false));
 
   // If the function body could not be parsed, make a bogus compoundstmt.
   if (FnBody.isInvalid()) {
     Sema::CompoundScopeRAII CompoundScope(Actions);
     FnBody = Actions.ActOnCompoundStmt(LBraceLoc, LBraceLoc, None, false);
+  }
+
+  if (getLangOpts().HLSExt && Decl && !Decl->isInvalidDecl()) {
+    auto *Scope = getCurScope();
+    auto *Pragmas = Scope->getParsedHLSPragmas();
+
+    // skip templatefunctiondecl
+    Decl = Decl ? Decl->getAsFunction() : nullptr;
+    Actions.ProcessDeclAttributeList(Scope, Decl, Pragmas);
+
+    // Do not attach interface attribute to none top function
+    if (!Decl->hasAttr<SDxKernelAttr>())
+      CheckInterfaceAttr(cast<FunctionDecl>(Decl), this);
   }
 
   BodyScope.Exit();
@@ -2259,18 +2493,32 @@ void Parser::ParseMicrosoftIfExistsStatement(StmtVector &Stmts) {
   Braces.consumeClose();
 }
 
-bool Parser::ParseOpenCLUnrollHintAttribute(ParsedAttributes &Attrs) {
+bool Parser::ParseOpenCLLoopAttribute(ParsedAttributes &Attrs) {
   MaybeParseGNUAttributes(Attrs);
 
   if (Attrs.empty())
     return true;
 
-  if (Attrs.getList()->getKind() != AttributeList::AT_OpenCLUnrollHint)
+  // Skip label statement.
+  if (Tok.isAnyIdentifier() && getLangOpts().HLSExt)
     return true;
 
-  if (!(Tok.is(tok::kw_for) || Tok.is(tok::kw_while) || Tok.is(tok::kw_do))) {
-    Diag(Tok, diag::err_opencl_unroll_hint_on_non_loop);
-    return false;
+  switch (Attrs.getList()->getKind()) {
+  case AttributeList::AT_XCLDataFlow:
+    if (!Tok.is(tok::kw_for)) {
+      Diag(Tok, diag::err_xcl_dataflow_on_non_for_loop)
+          << FixItHint::CreateRemoval(Attrs.getList()->getRange());
+      return false;
+    }
+    return true;
+  case AttributeList::AT_OpenCLUnrollHint:
+
+    if (!(Tok.is(tok::kw_for) || Tok.is(tok::kw_while) || Tok.is(tok::kw_do))) {
+      Diag(Tok, diag::err_opencl_unroll_hint_on_non_loop);
+      return false;
+    }
+    return true;
+  default:
+    return true;
   }
-  return true;
 }

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -164,9 +169,11 @@ class ASTContext : public RefCountedBase<ASTContext> {
   mutable llvm::FoldingSet<DependentSizedArrayType> DependentSizedArrayTypes;
   mutable llvm::FoldingSet<DependentSizedExtVectorType>
     DependentSizedExtVectorTypes;
+  mutable llvm::FoldingSet<DependentSizedAPIntType> DependentSizedAPIntTypes;
   mutable llvm::FoldingSet<DependentAddressSpaceType>
       DependentAddressSpaceTypes;
   mutable llvm::FoldingSet<VectorType> VectorTypes;
+  mutable llvm::FoldingSet<APIntType> APIntTypes;
   mutable llvm::FoldingSet<FunctionNoProtoType> FunctionNoProtoTypes;
   mutable llvm::ContextualFoldingSet<FunctionProtoType, ASTContext&>
     FunctionProtoTypes;
@@ -677,6 +684,9 @@ public:
   /// Returns empty type if there is no appropriate target types.
   QualType getIntTypeForBitwidth(unsigned DestWidth,
                                  unsigned Signed) const;
+
+  /// getLeastIntType - Return the least integer type for the given APIntType
+  QualType getLeastIntType(const APIntType *IntTy) const;
 
   /// getRealTypeForBitwidth -
   /// sets floating point QualTy according to specified bitwidth.
@@ -1315,6 +1325,10 @@ public:
   /// \pre \p VectorType must be a built-in type.
   QualType getExtVectorType(QualType VectorType, unsigned NumElts) const;
 
+  /// \brief Return the unique reference to an arbitrary precision integer
+  /// with the specified size in bits and signed-ness.
+  QualType getAPIntType(unsigned SizeInBits, bool IsSigned) const;
+
   /// \pre Return a non-unique reference to the type for a dependently-sized
   /// vector of the specified element type.
   ///
@@ -1323,6 +1337,9 @@ public:
   QualType getDependentSizedExtVectorType(QualType VectorType,
                                           Expr *SizeExpr,
                                           SourceLocation AttrLoc) const;
+
+  QualType geDependentSizedAPIntType(QualType ElementType, Expr *SizeExpr,
+                                     SourceLocation AttrLoc) const;
 
   QualType getDependentAddressSpaceType(QualType PointeeType,
                                         Expr *AddrSpaceExpr,
@@ -1741,7 +1758,7 @@ public:
 
   /// \brief The result type of logical operations, '<', '>', '!=', etc.
   QualType getLogicalOperationType() const {
-    return getLangOpts().CPlusPlus ? BoolTy : IntTy;
+    return (getLangOpts().CPlusPlus || getLangOpts().HLSExt) ? BoolTy : IntTy;
   }
 
   /// \brief Emit the Objective-CC type encoding for the given type \p T into
@@ -2378,6 +2395,10 @@ public:
   /// \brief Return the type that \p PromotableType will promote to: C99
   /// 6.3.1.1p2, assuming that \p PromotableType is a promotable integer type.
   QualType getPromotedIntegerType(QualType PromotableType) const;
+
+  /// \brief Return true if the type is promotable integer type (C99 6.3.1.1p2)
+  ///  or promotable APIntType
+  bool isPromotableIntegerOrAPIntType(QualType PromotableType) const;
 
   /// \brief Recurses in pointer/array types until it finds an Objective-C
   /// retainable type and returns its ownership.

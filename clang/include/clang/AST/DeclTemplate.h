@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -1101,6 +1106,12 @@ public:
 
   /// \brief Create an empty function template node.
   static FunctionTemplateDecl *CreateDeserialized(ASTContext &C, unsigned ID);
+
+  // XMC extensions
+  friend class ASTDeclReader;
+  friend class ASTDeclWriter;
+
+  std::map<std::string, std::string> XMCPortDirection;
 
   // Implement isa/cast/dyncast support
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
@@ -234,4 +239,14 @@ def err_arcmt_nsinvocation_ownership : Error<"NSInvocation's %0 is not safe to b
 // OpenMP
 def err_omp_more_one_clause : Error<
   "directive '#pragma omp %0' cannot contain more than one '%1' clause%select{| with '%3' name modifier| with 'source' dependence}2">;
+
+// HLS Extension
+def warn_builtin_bit_from_string_small_bitwidth : Warning<
+  "Requested bitwidth is smaller than value needs (%0 bits). Value "
+  "has been truncated to %1 bits.">,
+  InGroup<StringConversion>;
+def warn_builtin_bit_from_string_large_bitwidth : Warning<
+  "Requested bitwidth is larger than necessary (%0 bits). Value "
+  "has been %1 extended to %2 bits.">,
+  InGroup<StringConversion>;
 }

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 // The documentation is organized by category. Attributes can have category-
@@ -181,6 +186,10 @@ class DefaultIntArgument<string name, int default> : IntArgument<name, 1> {
   int Default = default;
 }
 
+class DefaultStringArgument<string name, string default> : StringArgument<name, 1> {
+  string Default = default;
+}
+
 // This argument is more complex, it includes the enumerator type name,
 // a list of strings to accept, and a list of enumerators to map them to.
 class EnumArgument<string name, string type, list<string> values,
@@ -208,6 +217,10 @@ class Spelling<string name, string variety> {
 }
 
 class GNU<string name> : Spelling<name, "GNU">;
+// XLXPragma spelling implies GNU<name>. We parse pragma into
+// attribute and we will not print pragma back to pragma when
+// we print from AST to C/C++ code.
+class XLXPragma<string name> : Spelling<name, "XLXPragma">;
 class Declspec<string name> : Spelling<name, "Declspec">;
 class Microsoft<string name> : Spelling<name, "Microsoft">;
 class CXX11<string namespace, string name, int version = 1>
@@ -261,6 +274,7 @@ class LangOpt<string name, bit negated = 0> {
   bit Negated = negated;
 }
 def MicrosoftExt : LangOpt<"MicrosoftExt">;
+def HLSExt : LangOpt<"HLSExt">;
 def Borland : LangOpt<"Borland">;
 def CUDA : LangOpt<"CUDA">;
 def COnly : LangOpt<"CPlusPlus", 1>;
@@ -533,6 +547,13 @@ def AbiTag : Attr {
 def AddressSpace : TypeAttr {
   let Spellings = [Clang<"address_space">];
   let Args = [IntArgument<"AddressSpace">];
+  let Documentation = [Undocumented];
+}
+
+def BitWidth : TypeAttr {
+  let Spellings = [GNU<"bitwidth">];
+  let Args = [UnsignedArgument<"BitWidth">];
+  let LangOpts = [HLSExt];
   let Documentation = [Undocumented];
 }
 
@@ -916,9 +937,20 @@ def OpenCLKernel : InheritableAttr {
 }
 
 def OpenCLUnrollHint : InheritableAttr {
-  let Spellings = [GNU<"opencl_unroll_hint">];
-  let Args = [UnsignedArgument<"UnrollHint">];
+  let Spellings = [XLXPragma<"opencl_unroll_hint">];
+  let Args = [ExprArgument<"UnrollHint">,
+              DefaultBoolArgument<"SkipExitCheck", 0>];
   let Documentation = [OpenCLUnrollHintDocs];
+}
+
+def XlxUnrollHint: InheritableAttr { 
+  let Spellings = [GNU<"xlx_unroll_hint">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let TemplateDependent = 1;
+  let Args = [ExprArgument<"Factor">,
+              DefaultBoolArgument<"SkipExitCheck", 0>, 
+              DefaultBoolArgument<"IsDefaultFactor", 0>];
 }
 
 def OpenCLIntelReqdSubGroupSize: InheritableAttr {
@@ -2608,11 +2640,13 @@ def LoopHint : Attr {
                    Pragma<"", "nounroll">];
 
   /// State of the loop optimization specified by the spelling.
+  /// Hack by AutoESL
+  /// TODO: for 'pipeline', use macro to guard
   let Args = [EnumArgument<"Option", "OptionType",
                           ["vectorize", "vectorize_width", "interleave", "interleave_count",
-                           "unroll", "unroll_count", "distribute"],
+                           "unroll", "unroll_count", "unroll_without_check", "distribute", "pipeline", "flatten", "tripcount", "dataflow", "latency"],
                           ["Vectorize", "VectorizeWidth", "Interleave", "InterleaveCount",
-                           "Unroll", "UnrollCount", "Distribute"]>,
+                           "Unroll", "UnrollCount", "UnrollWithoutCheck", "Distribute", "Pipeline", "Flatten", "TripCount", "DataFlow", "Latency"]>,
               EnumArgument<"State", "LoopHintState",
                            ["enable", "disable", "numeric", "assume_safety", "full"],
                            ["Enable", "Disable", "Numeric", "AssumeSafety", "Full"]>,
@@ -2627,7 +2661,12 @@ def LoopHint : Attr {
     case InterleaveCount: return "interleave_count";
     case Unroll: return "unroll";
     case UnrollCount: return "unroll_count";
+    case UnrollWithoutCheck: return "unroll_without_check";
     case Distribute: return "distribute";
+    case Pipeline: return "pipeline";
+    case Flatten: return "flatten";
+    case TripCount: return "tripcount";
+    case DataFlow: return "dataflow";
     }
     llvm_unreachable("Unhandled LoopHint option.");
   }
@@ -2797,8 +2836,851 @@ def OMPDeclareTargetDecl : Attr {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Xilinx extensions
+
+def NoCtor : InheritableAttr {
+  let Spellings = [GNU<"no_ctor">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Var, Field], ErrorDiag>;
+  let Documentation = [HLSExtNoCtorDocs];
+}
+
+def XCLMaxWorkGroupSize : InheritableAttr {
+  let Spellings = [GNU<"xcl_max_work_group_size">];
+  let LangOpts = [HLSExt];
+  let Args = [UnsignedArgument<"XDim">, UnsignedArgument<"YDim", 1>,
+              UnsignedArgument<"ZDim", 1>];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+}
+
+def XCLZeroGlobalWorkOffset : InheritableAttr {
+  let Spellings = [GNU<"xcl_zero_global_work_offset">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+}
+
+def XCLSingleWorkitem : StmtAttr {
+  let Spellings = [GNU<"xcl_single_workitem">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+}
+
+def XCLPipelineLoop : StmtAttr {
+  let Spellings = [GNU<"xcl_pipeline_loop">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"II">];
+}
+
+def XlxRewinding : StmtAttr {
+  let Spellings = [GNU<"xlx_rewinding">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+}
+
+def XCLPipelineWorkitems : InheritableAttr {
+  let Spellings = [GNU<"xcl_pipeline_workitems">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"II">];
+}
+
+def XlxPipeline : StmtAttr {
+  let Spellings = [GNU<"xlx_pipeline">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"II">, DefaultIntArgument<"Style", -1>, DefaultBoolArgument<"Rewind", 0>];
+}
+
+def XCLUnrollWorkitems : StmtAttr {
+  let Spellings = [GNU<"xcl_unroll_workitems">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [UnsignedArgument<"UnrollHint">];
+}
+
+def XlxUnrollRegionHint : StmtAttr {
+  let Spellings = [GNU<"xlx_unroll_region_hint">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [UnsignedArgument<"UnrollHint">,
+             DefaultBoolArgument<"SkipExitCheck", 0>];
+}
+
+
+def XCLFlattenLoop : StmtAttr {
+  let Spellings = [GNU<"xcl_flatten_loop">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [DefaultBoolArgument<"Enable", 1>];
+}
+
+def XlxMergeLoop : InheritableAttr {
+  let Spellings = [GNU<"xlx_merge_loop">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [DefaultBoolArgument<"Force", 0>];
+}
+
+def XCLLoopTripCount : StmtAttr {
+  let Spellings = [XLXPragma<"xcl_loop_tripcount">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Min">,
+              ExprArgument<"Max">,
+              ExprArgument<"Avg">];
+}
+
+def XlxLoopTripCount : StmtAttr {
+  let Spellings = [GNU<"xlx_loop_tripcount">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let TemplateDependent = 1;
+  let Args = [ExprArgument<"Min">,
+              ExprArgument<"Max">,
+              ExprArgument<"Avg">];
+}
+
+def XlxStable: Attr{
+  let Spellings = [GNU<"xlx_stable">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">
+			];
+}
+
+def XlxBindStorage: Attr{
+  let Spellings = [GNU<"xlx_bind_storage">];
+  let Subjects = SubjectList<[Var], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">,
+              ExprArgument<"Type">,
+              ExprArgument<"Impl">,
+              ExprArgument<"Latency">
+             ];
+}
+
+def XlxStableContent: Attr{
+  let Spellings = [GNU<"xlx_stable_content">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">
+			 ];
+}
+
+def XlxShared: Attr {
+  let Spellings = [GNU<"xlx_shared">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">
+			];
+}
+
+def XlxDisaggr: Attr {
+  let Spellings = [GNU<"xlx_disaggregate">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">
+			];
+}
+
+def XlxAggregate: Attr {
+  let Spellings = [GNU<"xlx_aggregate">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">,
+              EnumArgument<"Compact", "Compact",
+                            ["none", "bit", "byte", "auto"], 
+                            ["none", "bit", "byte", "Auto"]
+                            >
+             ];
+}
+def XlxDataPack: Attr{ 
+  let Spellings = [ GNU<"xlx_data_pack">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">,
+              EnumArgument<"BytePadLevel", "BytePadLevel", ["none", "struct_level", "field_level"], ["none", "struct_level", "field_level"] >
+             ];
+
+}
+
+def XlxResourceIPCore: InheritableAttr{
+  let Spellings = [GNU<"xlx_resource_ipcore">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [
+            IdentifierArgument<"IP">,
+            IdentifierArgument<"Core">
+             ];
+}
+
+def XlxBindOp: Attr{
+  let Spellings = [GNU<"xlx_bind_op">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">,
+              ExprArgument<"Op">,
+              ExprArgument<"Impl">,
+              ExprArgument<"Latency">
+             ];
+
+}
+
+def XlxBindOpExpr: Attr{ 
+  let Spellings = [GNU<"xlx_bind_op_expr">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">,
+              ExprArgument<"Op">,
+              ExprArgument<"Impl">,
+              ExprArgument<"Latency">
+             ];
+}
+
+def XCLDependence: Attr{ 
+  let Spellings = [GNU<"xcl_dependence">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">, 
+              EnumArgument<"XClass", "XlxDepClass", [ "NO_CLASS", "array", "pointer"], 
+                            ["NO_CLASS", "array", "pointer"], 1>,
+              EnumArgument<"Type", "XlxDepType", ["intra", "inter"],
+                            ["intra", "inter"] >,
+              EnumArgument<"Direction", "XlxDepDirection", ["NO_DIRECTION", "RAW", "WAR", "WAW"],
+                            ["NO_DIRECTION", "RAW", "WAR", "WAW"] >,
+              ExprArgument<"Distance">,
+              DefaultBoolArgument<"Compel", 0>
+              ];
+}
+
+def XlxDependence: Attr{ 
+  let Spellings = [GNU<"xlx_dependence">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">, 
+              EnumArgument<"XClass", "XlxDepClass", [ "NO_CLASS", "array", "pointer"], 
+                            ["NO_CLASS", "array", "pointer"], 1>,
+              EnumArgument<"Type", "XlxDepType", ["intra", "inter"],
+                            ["intra", "inter"] >,
+              EnumArgument<"Direction", "XlxDepDirection", ["NO_DIRECTION", "RAW", "WAR", "WAW"],
+                            ["NO_DIRECTION", "RAW", "WAR", "WAW"] >,
+              ExprArgument<"Distance">,
+              DefaultBoolArgument<"Compel", 0>
+             ];
+
+}
+
+def XlxCrossDependence: Attr{ 
+  let Spellings = [GNU<"xlx_cross_dependence">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"CrossVar0">, 
+              ExprArgument<"CrossVar1">, 
+              EnumArgument<"XClass", "XlxDepClass", [ "NO_CLASS", "array", "pointer"], 
+                            ["NO_CLASS", "array", "pointer"], 1>,
+              EnumArgument<"Type", "XlxDepType", ["intra", "inter"],
+                            ["intra", "inter"] >,
+              EnumArgument<"Direction", "XlxDepDirection", ["NO_DIRECTION", "RAW", "WAR", "WAW"],
+                            ["NO_DIRECTION", "RAW", "WAR", "WAW"] >,
+              ExprArgument<"Distance">,
+              DefaultBoolArgument<"Compel", 0>
+             ];
+}
+
+def XCLReqdPipeDepth : InheritableAttr {
+  let Spellings = [GNU<"xcl_reqd_pipe_depth">];
+  let Subjects = SubjectList<[Var], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [ ExprArgument<"depth">, 
+              DefaultIntArgument<"type", 0>];
+  let TemplateDependent = 1;
+}
+
+def XlxReqdPipeDepth : InheritableAttr {
+  let Spellings = [GNU<"xlx_reqd_pipe_depth">];
+  let Subjects = SubjectList<[Var], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"variable">, ExprArgument<"depth">, 
+              DefaultIntArgument<"type", 0>];
+  let TemplateDependent = 1;
+}
+
+def XCLVisibility : InheritableAttr {
+  let Spellings = [GNU<"xcl_visibility">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [EnumArgument<"Visibility", "XCLVisibilityType",
+                           ["default", "external", "internal"],
+                           ["Default", "External", "Internal"]>];
+}
+
+def XCLDataFlow : InheritableAttr {
+  let Spellings = [GNU<"xcl_dataflow">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Args = [EnumArgument<"Propagation", "PropagationType",
+                           ["start_propagation", "disable_start_propagation"],
+                           ["StartPropagation", "DisableStartPropagation"], 1>];
+  let Documentation = [Undocumented];
+}
+
+def XCLOutline : StmtAttr {
+  let Spellings = [GNU<"xcl_outline">];
+  let LangOpts = [HLSExt];
+  let Args = [StringArgument<"Name", 1>];
+  let Documentation = [Undocumented];
+}
+
+def XCLInline : InheritableAttr {
+  let Spellings = [GNU<"xcl_inline">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Args = [DefaultIntArgument<"Recursive", 0>];
+  let Documentation = [Undocumented];
+}
+
+def XCLRegionName : StmtAttr {
+  let Spellings = [GNU<"xcl_region">];
+  let LangOpts = [HLSExt];
+  let Args = [StringArgument<"Name">];
+  let Documentation = [Undocumented];
+}
+
+def FPGAResourceHint : InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_resource_hint">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Core">,
+              DefaultStringArgument<"Metadata", "">,
+              ExprArgument<"Latency">];
+  let TemplateDependent = 1;
+}
+
+def XlxFunctionAllocation: InheritableAttr {
+  let Spellings = [GNU<"xlx_function_allocation">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Function">,
+              ExprArgument<"Limit">
+             ];
+  let TemplateDependent = 1;
+}
+
+def FPGAResourceLimitHint: InheritableAttr {
+  let Spellings = [GNU<"fpga_resource_limit_hint">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [
+              IdentifierArgument<"InstanceType">,
+              IdentifierArgument<"InstanceName">,
+              ExprArgument<"Limit">];
+  let TemplateDependent = 1;
+}
+
+def XlxArrayGeometry : InheritableAttr {
+  let Spellings = [GNU<"xlx_array_geometry">];
+  let LangOpts = [HLSExt];
+  let Args = [VariadicExprArgument<"Dims">];
+  let LateParsed = 1;
+  let TemplateDependent = 1;
+  // let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let InheritEvenIfAlreadyPresent = 1;
+  let Documentation = [Undocumented];
+}
+
+def XCLArrayGeometry : InheritableAttr {
+  let Spellings = [GNU<"xcl_array_geometry">];
+  let LangOpts = [HLSExt];
+  let Args = [VariadicExprArgument<"Dims">];
+  let LateParsed = 1;
+  let TemplateDependent = 1;
+  // let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let InheritEvenIfAlreadyPresent = 1;
+  let Documentation = [Undocumented];
+}
+
+def XlxArrayXForm : InheritableAttr {
+  let Spellings = [GNU<"xlx_array_partition">,
+                   GNU<"xlx_array_reshape">];
+  //let Subjects = SubjectList<[Var], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Variable">, 
+              EnumArgument<"Type", "XlxArrayXFormType",
+                           ["cyclic", "block", "complete"],
+                           ["Cyclic", "Block", "Complete"]>,
+              ExprArgument<"Factor", 1>, // here 1 means optional
+              ExprArgument<"Dim", 1>]; // here 1 means optional
+  let TemplateDependent = 1;
+}
+
+def XCLArrayXForm : InheritableAttr {
+  let Spellings = [GNU<"xcl_array_partition">,
+                   GNU<"xcl_array_reshape">];
+  let Subjects = SubjectList<[Var], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [EnumArgument<"Type", "XCLArrayXFormType",
+                           ["cyclic", "block", "complete"],
+                           ["Cyclic", "Block", "Complete"]>,
+              ExprArgument<"Factor", 1>, // here 1 means optional
+              ExprArgument<"Dim", 1>]; // here 1 means optional
+  let TemplateDependent = 1;
+}
+
+def XlxArrayView : StmtAttr {
+  let Spellings = [GNU<"xlx_array_view">];
+  let LangOpts = [HLSExt];
+  let Args = [EnumArgument<"AccessMode", "AccessModeType",
+                           ["read_write", "read_only", "write_only"],
+                           ["ReadWrite", "Readonly", "Writeonly"]>,
+              ExprArgument<"Array">,
+              VariadicExprArgument<"Shape">];
+  let TemplateDependent = 1;
+  // let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+}
+
+
+def XCLArrayView : StmtAttr {
+  let Spellings = [GNU<"xcl_array_view">];
+  let LangOpts = [HLSExt];
+  let Args = [EnumArgument<"AccessMode", "AccessModeType",
+                           ["read_write", "read_only", "write_only"],
+                           ["ReadWrite", "Readonly", "Writeonly"]>,
+              ExprArgument<"Array">,
+              VariadicExprArgument<"Shape">];
+  let TemplateDependent = 1;
+  // let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+}
+
+def SDxKernel : InheritableAttr {
+  let Spellings = [GNU<"sdx_kernel">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"RTLName", 1>,
+              DefaultBoolArgument<"GenericInterface", 1>];
+}
+
+def XlxExprBalance : InheritableAttr {
+  let Spellings = [GNU<"xlx_expr_balance">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [DefaultBoolArgument<"Enabled", 1>];
+}
+
+def XlxFuncInstantiate : InheritableAttr {
+  let Spellings = [GNU<"xlx_func_instantiate">];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+}
+
+def XlxOccurrence : InheritableAttr {
+  let Spellings = [XLXPragma<"xlx_occurrence">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Cycle", 1>];
+  let TemplateDependent = 1;
+}
+
+def XlxProtocol : InheritableAttr {
+  let Spellings = [GNU<"xlx_protocol">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [EnumArgument<"ProtocolMode", "ProtocolModeType",
+                           ["floating", "fixed"],
+                           ["Floating", "Fixed"],
+              1>];
+}
+
+def XlxVarReset : InheritableAttr {
+  let Spellings = [GNU<"xlx_var_reset">];
+  let Subjects = SubjectList<[GlobalVar], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [DefaultBoolArgument<"Enabled", 1>];
+}
+
+def XlxResetIntrinsic: InheritableAttr{ 
+  let Spellings = [GNU<"xlx_reset">];
+  let Subjects = SubjectList<[GlobalVar], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let TemplateDependent = 1;
+  let Args = [
+              ExprArgument<"Variable">,
+              DefaultBoolArgument<"Enabled", 1>
+             ];
+}
+
+def XCLLatency : InheritableAttr {
+  let Spellings = [XLXPragma<"xcl_latency">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Min">,
+              ExprArgument<"Max">];
+}
+
+def MAXIAlias: InheritableAttr{ 
+  let Spellings = [GNU<"m_axi_alias">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Offset">, DefaultIntArgument<"Group", -1>];
+  let TemplateDependent = 1;
+
+}
+def MAXIAdaptor : InheritableAttr {
+  let Spellings = [XLXPragma<"m_axi_adaptor">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Name">,
+              ExprArgument<"NumReadOutstanding">,
+              ExprArgument<"NumWriteOutstanding">,
+              ExprArgument<"MaxReadBurstLength">,
+              ExprArgument<"MaxWriteBurstLength">,
+              ExprArgument<"Latency">];
+  let TemplateDependent = 1;
+}
+
+def SAXIAdaptor : InheritableAttr {
+  let Spellings = [XLXPragma<"s_axi_adaptor">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Name">,
+              StringArgument<"Clock", 1>];
+  let TemplateDependent = 1;
+}
+
+def AXISAdaptor : InheritableAttr {
+  let Spellings = [GNU<"axis_adaptor">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ StringArgument<"Name">,
+               EnumArgument<"RegisterMode", "AXISRegisterModeType",
+                           ["forward", "reverse", "both", "off"],
+                           ["Forward", "Reverse", "Both", "Off"],
+						   1>,
+               EnumArgument<"Direction", "DirectionType",
+                           ["", "readonly", "writeonly"],
+                           ["Unknown", "Readonly", "Writeonly"],
+						   1>];
+}
+
+def BRAMAdaptor : InheritableAttr {
+  let Spellings = [XLXPragma<"bram_adaptor">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [
+    StringArgument<"Name">,
+    EnumArgument<"Mode", "ModeType", [ "bram", "ap_memory" ],
+                 [ "BRAM", "AP_MEMORY" ]>,
+    ExprArgument<"RAMType">,
+    ExprArgument<"RAMImpl">,
+    ExprArgument<"Latency">
+  ];
+  let TemplateDependent = 1;
+}
+
+def FPGAScalarInterface : InheritableAttr {
+  let Spellings = [GNU<"fpga_scalar_interface">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar, Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Mode">,
+              StringArgument<"Adaptor">];
+}
+
+def FPGAScalarInterfaceWrapper : InheritableAttr {
+  let Spellings = [GNU<"fpga_interface_wrapper">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar, Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Mode">,
+              StringArgument<"Adaptor">,
+              ExprArgument<"Offset", 1>]; // Offset is optional
+  let TemplateDependent = 1;
+}
+
+def FPGAAddressInterface : InheritableAttr {
+  let Spellings = [GNU<"fpga_address_interface">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar, Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Mode">,
+              StringArgument<"Adaptor">,
+              EnumArgument<"OffsetMode", "OffsetModeType",
+                           ["", "off", "slave", "direct"],
+                           ["Default", "Off", "Slave", "Direct"],
+              1>];
+}
+
+def SAXILITEOffsetInterface: InheritableAttr{ 
+  let Spellings = [GNU<"s_axilite">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              StringArgument<"BundleName">,
+              ExprArgument<"Offset">, 
+              BoolArgument<"IsRegister">,
+              StringArgument<"SignalName">,
+              StringArgument<"ClockName">,
+              StringArgument<"ImplName">
+             ];
+}
+
+def MAXIInterface: InheritableAttr{ 
+  let Spellings = [GNU<"m_axi">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              StringArgument<"BundleName">,
+              ExprArgument<"Depth">,
+
+              EnumArgument<"OffsetMode", "OffsetModeType",
+                           ["", "off", "slave", "direct"],
+                           ["Default", "Off", "Slave", "Direct"], 1>,
+
+
+              StringArgument<"SignalName">,
+              ExprArgument<"NumReadOutstanding">,
+              ExprArgument<"NumWriteOutstanding">,
+              ExprArgument<"MaxReadBurstLength">,
+              ExprArgument<"MaxWriteBurstLength">,
+              ExprArgument<"Latency">,
+              ExprArgument<"MaxWidenBitWidth">
+             ];
+}
+
+
+def AXIStreamInterface: InheritableAttr{ 
+  let Spellings = [GNU<"axis">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              BoolArgument<"IsRegister">,
+              EnumArgument<"RegisterMode", "RegisterModeEnum", ["forward","reverse", "both", "off" ], ["forward","reverse", "both", "off" ]>,
+              ExprArgument<"Depth">, 
+              StringArgument<"SignalName">,
+              StringArgument<"BundleName">
+             ];
+}
+
+def MemoryInterface: InheritableAttr{ 
+  let Spellings = [GNU<"xlx_memory">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              StringArgument<"Mode">,
+              StringArgument<"StorageType">,
+              ExprArgument<"Latency">,
+              StringArgument<"SignalName">,
+              ExprArgument<"Depth">
+             ];
+}
+
+
+def APFifoInterface:InheritableAttr{ 
+  let Spellings = [GNU<"ap_fifo">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              BoolArgument<"IsRegister">,
+              ExprArgument<"Depth">,
+              StringArgument<"SignalName">
+             ];
+}
+
+def APScalarInterface: InheritableAttr{ 
+  let Spellings = [GNU<"ap_scalar">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              StringArgument<"Mode">,
+              BoolArgument<"IsRegister">,
+              StringArgument<"SignalName">
+             ];
+
+}
+
+def FPGAFunctionCtrlInterface : InheritableAttr {
+  let Spellings = [GNU<"fpga_function_ctrl_interface">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar, Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Mode">,
+              StringArgument<"Name">
+             ];
+}
+
+def FPGARegister : InheritableAttr {
+  let Spellings = [GNU<"fpga_register">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar, Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+}
+
+def FPGADataFootPrintHint : InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_foot_print_hint">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Depth">];
+  let TemplateDependent = 1;
+}
+
+def FPGASignalName : InheritableAttr {
+  let Spellings = [GNU<"fpga_signal_name">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [StringArgument<"Name">];
+}
+
+def FPGAMaxiMaxWidenBitwidth: InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_maxi_max_widen_bitwidth">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"MaxWidenBitwidth">];
+  let TemplateDependent = 1;
+}
+def FPGAMaxiLatency : InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_maxi_latency">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Latency">];
+  let TemplateDependent = 1;
+}
+
+def FPGAMaxiNumRdOutstand: InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_maxi_num_read_outstanding">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"NumRdOutstand">];
+  let TemplateDependent = 1;
+}
+
+def FPGAMaxiNumWtOutstand: InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_maxi_num_write_outstanding">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"NumWtOutstand">];
+  let TemplateDependent = 1;
+}
+
+def FPGAMaxiRdBurstLen: InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_maxi_max_read_burst_length">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"RdBurstLen">];
+  let TemplateDependent = 1;
+}
+
+def FPGAMaxiWtBurstLen: InheritableAttr {
+  let Spellings = [XLXPragma<"fpga_maxi_max_write_burst_length">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"WtBurstLen">];
+  let TemplateDependent = 1;
+}
+
+def CodeGenType : InheritableAttr {
+  let Spellings = [GCC<"codegen_type">];
+  let LangOpts = [HLSExt];
+  // let Subjects = [Record];
+  let Args = [TypeArgument<"Type">];
+  let Documentation = [Undocumented];
+}
+
+def Unpacked: InheritableAttr {
+  let Spellings = [GCC<"unpacked">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+}
+
+def HLSPreserve: InheritableAttr{ 
+  let Spellings = [GCC<"hls_preserve">];
+  let Subjects = SubjectList<[Function]>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+}
+
+//===----------------------------------------------------------------------===//
+
 def InternalLinkage : InheritableAttr {
   let Spellings = [Clang<"internal_linkage">];
   let Subjects = SubjectList<[Var, Function, CXXRecord]>;
   let Documentation = [InternalLinkageDocs];
 }
+

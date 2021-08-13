@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This family of functions perform various local transformations to the
@@ -18,8 +23,6 @@
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/None.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -34,6 +37,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -47,6 +51,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
@@ -83,6 +88,8 @@
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
+
+extern cl::opt<bool> HLS;
 
 #define DEBUG_TYPE "local"
 
@@ -123,7 +130,14 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
 
       // Replace the conditional branch with an unconditional one.
       Builder.CreateBr(Destination);
+      // XILINX_HLS: to keep llvm.loop for loopID
+      MDNode *MD = T->getMetadata("llvm.loop");
       BI->eraseFromParent();
+      if(MD) {
+        TerminatorInst *NewTI = BB->getTerminator();
+        NewTI->setMetadata("llvm.loop", MD);
+      }
+
       if (DDT)
         DDT->deleteEdge(BB, OldDest);
       return true;
@@ -962,7 +976,11 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
     }
   }
 
-  DEBUG(dbgs() << "Killing Trivial BB: \n" << *BB);
+  if (HLS && !BB->getSinglePredecessor() &&
+      !Succ->getSinglePredecessor() &&
+      !isa<PHINode>(BB->begin()))
+    return false;
+ DEBUG(dbgs() << "Killing Trivial BB: \n" << *BB);
 
   std::vector<DominatorTree::UpdateType> Updates;
   if (DDT) {
@@ -1379,6 +1397,71 @@ void llvm::findDbgUsers(SmallVectorImpl<DbgInfoIntrinsic *> &DbgUsers,
           DbgUsers.push_back(DII);
 }
 
+Optional<DebugLoc> llvm::getDebugLocFromDbgValue(Instruction *I) {
+  SmallVector<DbgValueInst *, 2> DVs;
+  findDbgValues(DVs, I);
+  SmallVector<DbgValueInst *, 2> SameBBDVs(
+    make_filter_range(DVs, [I](DbgValueInst *DV) {
+                      return DV->getParent() == I->getParent();
+                      }));
+  if (SameBBDVs.size() == 1)
+    return SameBBDVs.pop_back_val()->getDebugLoc();
+  return None;
+}
+
+std::string llvm::getNameFromDbgInfo(Value *V) {
+  SmallVector<DbgInfoIntrinsic *, 2> DVIs;
+  findDbgUsers(DVIs, V);
+  for (auto *DVI : DVIs)
+    if (DILocalVariable *DI = DVI->getVariable()) {
+      StringRef Name = DI->getName();
+      if (!Name.empty())
+        return Name;
+    }
+
+  return "";
+}
+
+llvm::DiagnosticInfoOptimizationBase::Argument::Argument(StringRef Key,
+                                                   const Value *V)
+    : Key(Key) {
+  if (auto *F = dyn_cast<Function>(V))
+    initFuncArg(F);
+  else if (auto *I = dyn_cast<Instruction>(V))
+    initInstArg(I);
+  else if (auto *A = dyn_cast<llvm::Argument>(V))
+    initArgArg(A);
+  else if (auto *G = dyn_cast<GlobalValue>(V))
+    initGVArg(G);
+  else if (auto *C = dyn_cast<Constant>(V))
+    initConstantArg(C);
+}
+
+void DiagnosticInfoOptimizationBase::Argument::initInstArg(
+    const Instruction *I) {
+  Loc = I->getDebugLoc();
+  if(!I->getDebugLoc()) {
+    auto NewDbgLoc = getDebugLocFromDbgValue(const_cast<Instruction *>(I));
+    if (NewDbgLoc.hasValue())
+      Loc = NewDbgLoc.getValue();
+  }
+
+  Val = getNameFromDbgInfo(const_cast<Instruction *>(I));
+  if (Val.empty())
+    Val = I->getOpcodeName();
+}
+
+void DiagnosticInfoOptimizationBase::Argument::initArgArg(
+    const llvm::Argument *A) {
+  Val = getNameFromDbgInfo(const_cast<llvm::Argument *>(A));
+  if (Val.empty())
+    Val = GlobalValue::dropLLVMManglingEscape(A->getName());
+}
+
+void DiagnosticInfoOptimizationBase::Argument::initGVArg(const GlobalValue *G) {
+  Val = GlobalValue::dropLLVMManglingEscape(G->getName());
+}
+
 bool llvm::replaceDbgDeclare(Value *Address, Value *NewAddress,
                              Instruction *InsertBefore, DIBuilder &Builder,
                              bool DerefBefore, int Offset, bool DerefAfter) {
@@ -1511,9 +1594,12 @@ unsigned llvm::removeAllNonTerminatorAndEHPadInstructions(BasicBlock *BB) {
   while (EndInst != &BB->front()) {
     // Delete the next to last instruction.
     Instruction *Inst = &*--EndInst->getIterator();
-    if (!Inst->use_empty() && !Inst->getType()->isTokenTy())
+    bool isDirectiveScope = isa<IntrinsicInst>(Inst) && 
+        (dyn_cast<IntrinsicInst>(Inst)->getIntrinsicID() == Intrinsic::directive_scope_entry || dyn_cast<IntrinsicInst>(Inst)->getIntrinsicID() == Intrinsic::directive_scope_exit);
+
+    if (!Inst->use_empty() && (!Inst->getType()->isTokenTy()|| isDirectiveScope))
       Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
-    if (Inst->isEHPad() || Inst->getType()->isTokenTy()) {
+    if (Inst->isEHPad() || (Inst->getType()->isTokenTy() && !isDirectiveScope)) {
       EndInst = Inst;
       continue;
     }

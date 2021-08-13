@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the Sema class, which performs semantic analysis and
@@ -586,6 +591,9 @@ public:
 
   /// \brief All the tentative definitions encountered in the TU.
   TentativeDefinitionsType TentativeDefinitions;
+
+  /// \brief All "extern" declarations
+  std::vector<VarDecl *> ExternDecls;
 
   typedef LazyVector<const DeclaratorDecl *, ExternalSemaSource,
                      &ExternalSemaSource::ReadUnusedFileScopedDecls, 2, 2>
@@ -1384,6 +1392,7 @@ public:
                           SourceRange Brackets, DeclarationName Entity);
   QualType BuildExtVectorType(QualType T, Expr *ArraySize,
                               SourceLocation AttrLoc);
+  QualType BuildAPIntType(QualType T, Expr *SizeInBits, SourceLocation AttrLoc);
   QualType BuildAddressSpaceAttr(QualType &T, Expr *AddrSpace,
                                  SourceLocation AttrLoc);
 
@@ -3316,6 +3325,56 @@ public:
                                 bool IncludeCXX11Attributes = true);
   bool ProcessAccessDeclAttributeList(AccessSpecDecl *ASDecl,
                                       const AttributeList *AttrList);
+  bool ProcessXlxDeclAttributes(Scope *scope, Decl *D,
+                                const AttributeList &Attr);
+
+  bool instantiateXlxDeclAttr(Attr *NewAttr, Decl *NewD);
+
+  ASTConsumer* BuildXlxHoistConsumer( ASTConsumer &Consumer );
+
+  // XILINX Attribute expression checks
+  bool CheckXCLLatencyExprs(Expr *MinExpr, Expr *MaxExpr, SourceLocation Loc,
+                            StringRef AttrName);
+  bool CheckOpenCLUnrollHintExprs(Expr *Factor, SourceLocation Loc,
+                                  StringRef AttrName);
+  bool CheckXCLLoopTripCountExprs(Expr *Min, Expr *Max, Expr* &Avg,
+                                  SourceLocation Loc, StringRef AttrName);
+  bool CheckFPGAResourceHintExprs(Expr *Latency, SourceLocation Loc,
+                                  StringRef AttrName);
+  bool CheckFPGAResourceLimitHintExprs(Expr *Limit, SourceLocation Loc,
+                                       StringRef AttrName);
+  bool CheckXCLReqdPipeDepthExprs(Expr *Depth, SourceLocation Loc,
+                                  StringRef AttrName);
+  bool CheckXlxArrayXFormExprs(Expr *Factor, Expr *Dim, Decl *D,
+                               SourceRange SrcRange, SourceLocation Loc,
+                               StringRef AttrName);
+  bool CheckXlxOccurrenceExprs(Expr *Cycle, SourceLocation Loc,
+                               StringRef AttrName);
+  bool CheckMAXIAdaptorExprs(Expr *ReadOutStanding, Expr *WriteOutStanding,
+                             Expr *ReadBurstLength, Expr *WriteBurstLength,
+                             Expr *Latency, SourceLocation Loc,
+                             StringRef AttrName);
+  bool CheckFPGAScalarInterfaceWrapperExprs(Expr *Offset, SourceLocation Loc,
+                                            StringRef AttrName);
+  bool CheckBRAMAdaptorExprs(Expr *Latency, SourceLocation Loc,
+                             StringRef AttrName);
+  bool CheckSAXIAdaptorExprs(SourceLocation Loc,
+                             StringRef AttrName);
+  bool CheckFPGADataFootPrintHintExprs(Expr *Depth, SourceLocation Loc,
+                                       StringRef AttrName);
+  bool CheckFPGAMaxiMaxWidenBitwidthExprs(Expr *MaxWidenBitwidth, SourceLocation Loc,
+                                       StringRef AttrName);
+  bool CheckFPGAMaxiLatencyExprs(Expr *Latency, SourceLocation Loc,
+                                       StringRef AttrName);
+  bool CheckFPGAMaxiNumRdOutstandExprs(Expr *NumRdOutstand, SourceLocation Loc,
+                                       StringRef AttrName);
+  bool CheckFPGAMaxiNumWtOutstandExprs(Expr *NumWtOutstand, SourceLocation Loc,
+                                       StringRef AttrName);
+  bool CheckFPGAMaxiRdBurstLenExprs(Expr *RdBurstLen, SourceLocation Loc,
+                                       StringRef AttrName);
+  bool CheckFPGAMaxiWtBurstLenExprs(Expr *WtBurstLen, SourceLocation Loc,
+                                       StringRef AttrName);
+
 
   void checkUnusedDeclAttributes(Declarator &D);
 
@@ -3383,6 +3442,12 @@ public:
   /// \brief Stmt attributes - this routine is the top level dispatcher.
   StmtResult ProcessStmtAttributes(Stmt *Stmt, AttributeList *Attrs,
                                    SourceRange Range);
+  void CheckForIncompatibleXlxAttributes(ArrayRef<const Attr *> Attrs);
+  Attr *ProcessXlxStmtAttributes(Stmt *St, const AttributeList &A,
+                                 SourceRange Range);
+  void ApplyXlxScopeAttributes(SmallVectorImpl<Stmt *> &Stmts, AttributeList *attrs );
+  void ApplyXlxDependenceAttributes(SmallVectorImpl<Stmt*> &Stmts, AttributeList *attrs);
+
 
   void WarnConflictingTypedMethods(ObjCMethodDecl *Method,
                                    ObjCMethodDecl *MethodDecl,
@@ -3661,7 +3726,7 @@ public:
     return FullExprArg(FE.get());
   }
 
-  StmtResult ActOnExprStmt(ExprResult Arg);
+  StmtResult ActOnExprStmt(ExprResult Arg, Scope *CurScope = nullptr);
   StmtResult ActOnExprStmtError();
 
   StmtResult ActOnNullStmt(SourceLocation SemiLoc,
@@ -3699,6 +3764,14 @@ public:
     void disable() { Active = false; }
   };
 
+  // Semantics check and tree transformations for dataflow scope
+  class ConditionResult;
+  StmtResult ActOnDataflowStmt(Stmt *S);
+  bool CheckSPMDDataflow(Decl *D, SourceLocation L);
+  //bool  CheckDataflowLoop(Stmt *First, ConditionResult &Second,
+  //                                 FullExprArg &Third, Stmt *Body);
+  //bool CheckDataflowRegion( SmallVectorImpl<Stmt *> &Stmts, SmallVector<VarDecl*, 4> &localDecls );
+  ExprResult CheckOrBuildPartialConstExpr(Expr *E);
   StmtResult ActOnDeclStmt(DeclGroupPtrTy Decl,
                                    SourceLocation StartLoc,
                                    SourceLocation EndLoc);
@@ -3719,7 +3792,6 @@ public:
                                  ArrayRef<const Attr*> Attrs,
                                  Stmt *SubStmt);
 
-  class ConditionResult;
   StmtResult ActOnIfStmt(SourceLocation IfLoc, bool IsConstexpr,
                          Stmt *InitStmt,
                          ConditionResult Cond, Stmt *ThenVal,
@@ -9829,6 +9901,8 @@ public:
                                              bool AllowFold = true);
   ExprResult VerifyIntegerConstantExpression(Expr *E,
                                              llvm::APSInt *Result = nullptr);
+  ExprResult HLSVerifyIntegerConstantExpression(Expr *E,
+                                             llvm::APSInt *Result = nullptr);
 
   /// VerifyBitField - verifies that a bit field expression is an ICE and has
   /// the correct width, and that the field type is valid.
@@ -9840,8 +9914,13 @@ public:
 
 private:
   unsigned ForceCUDAHostDeviceDepth = 0;
+  bool _hls_pragma_parsing = false;
 
 public:
+  void EnterHLSParsing(){ _hls_pragma_parsing = true; }
+  void ExitHLSParsing( ){ _hls_pragma_parsing = false; }
+  bool IsHLSParsing() { return _hls_pragma_parsing ; }
+
   /// Increments our count of the number of times we've seen a pragma forcing
   /// functions to be __host__ __device__.  So long as this count is greater
   /// than zero, all functions encountered will be __host__ __device__.
@@ -10321,6 +10400,7 @@ private:
   bool CheckX86BuiltinGatherScatterScale(unsigned BuiltinID, CallExpr *TheCall);
   bool CheckX86BuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
   bool CheckPPCBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
+  bool CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
 
   bool SemaBuiltinVAStart(unsigned BuiltinID, CallExpr *TheCall);
   bool SemaBuiltinVAStartARMMicrosoft(CallExpr *Call);
@@ -10567,6 +10647,9 @@ public:
   // (including field initializers) is fully parsed.
   SmallVector<CXXRecordDecl*, 4> DelayedDllExportClasses;
 
+  // For the XMC pragma (Xilinx extension)
+  std::map<std::string, std::string> XMC_portDirection;
+
 private:
   class SavePendingParsedClassStateRAII {
   public:
@@ -10643,6 +10726,7 @@ public:
       Expr *E,
       llvm::function_ref<void(Expr *, RecordDecl *, FieldDecl *, CharUnits)>
           Action);
+
 };
 
 /// \brief RAII object that enters a new expression evaluation context.

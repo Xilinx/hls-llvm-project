@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass implements an _extremely_ simple interprocedural constant
@@ -15,6 +20,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/XILINXFunctionInfoUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -42,6 +48,10 @@ namespace {
 
     bool runOnModule(Module &M) override;
   };
+}
+
+static bool needsToDropFunctionAttr(Constant *C, const DataLayout &DL) {
+  return isa<GlobalVariable>(GetUnderlyingObject(C, DL));
 }
 
 /// PropagateConstantsIntoArguments - Look at all uses of the specified
@@ -102,19 +112,29 @@ static bool PropagateConstantsIntoArguments(Function &F) {
   // If we got to this point, there is a constant argument!
   assert(NumNonconstant != ArgumentConstants.size());
   bool MadeChange = false;
+  bool NeedsToDropFunctionAttr = false;
   Function::arg_iterator AI = F.arg_begin();
   for (unsigned i = 0, e = ArgumentConstants.size(); i != e; ++i, ++AI) {
     // Do we have a constant argument?
     if (ArgumentConstants[i].second || AI->use_empty() ||
         AI->hasInAllocaAttr() || (AI->hasByValAttr() && !F.onlyReadsMemory()))
       continue;
-  
+
     Value *V = ArgumentConstants[i].first;
-    if (!V) V = UndefValue::get(AI->getType());
+    if (!V)
+      V = UndefValue::get(AI->getType());
+    else
+      NeedsToDropFunctionAttr |=
+          needsToDropFunctionAttr(cast<Constant>(V),
+                                  F.getParent()->getDataLayout());
     AI->replaceAllUsesWith(V);
     ++NumArgumentsProped;
     MadeChange = true;
   }
+
+  if (MadeChange && NeedsToDropFunctionAttr)
+    F.removeFnAttr(Attribute::ArgMemOnly);
+
   return MadeChange;
 }
 
@@ -141,6 +161,13 @@ static bool PropagateConstantReturn(Function &F) {
   // value we don't see, so we may end up interprocedurally propagating
   // the return value incorrectly.
   if (F.hasFnAttribute(Attribute::Naked))
+    return false;
+
+  // Hack for wrapper function
+  if (F.hasFnAttribute("fpga.top.func"))
+    return false;
+
+  if (F.hasFnAttribute("hls_preserve")) 
     return false;
 
   // Check to see if this function returns a constant.
@@ -273,7 +300,7 @@ bool IPCP::runOnModule(Module &M) {
   while (LocalChange) {
     LocalChange = false;
     for (Function &F : M)
-      if (!F.isDeclaration()) {
+      if (!F.isDeclaration() && !isIPCore(&F)) {
         // Delete any klingons.
         F.removeDeadConstantUsers();
         if (F.hasLocalLinkage())

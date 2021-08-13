@@ -40,6 +40,7 @@ UseEmplaceCheck::UseEmplaceCheck(StringRef Name, ClangTidyContext *Context)
       TupleMakeFunctions(utils::options::parseStringList(
           Options.get("TupleMakeFunctions", DefaultTupleMakeFunctions))) {}
 
+
 void UseEmplaceCheck::registerMatchers(MatchFinder *Finder) {
   if (!getLangOpts().CPlusPlus11)
     return;

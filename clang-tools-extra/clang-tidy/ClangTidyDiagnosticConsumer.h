@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CLANGTIDYDIAGNOSTICCONSUMER_H
@@ -42,9 +47,13 @@ namespace tidy {
 /// FIXME: Make Diagnostics flexible enough to support this directly.
 struct ClangTidyError : tooling::Diagnostic {
   ClangTidyError(StringRef CheckName, Level DiagLevel, StringRef BuildDirectory,
-                 bool IsWarningAsError);
+                 bool IsWarningAsError, bool HasConflictedFixes,
+                 PresumedLoc Loc, std::string FilePath);
 
   bool IsWarningAsError;
+  bool HasConflictedFixes;
+  PresumedLoc RealLoc;
+  std::string RealFilePath;
 };
 
 /// \brief Read-only set of strings represented as a list of positive and

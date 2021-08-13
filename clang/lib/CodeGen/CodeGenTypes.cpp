@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the code that handles AST -> LLVM type lowering.
@@ -87,8 +92,8 @@ void CodeGenTypes::addRecordTypeName(const RecordDecl *RD,
 llvm::Type *CodeGenTypes::ConvertTypeForMem(QualType T) {
   llvm::Type *R = ConvertType(T);
 
-  // If this is a non-bool type, don't map it.
-  if (!R->isIntegerTy(1))
+  // If this is a non-bool type, don't map it, if HLS extension is not enabled
+  if (!R->isIntegerTy(1) || Context.getLangOpts().HLSExt)
     return R;
 
   // Otherwise, return an integer of the target-specified size.
@@ -386,9 +391,16 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
   const Type *Ty = T.getTypePtr();
 
   // RecordTypes are cached and processed specially.
-  if (const RecordType *RT = dyn_cast<RecordType>(Ty))
-    return ConvertRecordDeclType(RT->getDecl());
-  
+  if (const RecordType *RT = dyn_cast<RecordType>(Ty)) {
+    auto *RD = RT->getDecl();
+    if (CGM.getLangOpts().HLSExt) {
+      if (auto *A = RD->getAttr<CodeGenTypeAttr>())
+        return ConvertType(A->getType());
+    }
+
+    return ConvertRecordDeclType(RD);
+  }
+
   // See if type is already cached.
   llvm::DenseMap<const Type *, llvm::Type *>::iterator TCI = TypeCache.find(Ty);
   // If type is found in map then use it. Otherwise, convert type T.
@@ -567,6 +579,10 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
                                        VT->getNumElements());
     break;
   }
+  case Type::APInt:
+    ResultType = llvm::IntegerType::get(getLLVMContext(),
+                                        cast<APIntType>(Ty)->getSizeInBits());
+    break;
   case Type::FunctionNoProto:
   case Type::FunctionProto:
     ResultType = ConvertFunctionType(T);

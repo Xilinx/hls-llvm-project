@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Expr class and subclasses.
@@ -3146,8 +3151,20 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case CXXConstructExprClass:
   case CXXTemporaryObjectExprClass: {
     const CXXConstructExpr *CE = cast<CXXConstructExpr>(this);
+
+    // hls::stream and ap_shift_reg constructor do not have side effect
+    // FIXME: Not strict enough.
+    // TODO: Clean up hard code
+    auto *Constructor = CE->getConstructor();
+    auto RecordName = Constructor->getParent()->getQualifiedNameAsString();
+    if (Ctx.getLangOpts().HLSExt && (!RecordName.compare("hls::stream") ||
+        !RecordName.compare("ap_shift_reg")) &&
+        !Constructor->isCopyOrMoveConstructor())
+      break;
+
     if (!CE->getConstructor()->isTrivial() && IncludePossibleEffects)
       return true;
+
     // A trivial constructor does not add any side-effects of its own. Just look
     // at its arguments.
     break;

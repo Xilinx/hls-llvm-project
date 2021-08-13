@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Command line warning options handler.
@@ -55,6 +60,9 @@ void clang::ProcessWarningOptions(DiagnosticsEngine &Diags,
   // Handle -ferror-limit
   if (Opts.ErrorLimit)
     Diags.setErrorLimit(Opts.ErrorLimit);
+  // Handle -fwarn-limit
+  if (Opts.WarnLimit)
+    Diags.setWarnLimit(Opts.WarnLimit);
   if (Opts.TemplateBacktraceLimit)
     Diags.setTemplateBacktraceLimit(Opts.TemplateBacktraceLimit);
   if (Opts.ConstexprBacktraceLimit)

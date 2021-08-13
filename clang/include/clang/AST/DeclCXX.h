@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -676,6 +681,14 @@ class CXXRecordDecl : public RecordDecl {
   /// \brief Called from setBases and addedMember to notify the class that a
   /// direct or virtual base class or a member of class type has been added.
   void addedClassSubobject(CXXRecordDecl *Base);
+
+  /// \brief Determine whether the CXXRecordDecl can implied as NoCtor
+  ///        If all below requirements meet, it is a NoCtor CXXRecordDecl
+  ///        - there isn't any inheritance existed
+  ///        - all the fields of CXXRecordDecl is trival or has NoCtorAttr
+  ///        - there isn't any user defined constructor
+  ///        TODO: Inheritance?
+  bool impliedNoCtorCXXRecordDecl(CXXRecordDecl *Record);
 
   /// \brief Notify the class that member has been added.
   ///

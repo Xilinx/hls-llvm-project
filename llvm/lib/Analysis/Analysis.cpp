@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm-c/Analysis.h"
@@ -27,6 +32,7 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeBranchProbabilityInfoWrapperPassPass(Registry);
   initializeCallGraphWrapperPassPass(Registry);
   initializeCallGraphDOTPrinterPass(Registry);
+  initializeCallGraphHLSDOTPrinterPass(Registry);
   initializeCallGraphPrinterLegacyPassPass(Registry);
   initializeCallGraphViewerPass(Registry);
   initializeCostModelAnalysisPass(Registry);
@@ -34,6 +40,7 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeCFGPrinterLegacyPassPass(Registry);
   initializeCFGOnlyViewerLegacyPassPass(Registry);
   initializeCFGOnlyPrinterLegacyPassPass(Registry);
+  initializeCFGHierOnlyPrinterLegacyPassPass(Registry);
   initializeCFLAndersAAWrapperPassPass(Registry);
   initializeCFLSteensAAWrapperPassPass(Registry);
   initializeDependenceAnalysisWrapperPassPass(Registry);
@@ -49,6 +56,10 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializePostDomPrinterPass(Registry);
   initializePostDomOnlyViewerPass(Registry);
   initializePostDomOnlyPrinterPass(Registry);
+  initializeDivergenceViewerPass(Registry);
+  initializeDivergencePrinterPass(Registry);
+  initializeDivergenceOnlyViewerPass(Registry);
+  initializeDivergenceOnlyPrinterPass(Registry);
   initializeAAResultsWrapperPassPass(Registry);
   initializeGlobalsAAWrapperPassPass(Registry);
   initializeIVUsersWrapperPassPass(Registry);

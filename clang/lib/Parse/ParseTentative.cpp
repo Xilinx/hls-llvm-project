@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the tentative parsing portions of the Parser
@@ -987,6 +992,7 @@ Parser::isExpressionOrTypeSpecifierSimple(tok::TokenKind Kind) {
   case tok::tilde:
   case tok::exclaim:
   case tok::kw_sizeof:
+  case tok::kw___bitwidthof:
   case tok::kw___func__:
   case tok::kw_const_cast:
   case tok::kw_delete:

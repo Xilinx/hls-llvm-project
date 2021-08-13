@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the ASTConsumer class.
@@ -102,6 +107,12 @@ public:
   /// declaration remains a tentative definition and has not been
   /// modified by the introduction of an implicit zero initializer.
   virtual void CompleteTentativeDefinition(VarDecl *D) {}
+
+  /// CompleteExternDeclaration - Callback invoked at the end of a translation
+  /// unit to notify the consumer that the given extern declaration should be
+  /// completed.
+  ///
+  virtual void CompleteExternDeclaration(VarDecl *D) {}
 
   /// \brief Callback invoked when an MSInheritanceAttr has been attached to a
   /// CXXRecordDecl.

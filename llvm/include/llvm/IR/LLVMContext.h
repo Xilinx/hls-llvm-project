@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file declares LLVMContext, a container of "global" state in LLVM, such
@@ -19,6 +24,7 @@
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Options.h"
+#include "llvm/Support/ToolOutputFile.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -229,6 +235,13 @@ public:
   /// to caller.
   std::unique_ptr<DiagnosticHandler> getDiagnosticHandler();
 
+  /// \brief Return if optimization remark filter set by -pass-remarks,
+  /// -pass-remarks-analysis, -pass-remarks-missed should be considered.
+  bool getRespectDiagnosticFilters() const;
+  /// \brief Set if optimization remark filter set by -pass-remarks,
+  /// -pass-remarks-analysis, -pass-remarks-missed should be considered.
+  void setRespectDiagnosticFilters(bool Respect);
+
   /// \brief Return if a code hotness metric should be included in optimization
   /// diagnostics.
   bool getDiagnosticsHotnessRequested() const;
@@ -244,6 +257,18 @@ public:
   /// \brief Set the minimum hotness value a diagnostic needs in order to be
   /// included in optimization diagnostics.
   void setDiagnosticsHotnessThreshold(uint64_t Threshold);
+
+  /// \brief Return the ToolOutputFile(an YAML file) asked by the user to save
+  /// optimization diagnostics.  If null, diagnostics are not saved in a file
+  /// but only emitted via the diagnostic handler.
+  ToolOutputFile *getOptRemarkFile();
+  /// Set the diagnostics output file(ToolOutputFile) used for optimization
+  /// diagnostics.
+  ///
+  /// By default or if invoked with null, diagnostics are not saved in a file
+  /// but only emitted via the diagnostic handler.  Even if an output file is
+  /// set, the handler is invoked for each diagnostic message.
+  void setOptRemarkFile(ToolOutputFile *F);
 
   /// \brief Return the YAML file used by the backend to save optimization
   /// diagnostics.  If null, diagnostics are not saved in a file but only

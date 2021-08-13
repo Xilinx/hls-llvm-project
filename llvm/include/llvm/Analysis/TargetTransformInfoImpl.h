@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file provides helpers for the implementation of
@@ -177,6 +182,8 @@ public:
       return TTI::TCC_Free;
     }
   }
+
+  bool isRegisterRich() { return false; }
 
   bool hasBranchDivergence() { return false; }
 

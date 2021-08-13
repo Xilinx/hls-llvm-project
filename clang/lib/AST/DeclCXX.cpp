@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the C++ related Decl classes.
@@ -490,6 +495,29 @@ void CXXRecordDecl::markedVirtualFunctionPure() {
   data().Abstract = true;
 }
 
+/// \brief Determine whether the CXXRecordDecl can implied as NoCtor
+///        If all below requirements meet, it is a NoCtor CXXRecordDecl
+///        - there isn't any inheritance existed
+///        - all the fields of CXXRecordDecl is trival or has NoCtorAttr
+///        - there isn't any user defined constructor
+///        TODO: Inheritance?
+bool CXXRecordDecl::impliedNoCtorCXXRecordDecl(CXXRecordDecl *Record) {
+  if (!Record || Record->getCanonicalDecl()->field_empty() ||
+      !Record->hasDefaultConstructor() || (Record->getNumBases() != 0))
+    return false;
+
+  for (auto *fieldDecl : Record->getCanonicalDecl()->fields())
+    if (!fieldDecl->hasAttr<NoCtorAttr>())
+      return false;
+
+  for (auto *Ctor : Record->ctors()) {
+    if (Ctor->isInheritingConstructor() || !Ctor->isImplicit())
+      return false;
+  }
+
+  return true;
+}
+
 void CXXRecordDecl::addedMember(Decl *D) {
   if (!D->isImplicit() &&
       !isa<FieldDecl>(D) &&
@@ -558,6 +586,18 @@ void CXXRecordDecl::addedMember(Decl *D) {
 
   // Handle constructors.
   if (CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(D)) {
+    if (!Constructor->isCopyOrMoveConstructor()) {
+      // If CXXRecordDecl is a NoCtor type, set the Default Constructor as
+      // trivial. This implies that it requires no initialization code to be
+      // generated.
+      CXXRecordDecl *Record = Constructor->getParent();
+      if (isa<ClassTemplateSpecializationDecl>(Record))
+        Record = Record->getTemplateInstantiationPattern();
+      if (Constructor->isDefaultConstructor() &&
+          impliedNoCtorCXXRecordDecl(Record))
+        Constructor->setTrivial(true);
+    }
+
     if (!Constructor->isImplicit()) {
       // Note that we have a user-declared constructor.
       data().UserDeclaredConstructor = true;
@@ -613,6 +653,13 @@ void CXXRecordDecl::addedMember(Decl *D) {
 
   // Handle destructors.
   if (CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(D)) {
+    // If CXXRecordDecl is a NoCtor type, set the CXXDestructor as trivial.
+    CXXRecordDecl *Record = DD->getParent();
+    if (isa<ClassTemplateSpecializationDecl>(Record))
+      Record = Record->getTemplateInstantiationPattern();
+    if (impliedNoCtorCXXRecordDecl(Record))
+      DD->setTrivial(true);
+
     SMKind |= SMF_Destructor;
 
     if (DD->isUserProvided())

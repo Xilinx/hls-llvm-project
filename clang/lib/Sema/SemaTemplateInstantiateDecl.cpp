@@ -4,6 +4,11 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
 //  This file implements C++ template instantiation for declarations.
@@ -169,6 +174,18 @@ static void instantiateDependentAlignValueAttr(
   if (!Result.isInvalid())
     S.AddAlignValueAttr(Aligned->getLocation(), New, Result.getAs<Expr>(),
                         Aligned->getSpellingListIndex());
+}
+
+static void
+instantiateCodeTenTypeAttr(Sema &S,
+                           const MultiLevelTemplateArgumentList &TemplateArgs,
+                           const CodeGenTypeAttr *CGT, RecordDecl *New) {
+  auto *Result = S.SubstType(CGT->getTypeLoc(), TemplateArgs,
+                             CGT->getLocation(), DeclarationName());
+
+  New->addAttr(new (S.getASTContext())
+                   CodeGenTypeAttr(CGT->getLocation(), S.getASTContext(),
+                                   Result, CGT->getSpellingListIndex()));
 }
 
 static void instantiateDependentAllocAlignAttr(
@@ -392,7 +409,6 @@ void Sema::InstantiateAttrs(const MultiLevelTemplateArgumentList &TemplateArgs,
       continue;
     }
 
-
     if (const auto *EnableIf = dyn_cast<EnableIfAttr>(TmplAttr)) {
       instantiateDependentEnableIfAttr(*this, TemplateArgs, EnableIf, Tmpl,
                                        cast<FunctionDecl>(New));
@@ -402,6 +418,12 @@ void Sema::InstantiateAttrs(const MultiLevelTemplateArgumentList &TemplateArgs,
     if (const auto *DiagnoseIf = dyn_cast<DiagnoseIfAttr>(TmplAttr)) {
       instantiateDependentDiagnoseIfAttr(*this, TemplateArgs, DiagnoseIf, Tmpl,
                                          cast<FunctionDecl>(New));
+      continue;
+    }
+
+    if (const auto *CGT = dyn_cast<CodeGenTypeAttr>(TmplAttr)) {
+      instantiateCodeTenTypeAttr(*this, TemplateArgs, CGT,
+                                 cast<RecordDecl>(New));
       continue;
     }
 
@@ -462,6 +484,10 @@ void Sema::InstantiateAttrs(const MultiLevelTemplateArgumentList &TemplateArgs,
 
       Attr *NewAttr = sema::instantiateTemplateAttribute(TmplAttr, Context,
                                                          *this, TemplateArgs);
+
+      if (instantiateXlxDeclAttr(NewAttr, New))
+        continue;
+
       if (NewAttr)
         New->addAttr(NewAttr);
     }

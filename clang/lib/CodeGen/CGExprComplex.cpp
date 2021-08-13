@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code to emit Expr nodes with complex types as LLVM code.
@@ -653,6 +658,18 @@ static StringRef getComplexMultiplyLibCallName(llvm::Type *Ty) {
   }
 }
 
+static bool IsFPGAArch(const TargetInfo &T) {
+  switch (T.getTriple().getArch()) {
+  default:
+    break;
+  case llvm::Triple::fpga32:
+  case llvm::Triple::fpga64:
+    return true;
+  }
+
+  return false;
+}
+
 // See C11 Annex G.5.1 for the semantics of multiplicative operators on complex
 // typed values.
 ComplexPairTy ComplexExprEmitter::EmitBinMul(const BinOpInfo &Op) {
@@ -689,6 +706,10 @@ ComplexPairTy ComplexExprEmitter::EmitBinMul(const BinOpInfo &Op) {
       // the sum of the second.
       ResR = Builder.CreateFSub(AC, BD, "mul_r");
       ResI = Builder.CreateFAdd(AD, BC, "mul_i");
+
+      // FIXME: NaNs libcall test by user in synthesis
+      if (IsFPGAArch(CGF.getTarget()))
+        return ComplexPairTy(ResR, ResI);
 
       // Emit the test for the real part becoming NaN and create a branch to
       // handle it. We test for NaN by comparing the number to itself.
@@ -770,7 +791,8 @@ ComplexPairTy ComplexExprEmitter::EmitBinDiv(const BinOpInfo &Op) {
     //
     // FIXME: We would be able to avoid the libcall in many places if we
     // supported imaginary types in addition to complex types.
-    if (RHSi && !CGF.getLangOpts().FastMath) {
+    // FIXME: avoid libcall in synthesis
+    if (RHSi && !CGF.getLangOpts().FastMath && !IsFPGAArch(CGF.getTarget())) {
       BinOpInfo LibCallOp = Op;
       // If LHS was a real, supply a null imaginary part.
       if (!LHSi)

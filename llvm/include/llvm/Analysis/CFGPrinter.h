@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines a 'dot-cfg' analysis pass, which emits the
@@ -172,8 +177,7 @@ struct DOTGraphTraits<const Function*> : public DefaultDOTGraphTraits {
 
     // Prepend a 'W' to indicate that this is a weight rather than the actual
     // profile count (due to scaling).
-    Twine Attrs = "label=\"W:" + Twine(Weight->getZExtValue()) + "\"";
-    return Attrs.str();
+    return ("label=\"W:" + Twine(Weight->getZExtValue()) + "\"").str();
   }
 };
 } // End llvm namespace

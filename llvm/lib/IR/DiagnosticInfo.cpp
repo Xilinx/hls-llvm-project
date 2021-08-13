@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the different classes involved in low level diagnostics.
@@ -17,6 +22,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -34,8 +40,8 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Regex.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/ScopedPrinter.h"
+#include "llvm/Support/raw_ostream.h"
 #include <atomic>
 #include <cassert>
 #include <memory>
@@ -74,7 +80,7 @@ void DiagnosticInfoResourceLimit::print(DiagnosticPrinter &DP) const {
   if (getResourceLimit() != 0)
     DP << " of " << getResourceLimit();
 
-  DP << " exceeded (" <<  getResourceSize() << ") in " << getFunction();
+  DP << " exceeded (" << getResourceSize() << ") in " << getFunction();
 }
 
 void DiagnosticInfoDebugMetadataVersion::print(DiagnosticPrinter &DP) const {
@@ -119,6 +125,14 @@ DiagnosticLocation::DiagnosticLocation(const DISubprogram *SP) {
   Column = 0;
 }
 
+DiagnosticLocation::DiagnosticLocation(const DIGlobalVariable *GV) {
+  if (!GV)
+    return;
+  Filename = GV->getFilename();
+  Line = GV->getLine();
+  Column = 0;
+}
+
 void DiagnosticInfoWithLocationBase::getLocation(StringRef *Filename,
                                                  unsigned *Line,
                                                  unsigned *Column) const {
@@ -136,24 +150,22 @@ const std::string DiagnosticInfoWithLocationBase::getLocationStr() const {
   return (Filename + ":" + Twine(Line) + ":" + Twine(Column)).str();
 }
 
-DiagnosticInfoOptimizationBase::Argument::Argument(StringRef Key, const Value *V)
-    : Key(Key) {
-  if (auto *F = dyn_cast<Function>(V)) {
-    if (DISubprogram *SP = F->getSubprogram())
-      Loc = SP;
-  }
-  else if (auto *I = dyn_cast<Instruction>(V))
-    Loc = I->getDebugLoc();
+static std::string DemangleFunctionName(StringRef NameRef) {
+  if (!NameRef.startswith("_Z"))
+    return GlobalValue::dropLLVMManglingEscape(NameRef);
 
-  // Only include names that correspond to user variables.  FIXME: We should use
-  // debug info if available to get the name of the user variable.
-  if (isa<llvm::Argument>(V) || isa<GlobalValue>(V))
-    Val = GlobalValue::dropLLVMManglingEscape(V->getName());
-  else if (isa<Constant>(V)) {
-    raw_string_ostream OS(Val);
-    V->printAsOperand(OS, /*PrintType=*/false);
-  } else if (auto *I = dyn_cast<Instruction>(V))
-    Val = I->getOpcodeName();
+  std::string Name = NameRef;
+
+  int Status = 0;
+  if (char *Demangled =
+          itaniumDemangle(Name.c_str(), nullptr, nullptr, &Status)) {
+    if (Status == 0)
+      Name = Demangled;
+    std::free(Demangled);
+    return Name;
+  }
+
+  return Name;
 }
 
 DiagnosticInfoOptimizationBase::Argument::Argument(StringRef Key, const Type *T)
@@ -192,10 +204,23 @@ DiagnosticInfoOptimizationBase::Argument::Argument(StringRef Key, DebugLoc Loc)
     : Key(Key), Loc(Loc) {
   if (Loc) {
     Val = (Loc->getFilename() + ":" + Twine(Loc.getLine()) + ":" +
-           Twine(Loc.getCol())).str();
+           Twine(Loc.getCol()))
+              .str();
   } else {
     Val = "<UNKNOWN LOCATION>";
   }
+}
+
+void DiagnosticInfoOptimizationBase::Argument::initFuncArg(const Function *F) {
+  if (DISubprogram *SP = F->getSubprogram())
+    Loc = SP;
+  Val = DemangleFunctionName(F->getName());
+}
+
+void DiagnosticInfoOptimizationBase::Argument::initConstantArg(
+    const Constant *C) {
+  raw_string_ostream OS(Val);
+  C->printAsOperand(OS, /*PrintType=*/false);
 }
 
 void DiagnosticInfoOptimizationBase::print(DiagnosticPrinter &DP) const {
@@ -203,6 +228,55 @@ void DiagnosticInfoOptimizationBase::print(DiagnosticPrinter &DP) const {
   if (Hotness)
     DP << " (hotness: " << *Hotness << ")";
 }
+
+void DiagnosticInfoModuleUnsupportedBase::insert(StringRef S) {
+  Args.emplace_back(S);
+}
+
+void DiagnosticInfoModuleUnsupportedBase::insert(DiagnosticInfoOptimizationBase::Argument A) {
+  Args.push_back(std::move(A));
+}
+
+std::string DiagnosticInfoModuleUnsupportedBase::getMsg() const {
+  std::string Str;
+  raw_string_ostream OS(Str);
+  for (const DiagnosticInfoOptimizationBase::Argument &Arg : Args)
+    OS << Arg.Val;
+  return OS.str();
+}
+
+// TODO: Add DebugInfo support
+void DiagnosticInfoModuleUnsupportedBase::print(DiagnosticPrinter &DP) const {
+  DP << getMsg();
+}
+
+
+bool DiagnosticInfoModuleHLSInfo::isEnabled() const {
+  LLVMContext &Ctx = M.getContext();
+  return Ctx.getDiagHandlerPtr()->isPassedOptRemarkEnabled(getPassName());
+}
+
+void DiagnosticInfoModuleHLSInfo::insert(StringRef S) {
+  Args.emplace_back(S);
+}
+
+void DiagnosticInfoModuleHLSInfo::insert(DiagnosticInfoOptimizationBase::Argument A) {
+  Args.push_back(std::move(A));
+}
+
+std::string DiagnosticInfoModuleHLSInfo::getMsg() const {
+  std::string Str;
+  raw_string_ostream OS(Str);
+  for (const DiagnosticInfoOptimizationBase::Argument &Arg : Args)
+    OS << Arg.Val;
+  return OS.str();
+}
+
+// TODO: Add DebugInfo support
+void DiagnosticInfoModuleHLSInfo::print(DiagnosticPrinter &DP) const {
+  DP << getMsg();
+}
+
 
 OptimizationRemark::OptimizationRemark(const char *PassName,
                                        StringRef RemarkName,
@@ -305,12 +379,37 @@ bool DiagnosticInfoOptimizationFailure::isEnabled() const {
   return getSeverity() == DS_Warning;
 }
 
+DiagnosticInfoHLSUnsupported::DiagnosticInfoHLSUnsupported(
+    const char *PassName, StringRef RemarkName, const DiagnosticLocation &Loc,
+    const Value *CodeRegion)
+    : DiagnosticInfoIROptimization(
+          DK_HLSUnsupported, DS_Error, PassName, RemarkName,
+          *cast<BasicBlock>(CodeRegion)->getParent(), Loc, CodeRegion) {}
+
+DiagnosticInfoHLSUnsupported::DiagnosticInfoHLSUnsupported(
+    const char *PassName, StringRef RemarkName, const Instruction *Inst)
+    : DiagnosticInfoIROptimization(DK_HLSUnsupported, DS_Error, PassName,
+                                   RemarkName, *Inst->getParent()->getParent(),
+                                   Inst->getDebugLoc(), Inst->getParent()) {}
+
+bool DiagnosticInfoHLSUnsupported::isEnabled() const {
+  return getSeverity() == DS_Error;
+}
+
+bool DiagnosticInfoHLSReportFatalError::isEnabled() const {
+  return getSeverity() == DS_Error;
+}
+
 void DiagnosticInfoUnsupported::print(DiagnosticPrinter &DP) const {
   std::string Str;
   raw_string_ostream OS(Str);
 
-  OS << getLocationStr() << ": in function " << getFunction().getName() << ' '
-     << *getFunction().getFunctionType() << ": " << Msg << '\n';
+  ItaniumPartialDemangler IPD;
+
+  OS << getLocationStr() << ": in function "
+     << DemangleFunctionName(getFunction().getName());
+
+  OS << ": " << Msg << '\n';
   OS.flush();
   DP << Str;
 }
@@ -377,6 +476,9 @@ void MappingTraits<DiagnosticInfoOptimizationBase *>::mapping(
     ;
   else if (io.mapTag("!Failure", OptDiag->getKind() == DK_OptimizationFailure))
     ;
+  else if (io.mapTag("!HLSUnsupported",
+                     OptDiag->getKind() == DK_HLSUnsupported))
+    ;
   else
     llvm_unreachable("Unknown remark type");
 
@@ -392,6 +494,48 @@ void MappingTraits<DiagnosticInfoOptimizationBase *>::mapping(
     io.mapOptional("DebugLoc", DL);
   io.mapRequired("Function", FN);
   io.mapOptional("Hotness", OptDiag->Hotness);
+  io.mapOptional("Args", OptDiag->Args);
+}
+
+void MappingTraits<DiagnosticInfoModuleUnsupportedBase *>::mapping(
+    IO &io, DiagnosticInfoModuleUnsupportedBase *&OptDiag) {
+  assert(io.outputting() && "input not yet implemented");
+
+  if (io.mapTag("!HLSReportFatalError",
+                OptDiag->getKind() == DK_HLSReportFatalError))
+    ;
+  else
+    llvm_unreachable("Unknown remark type");
+
+  // These are read-only for now.
+  DiagnosticLocation DL = OptDiag->getLocation();
+
+  StringRef PassName(OptDiag->PassName);
+  io.mapRequired("Pass", PassName);
+  io.mapRequired("Name", OptDiag->RemarkName);
+  if (!io.outputting() || DL.isValid())
+    io.mapOptional("DebugLoc", DL);
+  io.mapOptional("Args", OptDiag->Args);
+}
+
+void MappingTraits<DiagnosticInfoModuleHLSInfo *>::mapping(
+    IO &io, DiagnosticInfoModuleHLSInfo *&OptDiag) {
+  assert(io.outputting() && "input not yet implemented");
+
+  if (io.mapTag("!HLSReportInfo",
+                OptDiag->getKind() == DK_HLSReportInfo))
+    ;
+  else
+    llvm_unreachable("Unknown remark type");
+
+  // These are read-only for now.
+  DiagnosticLocation DL = OptDiag->getLocation();
+
+  StringRef PassName(OptDiag->PassName);
+  io.mapRequired("Pass", PassName);
+  io.mapRequired("Name", OptDiag->RemarkName);
+  if (!io.outputting() || DL.isValid())
+    io.mapOptional("DebugLoc", DL);
   io.mapOptional("Args", OptDiag->Args);
 }
 

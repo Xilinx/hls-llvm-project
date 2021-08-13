@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file declares the MultiplexConsumer class, which can be used to
@@ -45,6 +50,7 @@ public:
   void HandleTopLevelDeclInObjCContainer(DeclGroupRef D) override;
   void HandleImplicitImportDecl(ImportDecl *D) override;
   void CompleteTentativeDefinition(VarDecl *D) override;
+  void CompleteExternDeclaration(VarDecl *D) override;
   void AssignInheritanceModel(CXXRecordDecl *RD) override;
   void HandleVTable(CXXRecordDecl *RD) override;
   ASTMutationListener *GetASTMutationListener() override;

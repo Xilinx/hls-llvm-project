@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declaration of the Function class, which represents a
@@ -662,6 +667,12 @@ public:
   const_arg_iterator arg_end() const {
     CheckLazyArguments();
     return Arguments + NumArgs;
+  }
+
+  Argument* getArg(unsigned i) const {
+    assert (i < NumArgs && "getArg() out of range!");
+    CheckLazyArguments();
+    return Arguments + i;
   }
 
   iterator_range<arg_iterator> args() {

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code to emit Builtin calls as LLVM code.
@@ -930,6 +935,95 @@ EmitCheckedMixedSignMultiply(CodeGenFunction &CGF, const clang::Expr *Op1,
   return RValue::get(Overflow);
 }
 
+SmallVector<llvm::Type *, 4>
+CodeGenFunction::GetBuiltinOverloadTypes(unsigned BuiltinID,
+                                         const CallExpr *E) {
+  if (getContext().BuiltinInfo.isTSBuiltin(BuiltinID)) {
+    switch (getTarget().getTriple().getArch()) {
+    case llvm::Triple::spir:
+    case llvm::Triple::spir64:
+      return GetSPIRBuiltinOverloadTypes(BuiltinID, E);
+    case llvm::Triple::fpga32:
+    case llvm::Triple::fpga64:
+      return GetFPGABuiltinOverloadTypes(BuiltinID, E);
+    default:
+      break;
+    }
+  }
+
+  return SmallVector<llvm::Type *, 4>();
+}
+
+SmallVector<llvm::Type *, 4>
+CodeGenFunction::GetFPGABuiltinOverloadTypes(unsigned BuiltinID,
+                                             const CallExpr *E) {
+  switch (BuiltinID) {
+  default:
+    break;
+  case FPGA::BI__fpga_shift_register_peek: {
+    auto *Ptr = E->getArg(0);
+    auto *PT = ConvertType(Ptr->getType());
+    auto *EltT = PT->getPointerElementType();
+    auto *IdxT = ConvertType(E->getArg(1)->getType());
+    return SmallVector<llvm::Type *, 4>({EltT, PT, IdxT});
+  }
+  case FPGA::BI__fpga_shift_register_shift: {
+    auto *Ptr = E->getArg(1);
+    auto *PT = ConvertType(Ptr->getType());
+    auto *EltT = PT->getPointerElementType();
+    return SmallVector<llvm::Type *, 4>({EltT, PT});
+  }
+  case FPGA::BI__fpga_axis_ready:
+  case FPGA::BI__fpga_axis_valid:
+  case FPGA::BI__fpga_axis_pop:
+  case FPGA::BI__fpga_axis_push:
+  case FPGA::BI__fpga_axis_nb_pop:
+  case FPGA::BI__fpga_axis_nb_push: {
+    auto *DataPtr = E->getArg(0);
+    auto *DataPT = ConvertType(DataPtr->getType());
+    auto *KeepPtr = E->getArg(1);
+    auto *KeepPT = ConvertType(KeepPtr->getType());
+    auto *StrbPtr = E->getArg(2);
+    auto *StrbPT = ConvertType(StrbPtr->getType());
+    auto *UserPtr = E->getArg(3);
+    auto *UserPT = ConvertType(UserPtr->getType());
+    auto *LastPtr = E->getArg(4);
+    auto *LastPT = ConvertType(LastPtr->getType());
+    auto *IdPtr = E->getArg(5);
+    auto *IdPT = ConvertType(IdPtr->getType());
+    auto *DestPtr = E->getArg(6);
+    auto *DestPT = ConvertType(DestPtr->getType());
+    return SmallVector<llvm::Type *, 7>({DataPT, KeepPT, StrbPT, UserPT, LastPT,
+                                          IdPT, DestPT});
+  }
+  }
+
+  return SmallVector<llvm::Type *, 4>();
+}
+
+SmallVector<llvm::Type *, 4>
+CodeGenFunction::GetSPIRBuiltinOverloadTypes(unsigned BuiltinID,
+                                             const CallExpr *E) {
+  switch (BuiltinID) {
+  default:
+    break;
+  // The following SPIR function only overloaded by size_t
+  case SPIR::BI__spir_get_global_size:
+  case SPIR::BI__spir_get_global_id:
+  case SPIR::BI__spir_get_local_size:
+  case SPIR::BI__spir_get_enqueued_local_size:
+  case SPIR::BI__spir_get_local_id:
+  case SPIR::BI__spir_get_num_groups:
+  case SPIR::BI__spir_get_group_id:
+  case SPIR::BI__spir_get_global_offset:
+  case SPIR::BI__spir_get_global_linear_id:
+  case SPIR::BI__spir_get_local_linear_id:
+    return SmallVector<llvm::Type *, 4>({SizeTy});
+  }
+
+  return SmallVector<llvm::Type *, 4>();
+}
+
 RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
                                         unsigned BuiltinID, const CallExpr *E,
                                         ReturnValueSlot ReturnValue) {
@@ -1042,6 +1136,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     case Builtin::BI__builtin_fmod:
     case Builtin::BI__builtin_fmodf:
     case Builtin::BI__builtin_fmodl: {
+      // HLS does not support frem cores. Use the C-Lib implementation instead. 
+      if (getLangOpts().HLSExt)
+        break;
       Value *Arg1 = EmitScalarExpr(E->getArg(0));
       Value *Arg2 = EmitScalarExpr(E->getArg(1));
       return RValue::get(Builder.CreateFRem(Arg1, Arg2, "fmod"));
@@ -1117,7 +1214,16 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     case Builtin::BI__builtin_sqrt:
     case Builtin::BI__builtin_sqrtf:
     case Builtin::BI__builtin_sqrtl:
+    case Builtin::BI__builtin_sqrth:
       return RValue::get(emitUnaryBuiltin(*this, E, Intrinsic::sqrt));
+
+    case Builtin::BI__builtin_recip:
+    case Builtin::BI__builtin_recipf:
+      return RValue::get(emitUnaryBuiltin(*this, E, Intrinsic::fpga_recip));
+
+    case Builtin::BI__builtin_rsqrt:
+    case Builtin::BI__builtin_rsqrtf:
+      return RValue::get(emitUnaryBuiltin(*this, E, Intrinsic::fpga_rsqrt));
 
     case Builtin::BItrunc:
     case Builtin::BItruncf:
@@ -1240,6 +1346,30 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
                                      "cast");
     return RValue::get(Result);
   }
+  case Builtin::BI__builtin_bit_concat:
+    return EmitBuiltinBitConcat(E);
+  case Builtin::BI__builtin_bit_from_string:
+    return EmitBuiltinBitFromString(E);
+  case Builtin::BI__builtin_bit_select:
+    return EmitBuiltinBitSelect(E);
+  case Builtin::BI__builtin_bit_set:
+    return EmitBuiltinBitSet(E);
+  case Builtin::BI__builtin_bit_part_select:
+    return EmitBuiltinBitPartSelect(E);
+  case Builtin::BI__builtin_bit_part_set:
+    return EmitBuiltinBitPartSet(E);
+  case Builtin::BI__builtin_bit_and_reduce:
+    return EmitBuiltinBitAndReduce(E);
+  case Builtin::BI__builtin_bit_or_reduce:
+    return EmitBuiltinBitOrReduce(E);
+  case Builtin::BI__builtin_bit_nxor_reduce:
+    return EmitBuiltinBitNXorReduce(E);
+  case Builtin::BI__builtin_bit_nand_reduce:
+    return EmitBuiltinBitNAndReduce(E);
+  case Builtin::BI__builtin_bit_nor_reduce:
+    return EmitBuiltinBitNOrReduce(E);
+  case Builtin::BI__builtin_bit_xor_reduce:
+    return EmitBuiltinBitXorReduce(E);
   case Builtin::BI__builtin_ffs:
   case Builtin::BI__builtin_ffsl:
   case Builtin::BI__builtin_ffsll: {
@@ -2757,7 +2887,15 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
 
   // OpenCL v2.0 s6.13.16.2, Built-in pipe read and write functions
   case Builtin::BIread_pipe:
-  case Builtin::BIwrite_pipe: {
+  case Builtin::BIread_pipe_block:
+  case Builtin::BIwrite_pipe:
+  case Builtin::BIwrite_pipe_block: {
+    if (getLangOpts().HLSExt && 2U == E->getNumArgs()) {
+      auto PipePtr = EmitScalarExpr(E->getArg(0));
+      auto DataPtr = EmitPointerWithAlignment(E->getArg(1));
+        return EmitBuiltinOCLPipeReadWrite(BuiltinID, PipePtr, DataPtr);
+    }
+
     Value *Arg0 = EmitScalarExpr(E->getArg(0)),
           *Arg1 = EmitScalarExpr(E->getArg(1));
     CGOpenCLRuntime OpenCLRT(CGM);
@@ -2779,6 +2917,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
       llvm::Type *ArgTys[] = {Arg0->getType(), I8PTy, Int32Ty, Int32Ty};
       llvm::FunctionType *FTy = llvm::FunctionType::get(
           Int32Ty, llvm::ArrayRef<llvm::Type *>(ArgTys), false);
+      auto *Arg1 = EmitScalarExpr(E->getArg(1));
       Value *BCast = Builder.CreatePointerCast(Arg1, I8PTy);
       return RValue::get(
           Builder.CreateCall(CGM.CreateRuntimeFunction(FTy, Name),
@@ -2791,6 +2930,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
 
       llvm::Type *ArgTys[] = {Arg0->getType(), Arg1->getType(), Int32Ty, I8PTy,
                               Int32Ty, Int32Ty};
+
       Value *Arg2 = EmitScalarExpr(E->getArg(2)),
             *Arg3 = EmitScalarExpr(E->getArg(3));
       llvm::FunctionType *FTy = llvm::FunctionType::get(
@@ -3276,14 +3416,24 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     getContext().GetBuiltinType(BuiltinID, Error, &ICEArguments);
     assert(Error == ASTContext::GE_None && "Should not codegen an error");
 
-    Function *F = CGM.getIntrinsic(IntrinsicID);
+    Function *F =
+        CGM.getIntrinsic(IntrinsicID, GetBuiltinOverloadTypes(BuiltinID, E));
     llvm::FunctionType *FTy = F->getFunctionType();
 
     for (unsigned i = 0, e = E->getNumArgs(); i != e; ++i) {
-      Value *ArgValue;
+      Value *ArgValue = nullptr;
       // If this is a normal argument, just emit it as a scalar.
       if ((ICEArguments & (1 << i)) == 0) {
-        ArgValue = EmitScalarExpr(E->getArg(i));
+        auto *Arg = E->getArg(i);
+        auto T = Arg->getType();
+        if (hasScalarEvaluationKind(T))
+          ArgValue = EmitScalarExpr(Arg);
+        else if (hasAggregateEvaluationKind(T)) {
+          auto RV = CreateAggTemp(T, "agg.tmp");
+          EmitAggExpr(Arg, RV);
+          ArgValue = Builder.CreateLoad(RV.getAddress());
+        }
+
       } else {
         // If this is required to be a constant, constant fold it so that we
         // know that the generated intrinsic gets a ConstantInt.
@@ -3292,6 +3442,12 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
         assert(IsConst && "Constant arg isn't actually constant?");
         (void)IsConst;
         ArgValue = llvm::ConstantInt::get(getLLVMContext(), Result);
+      }
+
+      if (!ArgValue) {
+        ErrorUnsupported(E, "builtin function");
+        // Unknown builtin, for now just dump it out and return undef.
+        return GetUndefRValue(E->getType());
       }
 
       // If the intrinsic arg type is different from the builtin arg type
@@ -3317,6 +3473,12 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
       assert(V->getType()->canLosslesslyBitCastTo(RetTy) &&
              "Must be able to losslessly bit cast result type");
       V = Builder.CreateBitCast(V, RetTy);
+    }
+
+    if (hasAggregateEvaluationKind(E->getType())) {
+      assert(!ReturnValue.isNull() && "Expect return value slot");
+      if (!ReturnValue.isUnused())
+        Builder.CreateStore(V, ReturnValue.getValue());
     }
 
     return RValue::get(V);
@@ -3364,6 +3526,9 @@ static Value *EmitTargetArchBuiltinExpr(CodeGenFunction *CGF,
     return CGF->EmitWebAssemblyBuiltinExpr(BuiltinID, E);
   case llvm::Triple::hexagon:
     return CGF->EmitHexagonBuiltinExpr(BuiltinID, E);
+  case llvm::Triple::fpga32:
+  case llvm::Triple::fpga64:
+    return CGF->EmitFPGABuiltinExpr(BuiltinID, E);
   default:
     return nullptr;
   }

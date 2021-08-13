@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Optimizations may be specified an arbitrary number of times on the command
@@ -35,6 +40,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/LinkAllDebugHelpers.h"
 #include "llvm/LinkAllIR.h"
 #include "llvm/LinkAllPasses.h"
 #include "llvm/MC/SubtargetFeature.h"
@@ -51,6 +57,7 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/YAMLTraits.h"
+#include "llvm/Support/XILINXFPGAPlatformBasic.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
@@ -157,6 +164,17 @@ static cl::opt<bool>
 OptLevelO3("O3",
            cl::desc("Optimization level 3. Similar to clang -O3"));
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+static cl::opt<bool> ReflowOpt("reflow-optimizations",
+                               cl::desc("Run the reflow optimization passes"));
+static cl::opt<bool>
+    ReflowOCLInput("reflow-ocl-input",
+                   cl::desc("OpenCL input. This should only be used for "
+                            "testing OpenCL flow in reflow unit tests"),
+                   cl::init(false));
+
+#endif
+
 static cl::opt<unsigned>
 CodeGenOptLevel("codegen-opt-level",
                 cl::desc("Override optimization level for codegen hooks"));
@@ -256,6 +274,15 @@ static cl::opt<std::string>
     RemarksFilename("pass-remarks-output",
                     cl::desc("YAML output filename for pass remarks"),
                     cl::value_desc("filename"));
+
+static cl::opt<std::string>
+    PlatformDBFilePath("hls-platform-db-name", 
+                  cl::desc("the path for platform db file "),
+                  cl::value_desc( "path for platform db file"));
+static cl::opt<std::string>
+   PlatformDeviceName( "hls-platform-name", 
+                  cl::desc("the path for platform device name"),
+                  cl::value_desc("path for platform device name"));
 
 extern ModulePass *createDebugifyPass();
 extern ModulePass *createCheckDebugifyPass();
@@ -366,6 +393,20 @@ void initializePollyPasses(llvm::PassRegistry &Registry);
 }
 #endif
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+static cl::opt<bool> HLSBitcode("hls-bitcode",
+                                cl::desc("Generate HLS compatible LLVM IR"),
+                                cl::init(false));
+namespace llvm {
+Pass *createHLSBitcodeWriterPass(raw_ostream &OS,
+                                 bool ShouldPreserveUseListOrder,
+                                 bool EmitSummaryIndex, bool EmitModuleHash);
+void registerReflowOptimizationPasses(legacy::PassManagerBase &PM,
+                                      bool IsOpenCL = false);
+void initializeReflowPasses(llvm::PassRegistry &Registry);
+}
+#endif
+
 //===----------------------------------------------------------------------===//
 // main for opt
 //
@@ -422,6 +463,10 @@ int main(int argc, char **argv) {
   polly::initializePollyPasses(Registry);
 #endif
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+  initializeReflowPasses(Registry);
+#endif // LINK_REFLOW_INTO_TOOLS
+
   cl::ParseCommandLineOptions(argc, argv,
     "llvm .bc -> .bc modular optimizer and analysis printer\n");
 
@@ -451,9 +496,18 @@ int main(int argc, char **argv) {
       errs() << EC.message() << '\n';
       return 1;
     }
+    Context.setOptRemarkFile(OptRemarkFile.get());
     Context.setDiagnosticsOutputFile(
         llvm::make_unique<yaml::Output>(OptRemarkFile->os()));
   }
+
+//ZhaoKang:
+#if 1
+  if (PlatformDBFilePath != "" && PlatformDeviceName != "" ) { 
+    platform::SetPlatformDbFile(PlatformDBFilePath);
+    platform::PlatformBasic::getInstance()->load(PlatformDeviceName);
+  }
+#endif
 
   // Load the input module...
   std::unique_ptr<Module> M =
@@ -652,6 +706,13 @@ int main(int argc, char **argv) {
       OptLevelO3 = false;
     }
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+    if (ReflowOpt && ReflowOpt.getPosition() < PassList.getPosition(i)) {
+      registerReflowOptimizationPasses(Passes, ReflowOCLInput.getValue());
+      ReflowOpt = false;
+    }
+#endif
+
     const PassInfo *PassInf = PassList[i];
     Pass *P = nullptr;
     if (PassInf->getNormalCtor())
@@ -715,6 +776,11 @@ int main(int argc, char **argv) {
   if (OptLevelO3)
     AddOptimizationPasses(Passes, *FPasses, TM.get(), 3, 0);
 
+#ifdef LINK_REFLOW_INTO_TOOLS
+  if (ReflowOpt)
+    registerReflowOptimizationPasses(Passes, ReflowOCLInput.getValue());
+#endif
+
   if (FPasses) {
     FPasses->doInitialization();
     for (Function &F : *M)
@@ -734,7 +800,7 @@ int main(int argc, char **argv) {
   // a stream to write to them. Note that llc does something similar and it
   // may be worth to abstract this out in the future.
   SmallVector<char, 0> Buffer;
-  SmallVector<char, 0> CompileTwiceBuffer;
+  SmallVector<char, 0> FirstRunBuffer;
   std::unique_ptr<raw_svector_ostream> BOS;
   raw_ostream *OS = nullptr;
 
@@ -755,6 +821,11 @@ int main(int argc, char **argv) {
     } else if (OutputThinLTOBC)
       Passes.add(createWriteThinLTOBitcodePass(
           *OS, ThinLinkOut ? &ThinLinkOut->os() : nullptr));
+#ifdef LINK_REFLOW_INTO_TOOLS
+    else if (HLSBitcode)
+      Passes.add(createHLSBitcodeWriterPass(*OS, PreserveBitcodeUseListOrder,
+                                            EmitSummaryIndex, EmitModuleHash));
+#endif
     else
       Passes.add(createBitcodeWriterPass(*OS, PreserveBitcodeUseListOrder,
                                          EmitSummaryIndex, EmitModuleHash));
@@ -763,28 +834,30 @@ int main(int argc, char **argv) {
   // Before executing passes, print the final values of the LLVM options.
   cl::PrintOptionValues();
 
-  // If requested, run all passes again with the same pass manager to catch
-  // bugs caused by persistent state in the passes
-  if (RunTwice) {
-      std::unique_ptr<Module> M2(CloneModule(M.get()));
-      Passes.run(*M2);
-      CompileTwiceBuffer = Buffer;
-      Buffer.clear();
-  }
+  if (!RunTwice) {
+    // Now that we have all of the passes ready, run them.
+    Passes.run(*M);
+  } else {
+    // If requested, run all passes twice with the same pass manager to catch
+    // bugs caused by persistent state in the passes.
+    std::unique_ptr<Module> M2(CloneModule(&*M));
+    // Run all passes on the original module first, so the second run processes
+    // the clone to catch CloneModule bugs.
+    Passes.run(*M);
+    FirstRunBuffer = Buffer;
+    Buffer.clear();
 
-  // Now that we have all of the passes ready, run them.
-  Passes.run(*M);
+    Passes.run(*M2);
 
-  // Compare the two outputs and make sure they're the same
-  if (RunTwice) {
+    // Compare the two outputs and make sure they're the same
     assert(Out);
-    if (Buffer.size() != CompileTwiceBuffer.size() ||
-        (memcmp(Buffer.data(), CompileTwiceBuffer.data(), Buffer.size()) !=
-         0)) {
-      errs() << "Running the pass manager twice changed the output.\n"
-                "Writing the result of the second run to the specified output.\n"
-                "To generate the one-run comparison binary, just run without\n"
-                "the compile-twice option\n";
+    if (Buffer.size() != FirstRunBuffer.size() ||
+        (memcmp(Buffer.data(), FirstRunBuffer.data(), Buffer.size()) != 0)) {
+      errs()
+          << "Running the pass manager twice changed the output.\n"
+             "Writing the result of the second run to the specified output.\n"
+             "To generate the one-run comparison binary, just run without\n"
+             "the compile-twice option\n";
       Out->os() << BOS->str();
       Out->keep();
       if (OptRemarkFile)

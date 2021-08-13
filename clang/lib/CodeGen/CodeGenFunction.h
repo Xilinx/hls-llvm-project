@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the internal per-function state used for llvm translation.
@@ -2304,6 +2309,13 @@ public:
                                       Address This, Address Src,
                                       const CXXConstructExpr *E);
 
+  bool EmitArrayInitLoopNest(llvm::ArrayType *ATy,
+                             llvm::Value *SrcPtr,
+                             Address arrayBase,
+                             const CXXConstructorDecl *ctor,
+                             const CXXConstructExpr *E,
+                             bool zeroInitialize);
+
   void EmitCXXAggrConstructorCall(const CXXConstructorDecl *D,
                                   const ArrayType *ArrayTy,
                                   Address ArrayPtr,
@@ -2446,6 +2458,12 @@ public:
   /// that it requires no code to be generated.
   bool isTrivialInitializer(const Expr *Init);
 
+  /// \brief Determine whether the CXXConstructExpr is with NoCtorAttr and
+  ///        without user given arg constructor.
+  ///        This implies that it requires no initialization code to be
+  ///        generated.
+  bool isNoCtorCXXConstructExpr(const Expr *Init, const VarDecl &D);
+
   /// EmitAutoVarDecl - Emit an auto variable declaration.
   ///
   /// This function can be called with a null (unreachable) insert point.
@@ -2571,6 +2589,7 @@ public:
 
   /// EmitStopPoint - Emit a debug stoppoint if we are emitting debug info.
   void EmitStopPoint(const Stmt *S);
+  void EmitStopPoint(SourceLocation Loc);
 
   /// EmitStmt - Emit the code for the statement \arg S. It is legal to call
   /// this function even if there is no current insertion point.
@@ -3412,6 +3431,13 @@ public:
   RValue EmitNVPTXDevicePrintfCallExpr(const CallExpr *E,
                                        ReturnValueSlot ReturnValue);
 
+  SmallVector<llvm::Type *, 4> GetBuiltinOverloadTypes(unsigned BuiltinID,
+                                                       const CallExpr *E);
+  SmallVector<llvm::Type *, 4> GetSPIRBuiltinOverloadTypes(unsigned BuiltinID,
+                                                           const CallExpr *E);
+  SmallVector<llvm::Type *, 4> GetFPGABuiltinOverloadTypes(unsigned BuiltinID,
+                                                           const CallExpr *E);
+
   RValue EmitBuiltinExpr(const FunctionDecl *FD,
                          unsigned BuiltinID, const CallExpr *E,
                          ReturnValueSlot ReturnValue);
@@ -3424,6 +3450,36 @@ public:
       CharUnits BufferAlignment);
 
   RValue EmitBlockCallExpr(const CallExpr *E, ReturnValueSlot ReturnValue);
+
+  /// FPGA related builtins for HLS extensions
+  RValue EmitBuiltinOCLPipeReadWrite(unsigned BuiltinID, llvm::Value *Pipe,
+                                     Address ValPtr);
+
+  /// FIFO builtins
+  llvm::Value *EmitBuiltinFPGAFifoStatus(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFifoBlocking(unsigned BuiltinID,
+                                           const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFifoNonBlocking(unsigned BuiltinID,
+                                              const CallExpr *E);
+  /// set STREAM depth
+  llvm::Value *EmitBuiltinFPGASetStreamDepth(unsigned BuiltinID, const CallExpr*E);
+
+  /// Manual burst builtins
+  llvm::Value *EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID, const CallExpr*E);
+
+  /// Legacy builtins
+  RValue EmitBuiltinBitConcat(const CallExpr *E);
+  RValue EmitBuiltinBitFromString(const CallExpr *E);
+  RValue EmitBuiltinBitSelect(const CallExpr *E);
+  RValue EmitBuiltinBitSet(const CallExpr *E);
+  RValue EmitBuiltinBitPartSelect(const CallExpr *E);
+  RValue EmitBuiltinBitPartSet(const CallExpr *E);
+  RValue EmitBuiltinBitAndReduce(const CallExpr *E);
+  RValue EmitBuiltinBitNAndReduce(const CallExpr *E);
+  RValue EmitBuiltinBitOrReduce(const CallExpr *E);
+  RValue EmitBuiltinBitNOrReduce(const CallExpr *E);
+  RValue EmitBuiltinBitXorReduce(const CallExpr *E);
+  RValue EmitBuiltinBitNXorReduce(const CallExpr *E);
 
   /// EmitTargetBuiltinExpr - Emit the given builtin call. Returns 0 if the call
   /// is unhandled by the current target.
@@ -3469,6 +3525,7 @@ public:
   llvm::Value *EmitNVPTXBuiltinExpr(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitWebAssemblyBuiltinExpr(unsigned BuiltinID,
                                           const CallExpr *E);
+  llvm::Value *EmitFPGABuiltinExpr(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitHexagonBuiltinExpr(unsigned BuiltinID, const CallExpr *E);
 
 private:
@@ -3559,6 +3616,13 @@ public:
   //===--------------------------------------------------------------------===//
   //                           Expression Emission
   //===--------------------------------------------------------------------===//
+
+  int HLSEvaluateInteger(Expr *E, int Default = -1);
+  //HLS special handle for Top argument , because HLS changed the TopArgument's Calling Conversion, 
+  //argument of struct type is passed by values, this cause EmitLValue of argument generate new alloca 
+  //and  finnaly generate GEP basing on alloca instead of  function argument , it cause reflow Pragma Process
+  //run into error 
+  std::pair<llvm::Value*, int64_t>  EmitHLSVariableExpr(Expr *E);
 
   // Expressions are broken into three classes: scalar, complex, aggregate.
 
@@ -3701,6 +3765,48 @@ public:
   //===--------------------------------------------------------------------===//
   //                             Internal Helpers
   //===--------------------------------------------------------------------===//
+
+  /// Set Xilinx specific attributes for global variable
+  void LowerBindOpScope(Stmt* &stmt, SmallVector<const XlxBindOpAttr*, 4> attrs);
+  void EmitXlxAttributes(const VarDecl *D, llvm::Value *V);
+  void EmitXlxParamAttributes(const ParmVarDecl *D, llvm::Value* V);
+  void EmitXlxFunctionAttributes(const FunctionDecl *FD, llvm::Function *F);
+  void EmitXlxFunctionBodyAttributes( ArrayRef<const Attr*> attrs);
+  void EmitBundleForScope(const Stmt *SubStmt, ArrayRef<const Attr *> Attrs,
+                          SmallVectorImpl<llvm::OperandBundleDef> &BundleList);
+  void BundleBindOpAttr(const XlxBindOpExprAttr *bindOp, SmallVectorImpl<llvm::OperandBundleDef> &BundleList);
+
+  void  EmitReqdPipeDepthIntrinsic( const XlxReqdPipeDepthAttr *A);
+  void  EmitArrayXFormIntrinsic( const XlxArrayXFormAttr *A);
+  void  EmitStableIntrinsic( const XlxStableAttr* A);
+  void  EmitStableContentIntrinsic( const XlxStableContentAttr* A);
+  void  EmitSharedIntrinsic( const XlxSharedAttr* A);
+  void  EmitBindStorageIntrinsic( const XlxBindStorageAttr *A);
+  void  EmitDisaggrIntrinsic( const XlxDisaggrAttr* A);
+  void  EmitAggregateIntrinsic( const XlxAggregateAttr* A);
+  void  EmitDataPackIntrinsic( const XlxDataPackAttr* A);
+  void  EmitHLSConstIntrinsic( llvm::Value* var);
+  void  EmitResourceLimitIntrinsic(const FPGAResourceLimitHintAttr* resourceLimit);
+  void  EmitFunctionAllocationIntrinsic(const XlxFunctionAllocationAttr* functionAlloc) ;
+  void  EmitSAXILITEOffsetIntrinsic( const SAXILITEOffsetInterfaceAttr *interface) ;
+  void  EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *interface);
+  void  EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *interface);
+  void  EmitAPFifoInterfaceIntrinsic( const APFifoInterfaceAttr *interface);
+  void  EmitAPScalarInterfaceIntrinsic( const APScalarInterfaceAttr *interface);
+  void  EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceAttr *interface);
+  void  EmitFPGAFunctionCtrlInterfaceIntrinsic( const FPGAFunctionCtrlInterfaceAttr *interface);
+
+  void  EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAttr *attr);
+  void  EmitResetIntrinsic( const XlxResetIntrinsicAttr *reset);
+
+  llvm::Value *GetAddrOrValueForExpr(Expr* E, bool supportTopArg);
+  void GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const ParmVarDecl *decl , const QualType type, llvm::SmallVector<unsigned int, 4> fields, bool is_pointer);
+
+  void HoistXlxScope( Stmt *body);
+  void EmitXlxDependenceIntrinsic(const XlxDependenceAttr *attr) ;
+  void EmitXCLDependenceIntrinsic(const XCLDependenceAttr *attr) ;
+
+  
 
   /// ContainsLabel - Return true if the statement contains a label in it.  If
   /// this statement is not executed normally, it not containing a label means
@@ -4021,6 +4127,7 @@ private:
   QualType getVarArgType(const Expr *Arg);
 
   void EmitDeclMetadata();
+  Stmt* hoistXlxAttrs( SmallVector<Stmt*, 8> &parents, llvm::DenseMap<Stmt*, SmallVector<const Attr*, 4>> &hoistedAttrs );
 
   BlockByrefHelpers *buildByrefHelpers(llvm::StructType &byrefType,
                                   const AutoVarEmission &emission);

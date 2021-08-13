@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This coordinates the per-module state used while generating code.
@@ -66,6 +71,14 @@ static llvm::cl::opt<bool> LimitedCoverage(
     llvm::cl::init(false));
 
 static const char AnnotationSection[] = "llvm.metadata";
+
+static int EvaluateInteger(Expr *E, const ASTContext &Ctx, int Default = -1) {
+  if (!E)
+    return Default;
+
+  llvm::APSInt Value = E->EvaluateKnownConstInt(Ctx);
+  return Value.getSExtValue();
+}
 
 static CGCXXABI *createCXXABI(CodeGenModule &CGM) {
   switch (CGM.getTarget().getCXXABI().getKind()) {
@@ -2553,6 +2566,10 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
     if (D && !D->hasAttr<DLLImportAttr>() && !D->hasAttr<DLLExportAttr>())
       Entry->setDLLStorageClass(llvm::GlobalValue::DefaultStorageClass);
 
+    // Only check use of GlobalVariable
+    if (!IsForDefinition && D && isa<llvm::GlobalVariable>(Entry))
+      SetXlxAttributes(D, cast<llvm::GlobalVariable>(Entry));
+
     if (Entry->getType() == Ty)
       return Entry;
 
@@ -2811,6 +2828,27 @@ CodeGenModule::CreateRuntimeVariable(llvm::Type *Ty,
   return GetOrCreateLLVMGlobal(Name, llvm::PointerType::getUnqual(Ty), nullptr);
 }
 
+void CodeGenModule::EmitGlobalVarDeclaration(const VarDecl *D) {
+  if (!getLangOpts().HLSExt)
+    return;
+
+  StringRef MangledName = getMangledName(D);
+  auto *GV =
+      dyn_cast_or_null<llvm::GlobalVariable>(GetGlobalValue(MangledName));
+
+  if (!GV)
+    return;
+
+  CGDebugInfo *DI = getModuleDebugInfo();
+  if (!DI)
+    return;
+
+  // FIXME: EmitGlobalVariable will generate debuginfo with "IsDefinition" set
+  // to "true". This is incorrect
+  if (getCodeGenOpts().getDebugInfo() >= codegenoptions::LimitedDebugInfo)
+    DI->EmitGlobalVariable(GV, D, true);
+}
+
 void CodeGenModule::EmitTentativeDefinition(const VarDecl *D) {
   assert(!D->getInit() && "Cannot emit definite definitions here!");
 
@@ -2843,6 +2881,12 @@ LangAS CodeGenModule::GetGlobalVarAddressSpace(const VarDecl *D) {
   LangAS AddrSpace = LangAS::Default;
   if (LangOpts.OpenCL) {
     AddrSpace = D ? D->getType().getAddressSpace() : LangAS::opencl_global;
+
+    if (LangOpts.HLSExt && D && D->getType()->isPipeType()) {
+      assert(AddrSpace == LangAS::opencl_private);
+      return AddrSpace;
+    }
+
     assert(AddrSpace == LangAS::opencl_global ||
            AddrSpace == LangAS::opencl_constant ||
            AddrSpace == LangAS::opencl_local ||
@@ -2952,7 +2996,22 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   if (getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
       D->hasAttr<CUDASharedAttr>())
     Init = llvm::UndefValue::get(getTypes().ConvertType(ASTTy));
-  else if (!InitExpr) {
+  else if (getLangOpts().HLSExt && getLangOpts().OpenCL &&
+           D->hasAttr<XCLReqdPipeDepthAttr>()) {
+    const auto *PipeTy = ASTTy->getAs<PipeType>();
+    assert(PipeTy && "reqd_pipe_depth not on pipe type!");
+    auto Depth = EvaluateInteger(D->getAttr<XCLReqdPipeDepthAttr>()->getDepth(),
+                                 getContext(), /*Default*/ 1);
+    auto *EltTy = getTypes().ConvertType(PipeTy->getElementType());
+    EltTy = llvm::ArrayType::get(EltTy, Depth);
+
+    StringRef MangledName = getMangledName(D);
+
+    Init = new llvm::GlobalVariable(
+        getModule(), EltTy, false, llvm::GlobalValue::ExternalLinkage, nullptr,
+        MangledName + ".pipe", nullptr, llvm::GlobalVariable::NotThreadLocal,
+        /*xcl_pipe*/ 128);
+  } else if (!InitExpr) {
     // This is a tentative definition; tentative definitions are
     // implicitly initialized with { 0 }.
     //
@@ -3146,6 +3205,8 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
 
   SanitizerMD->reportGlobalToASan(GV, *D, NeedsGlobalCtor);
 
+  SetXlxAttributes(D, GV);
+
   // Emit global variable debug information.
   if (CGDebugInfo *DI = getModuleDebugInfo())
     if (getCodeGenOpts().getDebugInfo() >= codegenoptions::LimitedDebugInfo)
@@ -3264,6 +3325,10 @@ llvm::GlobalValue::LinkageTypes CodeGenModule::getLLVMLinkageForDeclarator(
                                           : llvm::Function::InternalLinkage;
     return llvm::Function::WeakODRLinkage;
   }
+
+  if (getLangOpts().HLSExt && isa<VarDecl>(D) &&
+      cast<VarDecl>(D)->getType()->isPipeType())
+    return llvm::GlobalVariable::InternalLinkage;
 
   // C++ doesn't have tentative definitions and thus cannot have common
   // linkage.

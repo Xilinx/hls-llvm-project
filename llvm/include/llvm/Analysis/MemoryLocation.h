@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file provides utility analysis objects describing memory locations.
@@ -20,6 +25,7 @@
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 
 namespace llvm {
 
@@ -68,8 +74,12 @@ public:
   static MemoryLocation get(const VAArgInst *VI);
   static MemoryLocation get(const AtomicCmpXchgInst *CXI);
   static MemoryLocation get(const AtomicRMWInst *RMWI);
+  static MemoryLocation get(const SeqBeginInst *SBI);
+  static MemoryLocation get(const FPGALoadStoreInst *FLSI);
   static MemoryLocation get(const Instruction *Inst) {
-    return *MemoryLocation::getOrNone(Inst);
+    if (Optional<MemoryLocation> Loc = MemoryLocation::getOrNone(Inst))
+      return *Loc;
+    return MemoryLocation();
   }
   static Optional<MemoryLocation> getOrNone(const Instruction *Inst) {
     switch (Inst->getOpcode()) {
@@ -83,6 +93,13 @@ public:
       return get(cast<AtomicCmpXchgInst>(Inst));
     case Instruction::AtomicRMW:
       return get(cast<AtomicRMWInst>(Inst));
+    case Instruction::Call: {
+      if (auto *SBI = dyn_cast<SeqBeginInst>(Inst))
+        return get(SBI);
+      if (auto *FLSI = dyn_cast<FPGALoadStoreInst>(Inst))
+        return get(FLSI);
+      return None;
+    }
     default:
       return None;
     }

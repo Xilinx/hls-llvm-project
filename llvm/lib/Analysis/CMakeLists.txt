@@ -11,10 +11,12 @@ add_llvm_library(LLVMAnalysis
   BranchProbabilityInfo.cpp
   CFG.cpp
   CFGPrinter.cpp
+  CFGHierPrinter.cpp
   CFLAndersAliasAnalysis.cpp
   CFLSteensAliasAnalysis.cpp
   CGSCCPassManager.cpp
   CallGraph.cpp
+  CallGraphHLS.cpp
   CallGraphSCCPass.cpp
   CallPrinter.cpp
   CaptureTracking.cpp
@@ -27,6 +29,7 @@ add_llvm_library(LLVMAnalysis
   DependenceAnalysis.cpp
   DivergenceAnalysis.cpp
   DomPrinter.cpp
+  DivergencePrinter.cpp
   DominanceFrontier.cpp
   EHPersonalities.cpp
   GlobalsModRef.cpp
@@ -85,6 +88,9 @@ add_llvm_library(LLVMAnalysis
   ValueLatticeUtils.cpp
   ValueTracking.cpp
   VectorUtils.cpp
+  XILINXFunctionInfoUtils.cpp
+  XILINXHLSValueTrackingUtils.cpp
+  XILINXLoopInfoUtils.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Analysis

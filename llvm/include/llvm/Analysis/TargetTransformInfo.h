@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This pass exposes codegen information to IR-level passes. Every
@@ -144,6 +149,9 @@ public:
     }
     llvm_unreachable("Unknown instruction cost kind");
   }
+
+  /// \brief Return true if the target architecture is register-rich
+  bool isRegisterRich() const;
 
   /// \brief Underlying constants for 'cost' values in this interface.
   ///
@@ -959,6 +967,7 @@ public:
   virtual int
   getUserCost(const User *U, ArrayRef<const Value *> Operands) = 0;
   virtual bool hasBranchDivergence() = 0;
+  virtual bool isRegisterRich() = 0;
   virtual bool isSourceOfDivergence(const Value *V) = 0;
   virtual bool isAlwaysUniform(const Value *V) = 0;
   virtual unsigned getFlatAddressSpace() = 0;
@@ -1155,6 +1164,7 @@ public:
   int getUserCost(const User *U, ArrayRef<const Value *> Operands) override {
     return Impl.getUserCost(U, Operands);
   }
+  bool isRegisterRich() override { return Impl.isRegisterRich(); }
   bool hasBranchDivergence() override { return Impl.hasBranchDivergence(); }
   bool isSourceOfDivergence(const Value *V) override {
     return Impl.isSourceOfDivergence(V);

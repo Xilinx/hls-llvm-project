@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -17,6 +22,7 @@
 #define LLVM_LIB_TRANSFORMS_INSTCOMBINE_INSTCOMBINEINTERNAL_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/TargetFolder.h"
@@ -39,7 +45,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/InstCombine/InstCombineWorklist.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstdint>
@@ -47,7 +53,6 @@
 #define DEBUG_TYPE "instcombine"
 
 namespace llvm {
-
 class APInt;
 class AssumptionCache;
 class CallSite;
@@ -264,7 +269,8 @@ public:
   /// \brief Run the combiner over the entire worklist until it is empty.
   ///
   /// \returns true if the IR is changed.
-  bool run();
+  bool run(CustomCombineCallback CustomCombine);
+  Instruction *combine(Instruction &I, CustomCombineCallback CustomCombine);
 
   AssumptionCache &getAssumptionCache() const { return AC; }
 

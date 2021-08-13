@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements semantic analysis for expressions.
@@ -44,6 +49,7 @@
 #include "clang/Sema/SemaInternal.h"
 #include "clang/Sema/Template.h"
 #include "llvm/Support/ConvertUTF.h"
+#include "clang/Basic/HLSDiagnostic.h"
 using namespace clang;
 using namespace sema;
 
@@ -693,7 +699,8 @@ ExprResult Sema::UsualUnaryConversions(Expr *E) {
       E = ImpCastExprToType(E, PTy, CK_IntegralCast).get();
       return E;
     }
-    if (Ty->isPromotableIntegerType()) {
+
+    if (Context.isPromotableIntegerOrAPIntType(Ty)) {
       QualType PT = Context.getPromotedIntegerType(Ty);
       E = ImpCastExprToType(E, PT, CK_IntegralCast).get();
       return E;
@@ -729,6 +736,24 @@ ExprResult Sema::DefaultArgumentPromotion(Expr *E) {
         }
     } else {
       E = ImpCastExprToType(E, Context.DoubleTy, CK_FloatingCast).get();
+    }
+  }
+
+  // Promote APIntType in HLS extension.
+  // APInt <= 32 promote to i32
+  // 32 < APInt <= 32 promote to i64
+  // APInt > 64 just skip out
+  if (getLangOpts().HLSExt) {
+    if (const APIntType *IntTy = Ty->getAs<APIntType>()) {
+      auto T = getASTContext().getLeastIntType(IntTy);
+      if (T.isNull())
+        return ExprError();
+      E = ImpCastExprToType(E, T, CK_IntegralCast).get();
+
+      // Do default integer promotion again
+      ExprResult Res = UsualUnaryConversions(E);
+      assert(!Res.isInvalid() && "Should be able to convert int!");
+      E = Res.get();
     }
   }
 
@@ -3365,6 +3390,9 @@ ExprResult Sema::ActOnNumericConstant(const Token &Tok, Scope *UDLScope) {
 
     // Get the value in the widest-possible width.
     unsigned MaxWidth = Context.getTargetInfo().getIntMaxTWidth();
+    if (getLangOpts().HLSExt && Literal.MicrosoftInteger)
+      MaxWidth = Literal.MicrosoftInteger;
+
     llvm::APInt ResultVal(MaxWidth, 0);
 
     if (Literal.GetIntegerValue(ResultVal)) {
@@ -3392,8 +3420,7 @@ ExprResult Sema::ActOnNumericConstant(const Token &Tok, Scope *UDLScope) {
           Ty = Context.CharTy;
         } else {
           Width = Literal.MicrosoftInteger;
-          Ty = Context.getIntTypeForBitwidth(Width,
-                                             /*Signed=*/!Literal.isUnsigned);
+          Ty = Context.getAPIntType(Width, /*Signed=*/!Literal.isUnsigned);
         }
       }
 
@@ -3807,6 +3834,7 @@ static void captureVariablyModifiedType(ASTContext &Context, QualType T,
     case Type::Complex:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::APInt:
     case Type::Record:
     case Type::Enum:
     case Type::Elaborated:
@@ -10973,6 +11001,9 @@ static QualType CheckIncrementDecrementOperand(Sema &S, Expr *Op,
   } else if(S.getLangOpts().OpenCL && ResType->isVectorType() &&
             ResType->getAs<VectorType>()->getElementType()->isIntegerType()) {
     // OpenCL V1.2 6.3 says dec/inc ops operate on integer vector types.
+  } else if (S.getLangOpts().HLSExt && ResType->isAPIntType()) {
+    // HLS extension allow dec/inc ops operations on arbitrary-precision integer
+    // type
   } else {
     S.Diag(OpLoc, diag::err_typecheck_illegal_increment_decrement)
       << ResType << int(IsInc) << Op->getSourceRange();
@@ -13507,6 +13538,17 @@ bool Sema::DiagnoseAssignmentResult(AssignConvertType ConvTy,
   if (Complained)
     *Complained = true;
   return isInvalid;
+}
+ExprResult Sema::HLSVerifyIntegerConstantExpression(Expr* E, llvm::APSInt *Result) 
+{
+  class HLSICEDiagnoser : public VerifyICEDiagnoser {
+  public:
+    void diagnoseNotICE(Sema &S, SourceLocation Loc, SourceRange SR) override {
+      S.Diag(Loc, diag::warn_xlx_expr_not_ice) << S.LangOpts.CPlusPlus << SR;
+    }
+  } Diagnoser;
+  
+  return VerifyIntegerConstantExpression(E, Result, Diagnoser);
 }
 
 ExprResult Sema::VerifyIntegerConstantExpression(Expr *E,

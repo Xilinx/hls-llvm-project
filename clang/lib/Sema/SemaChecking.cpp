@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements extra semantic analysis beyond what is enforced
@@ -95,6 +100,7 @@
 #include <tuple>
 #include <utility>
 
+#include "clang/Basic/HLSDiagnostic.h"
 using namespace clang;
 using namespace sema;
 
@@ -622,14 +628,24 @@ static bool checkOpenCLPipeArg(Sema &S, CallExpr *Call) {
         << Call->getDirectCallee() << Arg0->getSourceRange();
     return true;
   }
-  OpenCLAccessAttr *AccessQual =
-      getOpenCLArgAccess(cast<DeclRefExpr>(Arg0)->getDecl());
+
+  auto *Arg0Decl = cast<DeclRefExpr>(Arg0)->getDecl();
+  OpenCLAccessAttr *AccessQual = getOpenCLArgAccess(Arg0Decl);
+
+  // Do not check qualifiers for non-parameter declaration
+  if (!isa<ParmVarDecl>(Arg0Decl)) {
+    if (!AccessQual ||
+        (!AccessQual->isReadOnly() && !AccessQual->isWriteOnly()))
+      return false;
+  }
+
   // Validates the access qualifier is compatible with the call.
   // OpenCL v2.0 s6.13.16 - The access qualifiers for pipe should only be
   // read_only and write_only, and assumed to be read_only if no qualifier is
   // specified.
   switch (Call->getDirectCallee()->getBuiltinID()) {
   case Builtin::BIread_pipe:
+  case Builtin::BIread_pipe_block:
   case Builtin::BIreserve_read_pipe:
   case Builtin::BIcommit_read_pipe:
   case Builtin::BIwork_group_reserve_read_pipe:
@@ -644,6 +660,7 @@ static bool checkOpenCLPipeArg(Sema &S, CallExpr *Call) {
     }
     break;
   case Builtin::BIwrite_pipe:
+  case Builtin::BIwrite_pipe_block:
   case Builtin::BIreserve_write_pipe:
   case Builtin::BIcommit_write_pipe:
   case Builtin::BIwork_group_reserve_write_pipe:
@@ -659,6 +676,251 @@ static bool checkOpenCLPipeArg(Sema &S, CallExpr *Call) {
     break;
   default:
     break;
+  }
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFIFOStatus(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 1))
+    return true;
+
+  const auto *Fifo = Call->getArg(0);
+  QualType FifoTy = Fifo->getType();
+  if (!FifoTy->isPointerType()) {
+    return S.Diag(Fifo->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << FifoTy << Fifo->getSourceRange();
+  }
+
+  Call->setType(S.Context.BoolTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFIFOBlocking(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 2))
+    return true;
+
+  const auto *Fifo = Call->getArg(0);
+  QualType FifoTy = Fifo->getType();
+  if (!FifoTy->isPointerType()) {
+    return S.Diag(Fifo->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << FifoTy << Fifo->getSourceRange();
+  }
+
+  const auto *Data = Call->getArg(1);
+  QualType DataTy = Data->getType();
+  if (!DataTy->isPointerType()) {
+    return S.Diag(Data->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << DataTy << Data->getSourceRange();
+  }
+
+  if (FifoTy->getPointeeOrArrayElementType() !=
+      DataTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Data->getLocStart(), diag::err_builtin_expected_type)
+           << FifoTy << DataTy << Data->getSourceRange();
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFIFONonBlocking(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 2))
+    return true;
+
+  const auto *Fifo = Call->getArg(0);
+  QualType FifoTy = Fifo->getType();
+  if (!FifoTy->isPointerType()) {
+    return S.Diag(Fifo->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << FifoTy << Fifo->getSourceRange();
+  }
+
+  const auto *Data = Call->getArg(1);
+  QualType DataTy = Data->getType();
+  if (!DataTy->isPointerType()) {
+    return S.Diag(Data->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << DataTy << Data->getSourceRange();
+  }
+
+  if (FifoTy->getPointeeOrArrayElementType() !=
+      DataTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Data->getLocStart(), diag::err_builtin_expected_type)
+           << FifoTy << DataTy << Data->getSourceRange();
+  }
+
+  Call->setType(S.Context.BoolTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinShiftRegPeek(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 2))
+    return true;
+
+  const auto *Ptr = Call->getArg(0);
+  QualType PtrTy = Ptr->getType();
+  if (!PtrTy->isPointerType()) {
+    return S.Diag(Ptr->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << PtrTy << Ptr->getSourceRange();
+  }
+
+  const auto *Idx = Call->getArg(1);
+  QualType IdxTy = Idx->getType();
+  if (!IdxTy->isIntegerType()) {
+    return S.Diag(Idx->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << IdxTy << Idx->getSourceRange();
+  }
+
+  Call->setType(PtrTy->getPointeeType());
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinShiftRegShift(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 3))
+    return true;
+
+  const auto *Ptr = Call->getArg(1);
+  QualType PtrTy = Ptr->getType();
+  if (!PtrTy->isPointerType()) {
+    return S.Diag(Ptr->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << PtrTy << Ptr->getSourceRange();
+  }
+
+  const auto *Data = Call->getArg(0);
+  QualType DataTy = Data->getType();
+  if (PtrTy->getPointeeType() != DataTy) {
+    return S.Diag(Data->getLocStart(), diag::err_builtin_expected_type)
+           << PtrTy->getPointeeType() << DataTy << Data->getSourceRange();
+  }
+
+  const auto *Pred = Call->getArg(2);
+  QualType PredTy = Pred->getType();
+  if (!PredTy->isBooleanType()) {
+    return S.Diag(Ptr->getLocStart(), diag::err_builtin_expected_type)
+           << "bool" << PredTy << Pred->getSourceRange();
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+static bool SemaBuiltinAXISReadyAndValid(Sema &S, CallExpr *Call) {
+  if (!Call->getType()->isBooleanType())
+    return true;
+
+  if (Call->getNumArgs() != 7)
+    return true;
+
+  for (unsigned i = 0; i < 7; i++) {
+    const auto *PtrTy = Call->getArg(i)->getType()->getAs<PointerType>();
+    if (!PtrTy)
+      return true;
+  }
+
+  Call->setType(S.Context.BoolTy);
+  return false;
+}
+
+static bool SemaBuiltinAXISPopAndPush(Sema &S, CallExpr *Call) {
+  if (Call->getNumArgs() != 14)
+    return true;
+
+  for (unsigned i = 0; i < 7; i++) {
+    const auto *PtrTy = Call->getArg(i)->getType()->getAs<PointerType>();
+    if (!PtrTy || Call->getArg(i)->getType() != Call->getArg(i + 7)->getType())
+      return true;
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+static bool SemaBuiltinAXISNBPopAndPush(Sema &S, CallExpr *Call) {
+  if (Call->getNumArgs() != 14)
+    return true;
+
+  for (unsigned i = 0; i < 7; i++) {
+    const auto *PtrTy = Call->getArg(i)->getType()->getAs<PointerType>();
+    if (!PtrTy || Call->getArg(i)->getType() != Call->getArg(i + 7)->getType())
+      return true;
+  }
+
+  Call->setType(S.Context.BoolTy);
+  return false;
+}
+
+static bool SemaBuiltinSetStreamDepth(Sema&S, CallExpr *Call) { 
+  if (Call->getNumArgs() != 2)
+    return true;
+
+  const auto *PtrTy = Call->getArg(0)->getType()->getAs<PointerType>();
+  if (!PtrTy || !Call->getArg(1)->getType()->isIntegerType()) {
+    return true;
+  }
+  Call->setType(S.Context.VoidTy);
+  return false;
+
+}
+
+bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
+  switch (BuiltinID) {
+  case FPGA::BI__fpga_set_stream_depth:
+    return SemaBuiltinSetStreamDepth(*this, Call);
+  case FPGA::BI__fpga_fifo_not_empty:
+  case FPGA::BI__fpga_fifo_not_full:
+    return SemaBuiltinFIFOStatus(*this, Call);
+  case FPGA::BI__fpga_fifo_pop:
+  case FPGA::BI__fpga_fifo_push:
+    return SemaBuiltinFIFOBlocking(*this, Call);
+  case FPGA::BI__fpga_fifo_nb_pop:
+  case FPGA::BI__fpga_fifo_nb_push:
+    return SemaBuiltinFIFONonBlocking(*this, Call);
+  case FPGA::BI__fpga_shift_register_peek:
+    return SemaBuiltinShiftRegPeek(*this, Call);
+  case FPGA::BI__fpga_shift_register_shift:
+    return SemaBuiltinShiftRegShift(*this, Call);
+  case FPGA::BI__fpga_axis_ready:
+  case FPGA::BI__fpga_axis_valid:
+    return SemaBuiltinAXISReadyAndValid(*this, Call);
+  case FPGA::BI__fpga_axis_pop:
+  case FPGA::BI__fpga_axis_push:
+    return SemaBuiltinAXISPopAndPush(*this, Call);
+  case FPGA::BI__fpga_axis_nb_pop:
+  case FPGA::BI__fpga_axis_nb_push:
+    return SemaBuiltinAXISNBPopAndPush(*this, Call);
+  default:
+    break;
+  }
+
+  return false;
+}
+
+/// Returns true if pipe element type is different from the pointer.
+static bool SemaBuiltinRWHLSPipe(Sema &S, CallExpr *Call) {
+  const auto *Arg0 = Call->getArg(0);
+  const auto *ArgIdx = Call->getArg(1);
+  const auto *PipeTy = dyn_cast<PointerType>(Arg0->getType());
+  if (!PipeTy) {
+    S.Diag(Call->getLocStart(), diag::err_opencl_builtin_pipe_invalid_arg)
+        << Call->getDirectCallee() << "'pointer type'" << Arg0->getType()
+        << Arg0->getSourceRange();
+    return false;
+  }
+
+  const auto EltTy = PipeTy->getPointeeType();
+  const auto *ArgTy = ArgIdx->getType()->getAs<PointerType>();
+  // The Idx argument should be a pointer and the type of the pointer and
+  // the type of pipe element should also be the same.
+  if (!ArgTy ||
+      !S.Context.hasSameType(
+          EltTy, ArgTy->getPointeeType()->getCanonicalTypeInternal())) {
+    S.Diag(Call->getLocStart(), diag::err_opencl_builtin_pipe_invalid_arg)
+        << Call->getDirectCallee() << S.Context.getPointerType(EltTy)
+        << ArgIdx->getType() << ArgIdx->getSourceRange();
+    return true;
   }
   return false;
 }
@@ -1161,11 +1423,27 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
   // OpenCL v2.0, s6.13.16 - Pipe functions
   case Builtin::BIread_pipe:
   case Builtin::BIwrite_pipe:
+    // Not supported in hls extension
+    if (getLangOpts().HLSExt) {
+      Diag(TheCall->getLocStart(), diag::err_xocc_wrong_compiler_version)
+          << FDecl->getName();
+      return ExprError();
+    }
     // Since those two functions are declared with var args, we need a semantic
     // check for the argument.
     if (SemaBuiltinRWPipe(*this, TheCall))
       return ExprError();
     TheCall->setType(Context.IntTy);
+    break;
+  case Builtin::BIread_pipe_block:
+  case Builtin::BIwrite_pipe_block:
+    // Since those two functions are declared with var args, we need a semantic
+    // check for the argument.
+    if (getLangOpts().OpenCL) {
+      if (SemaBuiltinRWPipe(*this, TheCall))
+        return ExprError();
+    } else if (SemaBuiltinRWHLSPipe(*this, TheCall))
+      return ExprError();
     break;
   case Builtin::BIreserve_read_pipe:
   case Builtin::BIreserve_write_pipe:
@@ -1195,6 +1473,12 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
     break;
   case Builtin::BIget_pipe_num_packets:
   case Builtin::BIget_pipe_max_packets:
+    // Not supported in hls extension
+    if (getLangOpts().HLSExt) {
+      Diag(TheCall->getLocStart(), diag::err_xocc_wrong_compiler_version)
+          << FDecl->getName();
+      return ExprError();
+    }
     if (SemaBuiltinPipePackets(*this, TheCall))
       return ExprError();
     TheCall->setType(Context.UnsignedIntTy);
@@ -1264,6 +1548,11 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
       case llvm::Triple::ppc64:
       case llvm::Triple::ppc64le:
         if (CheckPPCBuiltinFunctionCall(BuiltinID, TheCall))
+          return ExprError();
+        break;
+      case llvm::Triple::fpga32:
+      case llvm::Triple::fpga64:
+        if (CheckFPGABuiltinFunctionCall(BuiltinID, TheCall))
           return ExprError();
         break;
       default:
@@ -8265,10 +8554,10 @@ struct IntRange {
                         false/*NonNegative*/);
     }
 
-    const BuiltinType *BT = cast<BuiltinType>(T);
-    assert(BT->isInteger());
+    assert((isa<BuiltinType>(T) && cast<BuiltinType>(T)->isInteger()) ||
+           isa<APIntType>(T));
 
-    return IntRange(C.getIntWidth(QualType(T, 0)), BT->isUnsignedInteger());
+    return IntRange(C.getIntWidth(QualType(T, 0)), T->isUnsignedIntegerType());
   }
 
   /// Returns the "target" range of a canonical integral type, i.e.
@@ -8288,10 +8577,10 @@ struct IntRange {
     if (const EnumType *ET = dyn_cast<EnumType>(T))
       T = C.getCanonicalType(ET->getDecl()->getIntegerType()).getTypePtr();
 
-    const BuiltinType *BT = cast<BuiltinType>(T);
-    assert(BT->isInteger());
+    assert((isa<BuiltinType>(T) && cast<BuiltinType>(T)->isInteger()) ||
+           isa<APIntType>(T));
 
-    return IntRange(C.getIntWidth(QualType(T, 0)), BT->isUnsignedInteger());
+    return IntRange(C.getIntWidth(QualType(T, 0)), T->isUnsignedIntegerType());
   }
 
   /// Returns the supremum of two ranges: i.e. their conservative merge.

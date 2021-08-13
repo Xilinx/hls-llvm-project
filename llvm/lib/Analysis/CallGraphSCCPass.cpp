@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the CallGraphSCCPass class, which is used for passes
@@ -22,6 +27,7 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GitCommitModule.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManagers.h"
@@ -645,11 +651,25 @@ Pass *CallGraphSCCPass::createPrinterPass(raw_ostream &OS,
   return new PrintCallGraphPass(Banner, OS);
 }
 
+static Module &getModule(CallGraphSCC &SCC) {
+  return SCC.getCallGraph().getModule();
+}
+
+#define RUN_ON(CallGraphSCC, SCC) runOnSCC(CallGraphSCC &SCC)
+GIT_COMMIT_MODULE_PASS_WRAPPER_INTERNAL(CallGraphSCC, getModule, RUN_ON)
+#undef RUN_ON
+
 bool CallGraphSCCPass::skipSCC(CallGraphSCC &SCC) const {
   return !SCC.getCallGraph().getModule()
               .getContext()
               .getOptBisect()
               .shouldRunPass(this, SCC);
+}
+
+Pass *
+CallGraphSCCPass::createGitCommitModulePass(const std::string &GitRepo,
+                                            const std::string &Message) const {
+  return new GitCommitCallGraphSCCPassWrapper(GitRepo, Message);
 }
 
 char DummyCGSCCPass::ID = 0;

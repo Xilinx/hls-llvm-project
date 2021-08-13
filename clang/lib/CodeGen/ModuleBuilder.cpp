@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This builds an AST and converts it to LLVM Code.
@@ -286,6 +291,13 @@ namespace {
         return;
 
       Builder->EmitTentativeDefinition(D);
+    }
+
+    void CompleteExternDeclaration(VarDecl *D) override {
+      if (Diags.hasErrorOccurred())
+        return;
+
+      Builder->EmitGlobalVarDeclaration(D);
     }
 
     void HandleVTable(CXXRecordDecl *RD) override {

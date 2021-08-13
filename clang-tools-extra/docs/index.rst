@@ -45,7 +45,6 @@ or reference manual for each tool.
     Since the tools of clang-tools-extra are constantly under active
     development, what you're about to read is out of date!
 
-
 Indices and tables
 ==================
 

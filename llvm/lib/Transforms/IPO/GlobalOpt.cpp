@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass transforms simple global variables that never have their address
@@ -458,6 +463,20 @@ static void transferSRADebugInfo(GlobalVariable *GV, GlobalVariable *NGV,
     auto *NGVE = DIGlobalVariableExpression::get(GVE->getContext(), Var, Expr);
     NGV->addDebugInfo(NGVE);
   }
+  // XILINX_HLS: to keep xilinx.attributes for xlx_var_reset
+  MDNode *NMD = NGV->getMetadata("xilinx.attributes");
+  MDNode *OMD = GV->getMetadata("xilinx.attributes");
+  if(OMD && !NMD) {
+    MDNode *MD = OMD;
+    while(MD && MD->getNumOperands() == 1)
+      MD = cast<MDNode>(MD->getOperand(0));
+    if(MD) {
+      MDString *MS = cast<MDString>(MD->getOperand(0));
+      if(MS && "xlx_var_reset" == MS->getString())
+        NGV->setMetadata("xilinx.attributes", OMD);
+    }
+  }
+
 }
 
 /// Perform scalar replacement of aggregates on the specified global variable.
@@ -1635,37 +1654,39 @@ static bool TryToShrinkGlobalToBoolean(GlobalVariable *GV, Constant *OtherVal) {
   if (ConstantInt *CI = dyn_cast<ConstantInt>(OtherVal)){
     IsOneZero = InitVal->isNullValue() && CI->isOne();
 
-    if (ConstantInt *CIInit = dyn_cast<ConstantInt>(GV->getInitializer())){
-      uint64_t ValInit = CIInit->getZExtValue();
-      uint64_t ValOther = CI->getZExtValue();
-      uint64_t ValMinus = ValOther - ValInit;
+    if (ConstantInt *CIInit = dyn_cast<ConstantInt>(GV->getInitializer())) {
+      if (CIInit->getBitWidth() <= 64) {
+        uint64_t ValInit = CIInit->getZExtValue();
+        uint64_t ValOther = CI->getZExtValue();
+        uint64_t ValMinus = ValOther - ValInit;
 
-      for(auto *GVe : GVs){
-        DIGlobalVariable *DGV = GVe->getVariable();
-        DIExpression *E = GVe->getExpression();
+        for(auto *GVe : GVs){
+          DIGlobalVariable *DGV = GVe->getVariable();
+          DIExpression *E = GVe->getExpression();
 
-        // It is expected that the address of global optimized variable is on
-        // top of the stack. After optimization, value of that variable will
-        // be ether 0 for initial value or 1 for other value. The following
-        // expression should return constant integer value depending on the
-        // value at global object address:
-        // val * (ValOther - ValInit) + ValInit:
-        // DW_OP_deref DW_OP_constu <ValMinus>
-        // DW_OP_mul DW_OP_constu <ValInit> DW_OP_plus DW_OP_stack_value
-        E = DIExpression::get(NewGV->getContext(),
-                             {dwarf::DW_OP_deref,
-                              dwarf::DW_OP_constu,
-                              ValMinus,
-                              dwarf::DW_OP_mul,
-                              dwarf::DW_OP_constu,
-                              ValInit,
-                              dwarf::DW_OP_plus,
-                              dwarf::DW_OP_stack_value});
-        DIGlobalVariableExpression *DGVE =
-          DIGlobalVariableExpression::get(NewGV->getContext(), DGV, E);
-        NewGV->addDebugInfo(DGVE);
-     }
-     EmitOneOrZero = false;
+          // It is expected that the address of global optimized variable is on
+          // top of the stack. After optimization, value of that variable will
+          // be ether 0 for initial value or 1 for other value. The following
+          // expression should return constant integer value depending on the
+          // value at global object address:
+          // val * (ValOther - ValInit) + ValInit:
+          // DW_OP_deref DW_OP_constu <ValMinus>
+          // DW_OP_mul DW_OP_constu <ValInit> DW_OP_plus DW_OP_stack_value
+          E = DIExpression::get(NewGV->getContext(),
+                               {dwarf::DW_OP_deref,
+                                dwarf::DW_OP_constu,
+                                ValMinus,
+                                dwarf::DW_OP_mul,
+                                dwarf::DW_OP_constu,
+                                ValInit,
+                                dwarf::DW_OP_plus,
+                                dwarf::DW_OP_stack_value});
+          DIGlobalVariableExpression *DGVE =
+            DIGlobalVariableExpression::get(NewGV->getContext(), DGV, E);
+          NewGV->addDebugInfo(DGVE);
+        }
+        EmitOneOrZero = false;
+      }
     }
   }
 

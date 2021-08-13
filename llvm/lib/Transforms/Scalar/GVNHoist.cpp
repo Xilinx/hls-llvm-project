@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass hoists expressions from branches to a common dominator. It uses
@@ -48,6 +53,7 @@
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
@@ -256,8 +262,9 @@ static void combineKnownMetadata(Instruction *ReplInst, Instruction *I) {
 class GVNHoist {
 public:
   GVNHoist(DominatorTree *DT, PostDominatorTree *PDT, AliasAnalysis *AA,
-           MemoryDependenceResults *MD, MemorySSA *MSSA)
-      : DT(DT), PDT(PDT), AA(AA), MD(MD), MSSA(MSSA),
+           MemoryDependenceResults *MD, MemorySSA *MSSA,
+           TargetTransformInfo &TTI)
+      : DT(DT), PDT(PDT), AA(AA), MD(MD), MSSA(MSSA), TTI(TTI),
         MSSAUpdater(llvm::make_unique<MemorySSAUpdater>(MSSA)) {}
 
   bool run(Function &F) {
@@ -333,13 +340,13 @@ private:
   AliasAnalysis *AA;
   MemoryDependenceResults *MD;
   MemorySSA *MSSA;
+  TargetTransformInfo &TTI;
   std::unique_ptr<MemorySSAUpdater> MSSAUpdater;
   DenseMap<const Value *, unsigned> DFSNumber;
   BBSideEffectsSet BBSideEffects;
   DenseSet<const BasicBlock *> HoistBarrier;
   SmallVector<BasicBlock *, 32> IDFBlocks;
   unsigned NumFuncArgs;
-  const bool HoistingGeps = false;
 
   enum InsKind { Unknown, Scalar, Load, Store };
 
@@ -1042,7 +1049,7 @@ private:
         if (!allOperandsAvailable(Repl, DestBB)) {
           // When HoistingGeps there is nothing more we can do to make the
           // operands available: just continue.
-          if (HoistingGeps)
+          if (TTI.isRegisterRich())
             continue;
 
           // When not HoistingGeps we need to copy the GEPs.
@@ -1121,7 +1128,7 @@ private:
             break;
 
           CI.insert(Call, VN);
-        } else if (HoistingGeps || !isa<GetElementPtrInst>(&I1))
+        } else if (TTI.isRegisterRich() || !isa<GetElementPtrInst>(&I1))
           // Do not hoist scalars past calls that may write to memory because
           // that could result in spills later. geps are handled separately.
           // TODO: We can relax this for targets like AArch64 as they have more
@@ -1157,12 +1164,14 @@ public:
     auto &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
     auto &MD = getAnalysis<MemoryDependenceWrapperPass>().getMemDep();
     auto &MSSA = getAnalysis<MemorySSAWrapperPass>().getMSSA();
+    auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
 
-    GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA);
+    GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA, TTI);
     return G.run(F);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<TargetTransformInfoWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<PostDominatorTreeWrapperPass>();
     AU.addRequired<AAResultsWrapperPass>();
@@ -1182,7 +1191,8 @@ PreservedAnalyses GVNHoistPass::run(Function &F, FunctionAnalysisManager &AM) {
   AliasAnalysis &AA = AM.getResult<AAManager>(F);
   MemoryDependenceResults &MD = AM.getResult<MemoryDependenceAnalysis>(F);
   MemorySSA &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
-  GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA);
+  TargetTransformInfo &TTI = AM.getResult<TargetIRAnalysis>(F);
+  GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA, TTI);
   if (!G.run(F))
     return PreservedAnalyses::all();
 

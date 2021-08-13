@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements sparse conditional constant propagation and merging:
@@ -32,6 +37,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueLattice.h"
 #include "llvm/Analysis/ValueLatticeUtils.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constant.h"
@@ -280,6 +286,7 @@ public:
   /// this method must be called.
   void AddTrackedFunction(Function *F) {
     // Add an entry, F -> undef.
+    if (F->hasFnAttribute("fpga.top.func")) return;
     if (auto *STy = dyn_cast<StructType>(F->getReturnType())) {
       MRVFunctionsTracked.insert(F);
       for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i)
@@ -1640,6 +1647,16 @@ static bool tryToReplaceWithConstantRange(SCCPSolver &Solver, Value *V) {
   return Changed;
 }
 
+static void updateFunctionAttribute(Value *V, Constant *C) {
+  if (!isa<Argument>(V))
+    return;
+  auto *F = cast<Argument>(V)->getParent();
+  if (!isa<GlobalVariable>(
+          GetUnderlyingObject(C, F->getParent()->getDataLayout())))
+    return;
+  F->removeFnAttr(Attribute::ArgMemOnly);
+}
+
 static bool tryToReplaceWithConstant(SCCPSolver &Solver, Value *V) {
   Constant *Const = nullptr;
   if (V->getType()->isStructTy()) {
@@ -1676,6 +1693,7 @@ static bool tryToReplaceWithConstant(SCCPSolver &Solver, Value *V) {
 
   // Replaces all of the uses of a variable with uses of the constant.
   V->replaceAllUsesWith(Const);
+  updateFunctionAttribute(V, Const);
   return true;
 }
 

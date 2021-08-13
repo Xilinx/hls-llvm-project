@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // The ScalarEvolution class is an LLVM pass which can be used to analyze and
@@ -1565,14 +1570,17 @@ private:
   /// whenever the given FoundCondValue value evaluates to true.
   bool isImpliedCond(ICmpInst::Predicate Pred, const SCEV *LHS, const SCEV *RHS,
                      Value *FoundCondValue, bool Inverse);
-
+  /// HLS BEGIN 
+  /// public 'isImpliedCond' because it will be used in loop unrotation
+public:
   /// Test whether the condition described by Pred, LHS, and RHS is true
   /// whenever the condition described by FoundPred, FoundLHS, FoundRHS is
   /// true.
   bool isImpliedCond(ICmpInst::Predicate Pred, const SCEV *LHS, const SCEV *RHS,
                      ICmpInst::Predicate FoundPred, const SCEV *FoundLHS,
                      const SCEV *FoundRHS);
-
+private:
+  /// HLS END
   /// Test whether the condition described by Pred, LHS, and RHS is true
   /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
   /// true.

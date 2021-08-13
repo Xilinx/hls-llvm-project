@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code to emit Expr nodes as LLVM code.
@@ -1463,6 +1468,11 @@ static bool getRangeForType(CodeGenFunction &CGF, QualType Ty,
     return false;
 
   if (IsBool) {
+    auto *BoolTy = CGF.ConvertTypeForMem(Ty);
+    // We do not need a range for i1
+    if (CGF.getLangOpts().HLSExt && BoolTy->isIntegerTy(1))
+      return false;
+
     Min = llvm::APInt(CGF.getContext().getTypeSize(Ty), 0);
     End = llvm::APInt(CGF.getContext().getTypeSize(Ty), 2);
   } else {
@@ -1617,6 +1627,11 @@ llvm::Value *CodeGenFunction::EmitToMemory(llvm::Value *Value, QualType Ty) {
 llvm::Value *CodeGenFunction::EmitFromMemory(llvm::Value *Value, QualType Ty) {
   // Bool has a different representation in memory than in registers.
   if (hasBooleanRepresentation(Ty)) {
+    // With HLS extension we will generate 1 bit memory. In this case,
+    // truncating the loaded data is not need
+    if (getContext().getLangOpts().HLSExt && Value->getType()->isIntegerTy(1))
+      return Value;
+
     assert(Value->getType()->isIntegerTy(getContext().getTypeSize(Ty)) &&
            "wrong value rep of bool");
     return Builder.CreateTrunc(Value, Builder.getInt1Ty(), "tobool");
@@ -3709,9 +3724,8 @@ LValue CodeGenFunction::EmitLValueForLambdaField(const FieldDecl *Field) {
 static Address emitAddrOfFieldStorage(CodeGenFunction &CGF, Address base,
                                       const FieldDecl *field) {
   const RecordDecl *rec = field->getParent();
-  
-  unsigned idx =
-    CGF.CGM.getTypes().getCGRecordLayout(rec).getLLVMFieldNo(field);
+  auto &CGT = CGF.CGM.getTypes();
+  unsigned idx = CGT.getCGRecordLayout(rec).getLLVMFieldNo(field);
 
   CharUnits offset;
   // Adjust the alignment down to the given offset.
@@ -3725,6 +3739,9 @@ static Address emitAddrOfFieldStorage(CodeGenFunction &CGF, Address base,
     auto offsetInBits = recLayout.getFieldOffset(field->getFieldIndex());
     offset = CGF.getContext().toCharUnitsFromBits(offsetInBits);
   }
+
+  if (CGF.getLangOpts().HLSExt && rec->hasAttr<CodeGenTypeAttr>())
+    return base;
 
   return CGF.Builder.CreateStructGEP(base, idx, offset, field->getName());
 }

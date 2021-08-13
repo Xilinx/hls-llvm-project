@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the options accepted by clang -cc1 and clang -cc1as.
@@ -288,6 +293,13 @@ def mlink_bitcode_file : Separate<["-"], "mlink-bitcode-file">,
 def mlink_cuda_bitcode : Separate<["-"], "mlink-cuda-bitcode">,
   HelpText<"Link and internalize needed symbols from the given bitcode file "
            "before performing optimizations.">;
+def mlink_opencl_bitcode : Separate<["-"], "mlink-opencl-bitcode">,
+  HelpText<"Link and internalize needed symbols from the given bitcode file "
+           "before performing optimizations.">;
+def mhls_ir : Flag<["-"], "mhls-ir">,
+  HelpText<"Generate HLS compatible LLVM IR.">;
+def spir_despmd : Flag<["-"], "spir-despmd">,
+  HelpText<"de-SPMD the spir kernels">;
 def vectorize_loops : Flag<["-"], "vectorize-loops">,
   HelpText<"Run the Loop vectorization passes">;
 def vectorize_slp : Flag<["-"], "vectorize-slp">,
@@ -389,6 +401,8 @@ def ftabstop : Separate<["-"], "ftabstop">, MetaVarName<"<N>">,
   HelpText<"Set the tab stop distance.">;
 def ferror_limit : Separate<["-"], "ferror-limit">, MetaVarName<"<N>">,
   HelpText<"Set the maximum number of errors to emit before stopping (0 = no limit).">;
+def fwarn_limit : Separate<["-"], "fwarn-limit">, MetaVarName<"<N>">,
+  HelpText<"Set the maximum number of warnings to emit before stopping (0 = no limit).">;
 def fmacro_backtrace_limit : Separate<["-"], "fmacro-backtrace-limit">, MetaVarName<"<N>">,
   HelpText<"Set the maximum number of entries to print in a macro expansion backtrace (0 = no limit).">;
 def ftemplate_backtrace_limit : Separate<["-"], "ftemplate-backtrace-limit">, MetaVarName<"<N>">,
@@ -806,7 +820,6 @@ def fopenmp_is_device : Flag<["-"], "fopenmp-is-device">,
   HelpText<"Generate code only for an OpenMP target device.">;
 def fopenmp_host_ir_file_path : Separate<["-"], "fopenmp-host-ir-file-path">,
   HelpText<"Path to the IR file produced by the frontend for the host.">;
-  
 } // let Flags = [CC1Option]
 
 

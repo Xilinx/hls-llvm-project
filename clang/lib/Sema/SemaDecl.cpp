@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements semantic analysis for declarations.
@@ -6276,7 +6281,7 @@ NamedDecl *Sema::ActOnVariableDeclarator(
     // OpenCL v2.0 s6.9.b - Image type can only be used as a function argument.
     // OpenCL v2.0 s6.13.16.1 - Pipe type can only be used as a function
     // argument.
-    if (R->isImageType() || R->isPipeType()) {
+    if (!getLangOpts().HLSExt && (R->isImageType() || R->isPipeType())) {
       Diag(D.getIdentifierLoc(),
            diag::err_opencl_type_can_only_be_used_as_function_parameter)
           << R;
@@ -7335,10 +7340,10 @@ void Sema::CheckVariableDeclarationType(VarDecl *NewVD) {
     // address space.
     if (NewVD->isFileVarDecl() || NewVD->isStaticLocal() ||
         NewVD->hasExternalStorage()) {
-      if (!T->isSamplerT() &&
+      if (!T->isSamplerT() && !T->isPipeType() &&
           !(T.getAddressSpace() == LangAS::opencl_constant ||
             (T.getAddressSpace() == LangAS::opencl_global &&
-             getLangOpts().OpenCLVersion == 200))) {
+             (getLangOpts().OpenCLVersion == 200 || getLangOpts().HLSExt)))) {
         int Scope = NewVD->isStaticLocal() | NewVD->hasExternalStorage() << 1;
         if (getLangOpts().OpenCLVersion == 200)
           Diag(NewVD->getLocation(), diag::err_opencl_global_invalid_addr_space)
@@ -9071,6 +9076,10 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     if (FunctionTemplate) {
       if (NewFD->isInvalidDecl())
         FunctionTemplate->setInvalidDecl();
+      if (getLangOpts().XMCExt) {
+        FunctionTemplate->XMCPortDirection = XMC_portDirection;
+        XMC_portDirection.clear();
+      }
       return FunctionTemplate;
     }
 
@@ -9126,6 +9135,11 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
                                 HasExplicitTemplateArgs, TemplateArgs);
     CurContext->addDecl(NewSpec);
     AddToScope = false;
+  }
+
+  if (getLangOpts().XMCExt) {
+    NewFD->XMCPortDirection = XMC_portDirection;
+    XMC_portDirection.clear();
   }
 
   return NewFD;
@@ -10672,9 +10686,26 @@ void Sema::AddInitializerToDecl(Decl *RealDecl, Expr *Init, bool DirectInit) {
   // OpenCL 1.1 6.5.2: "Variables allocated in the __local address space inside
   // a kernel function cannot be initialized."
   if (VDecl->getType().getAddressSpace() == LangAS::opencl_local) {
-    Diag(VDecl->getLocation(), diag::err_local_cant_init);
+    Diag(VDecl->getLocation(), diag::err_opencl_variable_cant_init) << 0;
     VDecl->setInvalidDecl();
     return;
+  }
+
+  // XCL: program scope variable in the __global and the pipe address space
+  // cannot be initialized
+  if (getLangOpts().HLSExt) {
+    // Pipe has implicit __global address space in opencl 2.0
+    if (VDecl->getType()->isPipeType()) {
+      Diag(VDecl->getLocation(), diag::err_opencl_variable_cant_init) << 2;
+      VDecl->setInvalidDecl();
+      return;
+    }
+
+    if (VDecl->getType().getAddressSpace() == LangAS::opencl_global) {
+      Diag(VDecl->getLocation(), diag::err_opencl_variable_cant_init) << 1;
+      VDecl->setInvalidDecl();
+      return;
+    }
   }
 
   // Get the decls type and save a reference for later, since
@@ -11077,26 +11108,36 @@ void Sema::ActOnUninitializedDecl(Decl *RealDecl) {
     case VarDecl::DeclarationOnly:
       // It's only a declaration.
 
+      if (Var->isInvalidDecl())
+        return;
+
       // Block scope. C99 6.7p7: If an identifier for an object is
       // declared with no linkage (C99 6.2.2p6), the type for the
       // object shall be complete.
       if (!Type->isDependentType() && Var->isLocalVarDecl() &&
-          !Var->hasLinkage() && !Var->isInvalidDecl() &&
+          !Var->hasLinkage() &&
           RequireCompleteType(Var->getLocation(), Type,
-                              diag::err_typecheck_decl_incomplete_type))
+                              diag::err_typecheck_decl_incomplete_type)) {
         Var->setInvalidDecl();
+        return;
+      }
 
       // Make sure that the type is not abstract.
-      if (!Type->isDependentType() && !Var->isInvalidDecl() &&
+      if (!Type->isDependentType() &&
           RequireNonAbstractType(Var->getLocation(), Type,
                                  diag::err_abstract_type_in_decl,
-                                 AbstractVariableType))
+                                 AbstractVariableType)) {
         Var->setInvalidDecl();
-      if (!Type->isDependentType() && !Var->isInvalidDecl() &&
+        return;
+      }
+
+      if (!Type->isDependentType() &&
           Var->getStorageClass() == SC_PrivateExtern) {
         Diag(Var->getLocation(), diag::warn_private_extern);
         Diag(Var->getLocation(), diag::note_private_extern);
       }
+
+      ExternDecls.push_back(Var);
 
       return;
 

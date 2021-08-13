@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements induction variable simplification. It does
@@ -42,6 +47,16 @@ STATISTIC(
     NumSimplifiedSRem,
     "Number of IV signed remainder operations converted to unsigned remainder");
 STATISTIC(NumElimCmp     , "Number of IV comparisons eliminated");
+
+static cl::opt<bool>
+EnableTransformToUnsignedComp("enable-transform-to-unsigned-comp",
+  cl::init(false), cl::Hidden,
+  cl::desc("Enable transformation to unsigned comparison."));
+
+static cl::opt<bool>
+EnableSimplifiedURem("enable-simplified-urem",
+  cl::init(false), cl::Hidden,
+  cl::desc("Enable simplification for urem on loop index."));
 
 namespace {
   /// This is a utility for simplifying induction variables
@@ -259,7 +274,8 @@ void SimplifyIndvar::eliminateIVComparison(ICmpInst *ICmp, Value *IVOperand) {
     DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
   } else if (makeIVComparisonInvariant(ICmp, IVOperand)) {
     // fallthrough to end of function
-  } else if (ICmpInst::isSigned(OriginalPred) &&
+  } else if (EnableTransformToUnsignedComp &&
+             ICmpInst::isSigned(OriginalPred) &&
              SE->isKnownNonNegative(S) && SE->isKnownNonNegative(X)) {
     // If we were unable to make anything above, all we can is to canonicalize
     // the comparison hoping that it will open the doors for other
@@ -531,6 +547,14 @@ static Instruction *GetLoopInvariantInsertPosition(Loop *L, Instruction *Hint) {
 
 /// Replace the UseInst with a constant if possible.
 bool SimplifyIndvar::replaceIVUserWithLoopInvariant(Instruction *I) {
+  using namespace llvm::PatternMatch;
+
+  Value *LHS, *RHS;
+  if (!EnableSimplifiedURem && match(I, m_URem(m_Value(LHS), m_Value(RHS))))
+    for (auto &U : LHS->uses())
+      if (match(U.getUser(), m_UDiv(m_Specific(LHS), m_Specific(RHS))))
+        return false;
+
   if (!SE->isSCEVable(I->getType()))
     return false;
 

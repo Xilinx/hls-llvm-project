@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "Clang.h"
@@ -3056,6 +3061,7 @@ static void RenderDebugOptions(const ToolChain &TC, const Driver &D,
   RenderDebugInfoCompressionArgs(Args, CmdArgs, D);
 }
 
+
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                          const InputInfo &Output, const InputInfoList &Inputs,
                          const ArgList &Args, const char *LinkingOutput) const {
@@ -3327,6 +3333,30 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
   else
     CmdArgs.push_back(Args.MakeArgString(getToolChain().getThreadModel()));
+
+  if (Arg *A = Args.getLastArg(options::OPT_fhls)) {
+    CmdArgs.push_back("-fhls");
+    // Generate HLS compatibel IR with -fhls
+    CmdArgs.push_back("-mhls-ir");
+    // -fhls implies -disable-O0-optnone
+    CmdArgs.push_back("-disable-O0-optnone");
+    A->claim();
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_fstrict_dataflow)) {
+    CmdArgs.push_back("-fstrict-dataflow");
+    A->claim();
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_hls_platform_name)) {
+    CmdArgs.push_back(Args.MakeArgString("-hls-platform-name=" + StringRef(A->getValue())));
+    A->claim();
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_hls_platform_db_name)) {
+    CmdArgs.push_back(Args.MakeArgString("-hls-platform-db-name=" + StringRef(A->getValue())));
+    A->claim();
+  }
 
   Args.AddLastArg(CmdArgs, options::OPT_fveclib);
 
@@ -4441,6 +4471,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasFlag(options::OPT_fapple_pragma_pack,
                    options::OPT_fno_apple_pragma_pack, false))
     CmdArgs.push_back("-fapple-pragma-pack");
+
+  if (Args.hasFlag(options::OPT_fsave_optimization_record,
+                   options::OPT_fno_save_optimization_record, false))
+    CmdArgs.push_back("-fsave-optimization-record");
 
   if (Args.hasFlag(options::OPT_fsave_optimization_record,
                    options::OPT_foptimization_record_file_EQ,

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements inlining of a function into a call site, resolving
@@ -56,6 +61,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -84,8 +90,13 @@ PreserveAlignmentAssumptions("preserve-alignment-assumptions-during-inlining",
   cl::init(true), cl::Hidden,
   cl::desc("Convert align attributes to assumptions during inlining."));
 
-bool llvm::InlineFunction(CallInst *CI, InlineFunctionInfo &IFI,
-                          AAResults *CalleeAAR, bool InsertLifetime) {
+static cl::opt<bool>
+EnableInlineByvalWithMemcpy("inline-byval-with-memcpy", cl::init(false),
+                            cl::Hidden,
+                            cl::desc("Inline byval propagation with memcpy."));
+
+    bool llvm::InlineFunction(CallInst *CI, InlineFunctionInfo &IFI,
+                              AAResults *CalleeAAR, bool InsertLifetime) {
   return InlineFunction(CallSite(CI), IFI, CalleeAAR, InsertLifetime);
 }
 
@@ -1245,10 +1256,17 @@ static void HandleByValArgumentInit(Value *Dst, Value *Src, Module *M,
 
   Value *Size = Builder.getInt64(M->getDataLayout().getTypeStoreSize(AggTy));
 
-  // Always generate a memcpy of alignment 1 here because we don't know
-  // the alignment of the src pointer.  Other optimizations can infer
-  // better alignment.
-  Builder.CreateMemCpy(Dst, Src, Size, /*Align=*/1);
+  if (EnableInlineByvalWithMemcpy) {
+    // Always generate a memcpy of alignment 1 here because we don't know
+    // the alignment of the src pointer.  Other optimizations can infer
+    // better alignment.
+    Builder.CreateMemCpy(Dst, Src, Size, /*Align=*/1);
+    return;
+  }
+
+  // Generate with single load/store.
+  auto *LI = Builder.CreateLoad(Src);
+  Builder.CreateStore(LI, Dst);
 }
 
 /// When inlining a call site that has a byval argument,
@@ -2325,6 +2343,24 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
 
   // Since we are now done with the Call/Invoke, we can delete it.
   TheCall->eraseFromParent();
+
+  // If we inlined any calls and the original return is now unreachable, delete
+  // dangling scopes(with entry but no reachable exits).
+  if (pred_begin(AfterCallBB) == pred_end(AfterCallBB)) {
+    SetVector<Instruction *> DanglingScopes;
+    for (auto &I : *AfterCallBB)
+      if (auto *Exit = dyn_cast<DirectiveScopeExit>(&I)) {
+        auto *Entry = Exit->getEntry();
+        if (!Entry || !Entry->hasOneUse())
+          continue;
+
+        DanglingScopes.insert(Exit);
+        DanglingScopes.insert(Entry);
+      }
+
+    for (auto *D : DanglingScopes)
+      D->eraseFromParent();
+  }
 
   // If we inlined any musttail calls and the original return is now
   // unreachable, delete it.  It can only contain a bitcast and ret.

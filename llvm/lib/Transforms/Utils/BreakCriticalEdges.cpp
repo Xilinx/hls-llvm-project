@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // BreakCriticalEdges pass - Break all of the critical edges in the CFG by
@@ -151,6 +156,24 @@ llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
   BranchInst *NewBI = BranchInst::Create(DestBB, NewBB);
   NewBI->setDebugLoc(TI->getDebugLoc());
 
+  // XILINX_HLS: to keep llvm.loop for loopID
+  if(MDNode *MD = TI->getMetadata("llvm.loop")) {
+    DominatorTree *DT = Options.DT;
+    bool IsBackEdge = false;
+    if(!DT) {
+      DominatorTree TmpDT(*(TIBB->getParent()));
+      if(TmpDT.dominates(DestBB, TIBB))
+        IsBackEdge = true;
+    } else {
+      if(DT->dominates(DestBB, TIBB))
+        IsBackEdge = true;
+    }
+
+    if(IsBackEdge) {
+      NewBI->setMetadata("llvm.loop", MD);
+      TI->setMetadata("llvm.loop", NULL);
+    }
+  }
   // Branch to the new block, breaking the edge.
   TI->setSuccessor(SuccNum, NewBB);
 

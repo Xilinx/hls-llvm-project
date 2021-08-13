@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This transformation implements the well known scalar replacement of
@@ -122,6 +127,10 @@ static cl::opt<bool> SROARandomShuffleSlices("sroa-random-shuffle-slices",
 /// Hidden option to experiment with completely strict handling of inbounds
 /// GEPs.
 static cl::opt<bool> SROAStrictInbounds("sroa-strict-inbounds", cl::init(false),
+                                        cl::Hidden);
+
+/// Only perform SROA on actual Aggregates.
+static cl::opt<bool> SROAAggregatesOnly("sroa-aggregates-only", cl::init(true),
                                         cl::Hidden);
 
 namespace {
@@ -4227,6 +4236,10 @@ bool SROA::runOnAlloca(AllocaInst &AI) {
   // Skip alloca forms that this analysis can't handle.
   if (AI.isArrayAllocation() || !AI.getAllocatedType()->isSized() ||
       DL.getTypeAllocSize(AI.getAllocatedType()) == 0)
+    return false;
+
+  // Skip alloca that are not aggregates.
+  if (SROAAggregatesOnly && !AI.getAllocatedType()->isAggregateType())
     return false;
 
   bool Changed = false;

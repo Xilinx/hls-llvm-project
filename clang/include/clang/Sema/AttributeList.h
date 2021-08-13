@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the AttributeList class, which is used to collect
@@ -375,6 +380,8 @@ public:
     return getKind() == AT_Aligned && isKeywordAttribute();
   }
 
+  bool isXCLDataflowAttribute() const { return getKind() == AT_XCLDataFlow; }
+
   bool isDeclspecAttribute() const { return SyntaxUsed == AS_Declspec; }
   bool isMicrosoftAttribute() const { return SyntaxUsed == AS_Microsoft; }
   bool isCXX11Attribute() const {
@@ -415,7 +422,10 @@ public:
                       Syntax SyntaxUsed);
 
   AttributeList *getNext() const { return NextInPosition; }
-  void setNext(AttributeList *N) { NextInPosition = N; }
+  void setNext(AttributeList *N) {
+    assert(this != N);
+    NextInPosition = N;
+  }
 
   /// getNumArgs - Return the number of actual arguments to this attribute.
   unsigned getNumArgs() const { return NumArgs; }
@@ -656,6 +666,12 @@ public:
                                           ellipsisLoc));
   }
 
+  AttributeList *clone(AttributeList &From) {
+    return create(From.AttrName, From.AttrRange, From.ScopeName, From.ScopeLoc,
+                  From.getArgsBuffer(), From.getNumArgs(),
+                  AttributeList::Syntax(From.SyntaxUsed), From.EllipsisLoc);
+  }
+
   AttributeList *create(IdentifierInfo *attrName, SourceRange attrRange,
                         IdentifierInfo *scopeName, SourceLocation scopeLoc,
                         IdentifierLoc *Param,
@@ -806,6 +822,12 @@ public:
     return attr;
   }
 
+  AttributeList *clone(AttributeList &From) {
+    auto *attr = pool.clone(From);
+    add(attr);
+    return attr;
+  }
+
   /// Add availability attribute.
   AttributeList *addNew(IdentifierInfo *attrName, SourceRange attrRange,
                         IdentifierInfo *scopeName, SourceLocation scopeLoc,
@@ -891,12 +913,14 @@ enum AttributeArgumentNType {
   AANT_ArgumentIntOrBool,
   AANT_ArgumentIntegerConstant,
   AANT_ArgumentString,
-  AANT_ArgumentIdentifier
+  AANT_ArgumentIdentifier,
+  AANT_ArgumentBool
 };
 
 /// These constants match the enumerated choices of
 /// warn_attribute_wrong_decl_type and err_attribute_wrong_decl_type.
 enum AttributeDeclKind {
+  ExpectedInteger,
   ExpectedFunction,
   ExpectedUnion,
   ExpectedVariableOrFunction,

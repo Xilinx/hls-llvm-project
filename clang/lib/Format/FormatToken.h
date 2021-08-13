@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -379,6 +384,7 @@ struct FormatToken {
     case tok::exclaim:
     case tok::tilde:
     case tok::kw_sizeof:
+    case tok::kw___bitwidthof:
     case tok::kw_alignof:
       return true;
     default:
@@ -404,6 +410,7 @@ struct FormatToken {
     case tok::kw_typeid:
     case tok::kw_return:
     case tok::kw_sizeof:
+    case tok::kw___bitwidthof:
     case tok::kw_alignof:
     case tok::kw_alignas:
     case tok::kw_decltype:

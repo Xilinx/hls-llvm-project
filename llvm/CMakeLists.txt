@@ -308,6 +308,7 @@ set(LLVM_ALL_TARGETS
   AMDGPU
   ARM
   BPF
+  FPGA
   Hexagon
   Lanai
   Mips
@@ -457,6 +458,47 @@ else()
   set(LINK_POLLY_INTO_TOOLS OFF)
 endif()
 
+# Build with custom compile launcher if present in the environment
+if(DEFINED ENV{CMAKE_COMPILE_LAUNCHER})
+    message("-- Using compile cache wrapper $ENV{CMAKE_COMPILE_LAUNCHER}")
+	set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE
+	    "$ENV{CMAKE_COMPILE_LAUNCHER}")
+endif()
+
+# Build with custom link launcher if present in the environment
+if(DEFINED ENV{CMAKE_LINK_LAUNCHER})
+    message("-- Using link cache wrapper $ENV{CMAKE_LINK_LAUNCHER}")
+	set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK
+	    "$ENV{CMAKE_LINK_LAUNCHER}")
+endif()
+
+# Workaround for gccarwrap and -o option
+#set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> qc -o <TARGET> <LINK_FLAGS> <OBJECTS>")
+#set(CMAKE_CXX_ARCHIVE_APPEND "<CMAKE_AR> q  -o <TARGET> <LINK_FLAGS> <OBJECTS>")
+#set(CMAKE_CXX_ARCHIVE_FINISH "")
+#set(CMAKE_C_ARCHIVE_CREATE "<CMAKE_AR> qc -o <TARGET> <LINK_FLAGS> <OBJECTS>")
+#set(CMAKE_C_ARCHIVE_APPEND "<CMAKE_AR> q  -o <TARGET> <LINK_FLAGS> <OBJECTS>")
+#set(CMAKE_C_ARCHIVE_FINISH "")
+
+
+if (EXISTS ${LLVM_MAIN_SRC_DIR}/tools/reflow/CMakeLists.txt)
+  set(LINK_REFLOW_INTO_TOOLS ON)
+elseif (LLVM_EXTERNAL_REFLOW_SOURCE_DIR)
+  set(LINK_REFLOW_INTO_TOOLS ON)
+else()
+  set(LINK_REFLOW_INTO_TOOLS OFF)
+endif()
+if (LINK_REFLOW_INTO_TOOLS)
+  if (DEFINED RDI_BUILD_DIR)
+    message(STATUS "RDI_BUILD_DIR=${RDI_BUILD_DIR}")
+    link_directories(${RDI_BUILD_DIR}/ext)
+  elseif (DEFINED LINK_DIRS)
+    message(STATUS "LINK_DIRS=${LINK_DIRS}")
+    link_directories("${LINK_DIRS}")
+  else()
+    message(FATAL_ERROR "Cannot find environment variable RDI_BUILD_DIR or LINKER_DIRS. Please set it.")
+  endif()
+endif()
 # Define an option controlling whether we should build for 32-bit on 64-bit
 # platforms, where supported.
 if( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
@@ -953,6 +995,12 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
     PATTERN "*.inc"
     PATTERN "LICENSE.TXT"
     PATTERN ".svn" EXCLUDE
+    )
+
+  install(
+    FILES include/llvm/Support/XILINXFPGAPlatformBasic.h lib/Support/XILINXFPGAPlatformBasic.cpp
+    DESTINATION src
+    COMPONENT llvm-xilinx-platform
     )
 
   install(DIRECTORY ${LLVM_INCLUDE_DIR}/llvm

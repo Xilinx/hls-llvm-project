@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Instruction class for the IR library.
@@ -15,6 +20,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
@@ -367,7 +373,20 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   }
 }
 
-/// Return true if both instructions have the same special state. This must be
+static bool everHaveSameSpecialState(Function *F) {
+  if (!F)
+    return true;
+
+  switch (F->getIntrinsicID()) {
+  default:
+    return true;
+  case Intrinsic::directive_scope_entry:
+  case Intrinsic::directive_scope_exit:
+    return false;
+  }
+}
+
+/// Return true if both instructions have the same special state This must be
 /// kept in sync with FunctionComparator::cmpOperations in
 /// lib/Transforms/IPO/MergeFunctions.cpp.
 static bool haveSameSpecialState(const Instruction *I1, const Instruction *I2,
@@ -394,7 +413,8 @@ static bool haveSameSpecialState(const Instruction *I1, const Instruction *I2,
   if (const CmpInst *CI = dyn_cast<CmpInst>(I1))
     return CI->getPredicate() == cast<CmpInst>(I2)->getPredicate();
   if (const CallInst *CI = dyn_cast<CallInst>(I1))
-    return CI->isTailCall() == cast<CallInst>(I2)->isTailCall() &&
+    return everHaveSameSpecialState(CI->getCalledFunction()) &&
+           CI->isTailCall() == cast<CallInst>(I2)->isTailCall() &&
            CI->getCallingConv() == cast<CallInst>(I2)->getCallingConv() &&
            CI->getAttributes() == cast<CallInst>(I2)->getAttributes() &&
            CI->hasIdenticalOperandBundleSchema(*cast<CallInst>(I2));

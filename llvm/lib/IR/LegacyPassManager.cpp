@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the legacy LLVM Pass Manager infrastructure.
@@ -81,6 +86,16 @@ static cl::opt<bool> PrintBeforeAll("print-before-all",
 static cl::opt<bool> PrintAfterAll("print-after-all",
                                    llvm::cl::desc("Print IR after each pass"),
                                    cl::init(false), cl::Hidden);
+
+#ifndef NDEBUG
+static cl::opt<std::string>
+    GitRepo("git-repo", llvm::cl::desc("Path to Git repository to initialize"),
+            cl::init("passes"), cl::Hidden);
+static cl::opt<bool> GitCommitModuleAfterAll(
+    "git-commit-after-all",
+    llvm::cl::desc("Print and commit IR after each pass"), cl::init(false),
+    cl::Hidden);
+#endif
 
 static cl::opt<bool>
     PrintModuleScope("print-module-scope",
@@ -254,6 +269,13 @@ public:
     return createPrintFunctionPass(O, Banner);
   }
 
+  /// createGitCommitModulePass - Get a git-commit module pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override {
+    // Pass managers don't need to do git commit
+    return nullptr;
+  }
+
   // Prepare for running an on the fly pass, freeing memory if needed
   // from a previous run.
   void releaseMemoryOnTheFly();
@@ -320,6 +342,13 @@ public:
   Pass *createPrinterPass(raw_ostream &O,
                           const std::string &Banner) const override {
     return createPrintModulePass(O, Banner);
+  }
+
+  /// createGitCommitModulePass - Get a git-commit module pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override {
+    // Pass managers don't need to do git commit
+    return nullptr;
   }
 
   /// run - Execute all of the passes scheduled for execution.  Keep track of
@@ -408,6 +437,13 @@ public:
   Pass *createPrinterPass(raw_ostream &O,
                           const std::string &Banner) const override {
     return createPrintModulePass(O, Banner);
+  }
+
+  /// createGitCommitModulePass - Get a git-commit module pass.
+  Pass *createGitCommitModulePass(const std::string &GitRepo,
+                                  const std::string &Message) const override {
+    // Pass managers don't need to do git commit
+    return nullptr;
   }
 
   /// run - Execute all of the passes scheduled for execution.  Keep track of
@@ -704,6 +740,15 @@ void PMTopLevelManager::schedulePass(Pass *P) {
         dbgs(), ("*** IR Dump After " + P->getPassName() + " ***").str());
     PP->assignPassManager(activeStack, getTopLevelPassManagerType());
   }
+
+#ifndef NDEBUG
+  if (PI && !PI->isAnalysis() && GitCommitModuleAfterAll) {
+    // TODO Use the pass options as commit message instead
+    Pass *PP = P->createGitCommitModulePass(GitRepo, P->getPassName());
+    if (PP)
+      PP->assignPassManager(activeStack, getTopLevelPassManagerType());
+  }
+#endif
 }
 
 /// Find the pass that implements Analysis AID. Search immutable

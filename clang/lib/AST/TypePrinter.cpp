@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This contains code to print types from Clang's type system.
@@ -224,8 +229,10 @@ bool TypePrinter::canPrefixQualifiers(const Type *T,
     case Type::MemberPointer:
     case Type::DependentAddressSpace:
     case Type::DependentSizedExtVector:
+    case Type::DependentSizedAPInt:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::APInt:
     case Type::FunctionProto:
     case Type::FunctionNoProto:
     case Type::Paren:
@@ -778,6 +785,7 @@ void TypePrinter::printFunctionAfter(const FunctionType::ExtInfo &Info,
       break;
     case CC_SpirFunction:
     case CC_OpenCLKernel:
+    case CC_FPGAAccel:
       // Do nothing. These CCs are not available as attributes.
       break;
     case CC_Swift:
@@ -1220,6 +1228,30 @@ void TypePrinter::printPackExpansionAfter(const PackExpansionType *T,
   printAfter(T->getPattern(), OS);
   OS << "...";
 }
+
+void TypePrinter::printDependentSizedAPIntBefore(
+    const DependentSizedAPIntType *T, raw_ostream &OS) {
+  printBefore(T->getElementType(), OS);
+}
+void TypePrinter::printDependentSizedAPIntAfter(
+    const DependentSizedAPIntType *T, raw_ostream &OS) {
+  OS << " __attribute__((bitwidth(";
+  if (auto *Size = T->getSizeInBitsExpr())
+    Size->printPretty(OS, nullptr, Policy);
+  OS << ")))";
+  printAfter(T->getElementType(), OS);
+}
+
+void TypePrinter::printAPIntBefore(const APIntType *T, raw_ostream &OS) {
+  if (T->isSigned())
+    OS << "signed ";
+  else
+    OS << "unsigned ";
+
+  OS << "__attribute__((bitwidth(" << T->getSizeInBits() << "))) ";
+}
+
+void TypePrinter::printAPIntAfter(const APIntType *T, raw_ostream &OS) {}
 
 void TypePrinter::printAttributedBefore(const AttributedType *T,
                                         raw_ostream &OS) {

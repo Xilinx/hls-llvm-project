@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ADT_TRIPLE_H
@@ -54,6 +59,8 @@ public:
     avr,            // AVR: Atmel AVR microcontroller
     bpfel,          // eBPF or extended BPF or 64-bit BPF (little endian)
     bpfeb,          // eBPF or extended BPF or 64-bit BPF (big endian)
+    fpga32,         // FPGA32: fpga32 (32 bit address)
+    fpga64,         // FPGA64: fpga64 (64 bit address)
     hexagon,        // Hexagon: hexagon
     mips,           // MIPS: mips, mipsallegrex
     mipsel,         // MIPSEL: mipsel, mipsallegrexel
@@ -144,7 +151,8 @@ public:
     AMD,
     Mesa,
     SUSE,
-    LastVendorType = SUSE
+    Xilinx,
+    LastVendorType = Xilinx
   };
   enum OSType {
     UnknownOS,

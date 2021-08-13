@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the parser class for .ll files.
@@ -2299,8 +2304,17 @@ bool LLParser::ParseOptionalOperandBundles(
 
       Type *Ty = nullptr;
       Value *Input = nullptr;
-      if (ParseType(Ty) || ParseValue(Ty, Input, PFS))
+      if (ParseType(Ty))
         return true;
+
+      if (Ty->isMetadataTy()) {
+        if (ParseMetadataAsValue(Input, PFS))
+          return true;
+      } else {
+        if (ParseValue(Ty, Input, PFS))
+          return true;
+      }
+
       Inputs.push_back(Input);
     }
 

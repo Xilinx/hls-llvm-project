@@ -152,6 +152,7 @@ ClangTidyOptions::mergeWith(const ClangTidyOptions &Other) const {
   overrideValue(Result.User, Other.User);
   mergeVectors(Result.ExtraArgs, Other.ExtraArgs);
   mergeVectors(Result.ExtraArgsBefore, Other.ExtraArgsBefore);
+  overrideValue(Result.ImportDirective, Other.ImportDirective);
 
   for (const auto &KeyValue : Other.CheckOptions)
     Result.CheckOptions[KeyValue.first] = KeyValue.second;

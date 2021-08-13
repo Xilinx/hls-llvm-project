@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the ASTContext interface.
@@ -1722,6 +1727,23 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
     break;
   }
 
+  case Type::APInt: {
+    auto *APIntTy = cast<APIntType>(T);
+
+    Width = APIntTy->getSizeInBits();
+    // Roundup to the size of a char for types like int3
+    Width = std::max(Width, getCharWidth());
+
+    // If the width is not a power of 2, round up to the next power of 2 for
+    // implicit padding.
+    if (Width & (Width - 1))
+      Width = llvm::NextPowerOf2(Width);
+
+    Align = Width;
+
+    break;
+  }
+
   case Type::Builtin:
     switch (cast<BuiltinType>(T)->getKind()) {
     default: llvm_unreachable("Unknown builtin type!");
@@ -2961,9 +2983,11 @@ QualType ASTContext::getVariableArrayDecayedType(QualType type) const {
   // These types should never be variably-modified.
   case Type::Builtin:
   case Type::Complex:
+  case Type::APInt:
   case Type::Vector:
   case Type::ExtVector:
   case Type::DependentSizedExtVector:
+  case Type::DependentSizedAPInt:
   case Type::DependentAddressSpace:
   case Type::ObjCObject:
   case Type::ObjCInterface:
@@ -3271,6 +3295,33 @@ ASTContext::getExtVectorType(QualType vecType, unsigned NumElts) const {
   return QualType(New, 0);
 }
 
+/// getAPIntType - Return the unique reference to an arbitrary precision integer
+/// with the specified size in bits and signed-ness.
+QualType ASTContext::getAPIntType(unsigned SizeInBits, bool IsSigned) const {
+  // Use BoolTy for 1 bit integer.
+  // if (SizeInBits == 1)
+  //  return BoolTy;
+
+  // Try to get a builtin type from SizeInBits and the Signed-ness.
+  QualType T = getIntTypeForBitwidth(SizeInBits, IsSigned);
+  if (!T.isNull())
+    return T;
+
+  // Check if we've already instantiated a APIntType of this SizeInBits
+  // and the Signed-ness.
+  llvm::FoldingSetNodeID ID;
+  APIntType::Profile(ID, SizeInBits, IsSigned);
+  void *InsertPos = nullptr;
+  if (APIntType *TP = APIntTypes.FindNodeOrInsertPos(ID, InsertPos))
+    return QualType(TP, 0);
+
+  // New create the new type
+  APIntType *New = new (*this, TypeAlignment) APIntType(SizeInBits, IsSigned);
+  APIntTypes.InsertNode(New, InsertPos);
+  Types.push_back(New);
+  return QualType(New, 0);
+}
+
 QualType
 ASTContext::getDependentSizedExtVectorType(QualType vecType,
                                            Expr *SizeExpr,
@@ -3306,6 +3357,44 @@ ASTContext::getDependentSizedExtVectorType(QualType vecType,
                                                       SourceLocation());
       New = new (*this, TypeAlignment) 
         DependentSizedExtVectorType(*this, vecType, Canon, SizeExpr, AttrLoc);
+    }
+  }
+
+  Types.push_back(New);
+  return QualType(New, 0);
+}
+
+QualType ASTContext::geDependentSizedAPIntType(QualType elementType,
+                                               Expr *SizeExpr,
+                                               SourceLocation AttrLoc) const {
+  llvm::FoldingSetNodeID ID;
+  DependentSizedAPIntType::Profile(ID, *this, getCanonicalType(elementType),
+                                   SizeExpr);
+
+  void *InsertPos = nullptr;
+  auto *Canon = DependentSizedAPIntTypes.FindNodeOrInsertPos(ID, InsertPos);
+  DependentSizedAPIntType *New;
+  if (Canon) {
+    // We already have a canonical version of this array type; use it as
+    // the canonical type for a newly-built type.
+    New = new (*this, TypeAlignment) DependentSizedAPIntType(
+        *this, elementType, QualType(Canon, 0), SizeExpr, AttrLoc);
+  } else {
+    QualType CanonVecTy = getCanonicalType(elementType);
+    if (CanonVecTy == elementType) {
+      New = new (*this, TypeAlignment) DependentSizedAPIntType(
+          *this, elementType, QualType(), SizeExpr, AttrLoc);
+
+      auto *CanonCheck =
+          DependentSizedAPIntTypes.FindNodeOrInsertPos(ID, InsertPos);
+      assert(!CanonCheck && "Dependent-sized ext_vector canonical type broken");
+      (void)CanonCheck;
+      DependentSizedAPIntTypes.InsertNode(New, InsertPos);
+    } else {
+      QualType Canon =
+          geDependentSizedAPIntType(CanonVecTy, SizeExpr, SourceLocation());
+      New = new (*this, TypeAlignment)
+          DependentSizedAPIntType(*this, elementType, Canon, SizeExpr, AttrLoc);
     }
   }
 
@@ -5366,31 +5455,47 @@ int ASTContext::getFloatingTypeOrder(QualType LHS, QualType RHS) const {
 /// or if it is not canonicalized.
 unsigned ASTContext::getIntegerRank(const Type *T) const {
   assert(T->isCanonicalUnqualified() && "T should be canonicalized");
+  if (const auto *IT = dyn_cast<APIntType>(T)) {
+    unsigned SizeInBits = IT->getSizeInBits();
+    if (SizeInBits == 1)
+      return 1;
+    if (SizeInBits <= 8)
+      return 2 + (SizeInBits << 4);
+    if (SizeInBits <= 16)
+      return 3 + (SizeInBits << 4);
+    if (SizeInBits <= 32)
+      return 4 + (SizeInBits << 4);
+    if (SizeInBits <= 64)
+      return 5 + (SizeInBits << 4);
+    if (SizeInBits <= 128)
+      return 7 + (SizeInBits << 4);
+    return 8 + (SizeInBits << 4);
+  }
 
   switch (cast<BuiltinType>(T)->getKind()) {
   default: llvm_unreachable("getIntegerRank(): not a built-in integer");
   case BuiltinType::Bool:
-    return 1 + (getIntWidth(BoolTy) << 3);
+    return 1 + (getIntWidth(BoolTy) << 4);
   case BuiltinType::Char_S:
   case BuiltinType::Char_U:
   case BuiltinType::SChar:
   case BuiltinType::UChar:
-    return 2 + (getIntWidth(CharTy) << 3);
+    return 2 + (getIntWidth(CharTy) << 4);
   case BuiltinType::Short:
   case BuiltinType::UShort:
-    return 3 + (getIntWidth(ShortTy) << 3);
+    return 3 + (getIntWidth(ShortTy) << 4);
   case BuiltinType::Int:
   case BuiltinType::UInt:
-    return 4 + (getIntWidth(IntTy) << 3);
+    return 4 + (getIntWidth(IntTy) << 4);
   case BuiltinType::Long:
   case BuiltinType::ULong:
-    return 5 + (getIntWidth(LongTy) << 3);
+    return 5 + (getIntWidth(LongTy) << 4);
   case BuiltinType::LongLong:
   case BuiltinType::ULongLong:
-    return 6 + (getIntWidth(LongLongTy) << 3);
+    return 6 + (getIntWidth(LongLongTy) << 4);
   case BuiltinType::Int128:
   case BuiltinType::UInt128:
-    return 7 + (getIntWidth(Int128Ty) << 3);
+    return 7 + (getIntWidth(Int128Ty) << 4);
   }
 }
 
@@ -5443,12 +5548,31 @@ QualType ASTContext::isPromotableBitField(Expr *E) const {
   return QualType();
 }
 
+/// isPromotableIntegerOrAPIntType - Return true if the type is promotable
+/// integer type (C99 6.3.1.1p2) or promotable APIntType
+bool ASTContext::isPromotableIntegerOrAPIntType(QualType PromotableType) const {
+  if (PromotableType->isPromotableIntegerType())
+    return true;
+
+  // Integer promotion for APIntType
+  // C99 6.3.1.1p2
+  // http://c0x.coding-guidelines.com/6.3.1.1.html
+  // 673 If an int can represent all values of the original type, the value is
+  // converted to an int;
+  // 674 otherwise, it is converted to an unsigned int.
+  // 675 These are called the integer promotions.48)
+  if (auto *IT = PromotableType->getAs<APIntType>())
+    return getTypeSize(IntTy) >= getTypeSize(IT);
+
+  return false;
+}
+
 /// getPromotedIntegerType - Returns the type that Promotable will
 /// promote to: C99 6.3.1.1p2, assuming that Promotable is a promotable
 /// integer type.
 QualType ASTContext::getPromotedIntegerType(QualType Promotable) const {
   assert(!Promotable.isNull());
-  assert(Promotable->isPromotableIntegerType());
+  assert(isPromotableIntegerOrAPIntType(Promotable));
   if (const EnumType *ET = Promotable->getAs<EnumType>())
     return ET->getDecl()->getPromotionType();
 
@@ -6664,7 +6788,8 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
   //FIXME. We should do a better job than gcc.
   case Type::Vector:
   case Type::ExtVector:
-  // Until we have a coherent encoding of these three types, issue warning.
+  case Type::APInt:
+    // Until we have a coherent encoding of these three types, issue warning.
     if (NotEncodedT)
       *NotEncodedT = T;
     return;
@@ -8619,6 +8744,9 @@ QualType ASTContext::mergeTypes(QualType LHS, QualType RHS,
                              RHSCan->getAs<VectorType>()))
       return LHS;
     return QualType();
+  case Type::APInt:
+    // Only exactly equal APIntTypes are compatible, which is tested above.
+    return QualType();
   case Type::ObjCObject: {
     // Check if the types are assignment compatible.
     // FIXME: This should be type compatibility, e.g. whether
@@ -8784,6 +8912,8 @@ QualType ASTContext::mergeObjCGCQualifiers(QualType LHS, QualType RHS) {
 //===----------------------------------------------------------------------===//
 
 unsigned ASTContext::getIntWidth(QualType T) const {
+  if (const auto *IT = T->getAs<APIntType>())
+    return IT->getSizeInBits();
   if (const EnumType *ET = T->getAs<EnumType>())
     T = ET->getDecl()->getIntegerType();
   if (T->isBooleanType())
@@ -8803,6 +8933,9 @@ QualType ASTContext::getCorrespondingUnsignedType(QualType T) const {
   // For enums, we return the unsigned version of the base type.
   if (const EnumType *ETy = T->getAs<EnumType>())
     T = ETy->getDecl()->getIntegerType();
+
+  if (auto *ITy = T->getAs<APIntType>())
+    return getAPIntType(ITy->getSizeInBits(), false);
   
   const BuiltinType *BTy = T->getAs<BuiltinType>();
   assert(BTy && "Unexpected signed integer type");
@@ -9595,6 +9728,12 @@ QualType ASTContext::getIntTypeForBitwidth(unsigned DestWidth,
   if (!QualTy && DestWidth == 128)
     return Signed ? Int128Ty : UnsignedInt128Ty;
   return QualTy;
+}
+
+QualType ASTContext::getLeastIntType(const APIntType *IntTy) const {
+  auto T =
+      Target->getLeastIntTypeByWidth(IntTy->getSizeInBits(), IntTy->isSigned());
+  return getFromTargetType(T);
 }
 
 /// getRealTypeForBitwidth -

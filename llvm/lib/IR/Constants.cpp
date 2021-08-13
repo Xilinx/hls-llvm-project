@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Constant* classes.
@@ -526,6 +531,10 @@ ConstantInt *ConstantInt::getFalse(LLVMContext &Context) {
   return pImpl->TheFalseVal;
 }
 
+ConstantInt *ConstantInt::getBool(LLVMContext &Context, bool V) {
+  return V ? getTrue(Context) : getFalse(Context);
+}
+
 Constant *ConstantInt::getTrue(Type *Ty) {
   assert(Ty->isIntOrIntVectorTy(1) && "Type not i1 or vector of i1.");
   ConstantInt *TrueC = ConstantInt::getTrue(Ty->getContext());
@@ -540,6 +549,10 @@ Constant *ConstantInt::getFalse(Type *Ty) {
   if (auto *VTy = dyn_cast<VectorType>(Ty))
     return ConstantVector::getSplat(VTy->getNumElements(), FalseC);
   return FalseC;
+}
+
+Constant *ConstantInt::getBool(Type *Ty, bool V) {
+  return V ? getTrue(Ty) : getFalse(Ty);
 }
 
 // Get a ConstantInt from an APInt.

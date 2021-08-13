@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/CodeGen/BackendUtil.h"
@@ -33,6 +38,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/CallingConv.h"
 #include "llvm/LTO/LTOBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/SubtargetFeature.h"
@@ -42,7 +48,9 @@
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/Timer.h"
+#include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/YAMLTraits.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Coroutines.h"
@@ -61,6 +69,23 @@
 #include <memory>
 using namespace clang;
 using namespace llvm;
+
+#ifdef LINK_REFLOW_INTO_TOOLS
+namespace llvm {
+void registerReflowLTOPrepPasses(legacy::PassManagerBase &PM, raw_ostream &OS,
+                                 bool EmitLL,
+                                 bool ShouldPreserveUseListOrder = false,
+                                 bool EmitSummaryIndex = false,
+                                 bool EmitModuleHash = false);
+
+void registerHLSIRGenPasses(legacy::PassManagerBase &PM, raw_ostream &OS,
+                            bool EnableOptimizations,
+                            bool IsOpenCL = false,
+                            bool ShouldPreserveUseListOrder = false,
+                            bool EmitSummaryIndex = false,
+                            bool EmitModuleHash = false);
+}
+#endif
 
 namespace {
 
@@ -120,6 +145,9 @@ public:
   }
 
   std::unique_ptr<TargetMachine> TM;
+
+  void EmitAssemblyWithReflow(BackendAction Action,
+                              std::unique_ptr<raw_pwrite_stream> OS);
 
   void EmitAssembly(BackendAction Action,
                     std::unique_ptr<raw_pwrite_stream> OS);
@@ -475,6 +503,14 @@ static Optional<GCOVOptions> getGCOVOptions(const CodeGenOptions &CodeGenOpts) {
   return Options;
 }
 
+static bool isOpenCLModule(Module &M) {
+  for (auto &F: M)
+    if (F.getCallingConv() == llvm::CallingConv::SPIR_KERNEL)
+      return true;
+
+  return false;
+}
+
 void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
                                       legacy::FunctionPassManager &FPM) {
   // Handle disabling of all LLVM passes, where we want to preserve the
@@ -714,6 +750,74 @@ bool EmitAssemblyHelper::AddEmitPasses(legacy::PassManager &CodeGenPasses,
   return true;
 }
 
+void EmitAssemblyHelper::EmitAssemblyWithReflow(
+    BackendAction Action, std::unique_ptr<raw_pwrite_stream> OS) {
+#ifdef LINK_REFLOW_INTO_TOOLS
+  TimeRegion Region(llvm::TimePassesIsEnabled ? &CodeGenerationTime : nullptr);
+
+  setCommandLineOpts(CodeGenOpts);
+
+  // FIXME: Pass the diagnostic handler to LLVM/Reflow
+  TheModule->getContext().setRespectDiagnosticFilters(
+      CodeGenOpts.RespectDiagnosticFilters);
+
+  std::unique_ptr<llvm::ToolOutputFile> OptRecordFile;
+  if (!CodeGenOpts.OptRecordFile.empty()) {
+    std::error_code EC;
+    OptRecordFile = llvm::make_unique<llvm::ToolOutputFile>(
+        CodeGenOpts.OptRecordFile, EC, sys::fs::F_None);
+    if (EC) {
+      Diags.Report(diag::err_cannot_open_file) <<
+        CodeGenOpts.OptRecordFile << EC.message();
+      return;
+    }
+
+    TheModule->getContext().setOptRemarkFile(OptRecordFile.get());
+
+    TheModule->getContext().setDiagnosticsOutputFile(
+        llvm::make_unique<yaml::Output>(OptRecordFile->os()));
+  }
+
+  // FIXME: Do not explicitly set the target triple after we explicitly pass the
+  // target machine
+  if (TheModule->getDataLayout().getPointerSizeInBits() == 64)
+    TheModule->setTargetTriple("fpga64-xilinx-none");
+  else
+    TheModule->setTargetTriple("fpga32-xilinx-none");
+
+  CreateTargetMachine(/* MustCreateTM */ true);
+  TheModule->setDataLayout(TM->createDataLayout());
+
+  legacy::PassManager PerModulePasses;
+  PerModulePasses.add(
+      createTargetTransformInfoWrapperPass(getTargetIRAnalysis()));
+
+  // When clang's input file is bc (during reflow lto stage), LangOpts.OpenCL
+  // cannot tell the truth even when it's OpenCL design, so need to dig into bc
+  // file and check the functions' calling convention.
+  bool IsOpenCL = LangOpts.OpenCL || isOpenCLModule(*TheModule);
+
+  // FIXME: Enable optimization based on users parameter
+  bool EnableOptimizations = IsOpenCL || !LangOpts.HLSExt;
+  if (CodeGenOpts.PrepareForLTO) {
+    registerReflowLTOPrepPasses(PerModulePasses, *OS,
+                                Action == Backend_EmitLL);
+  } else {
+    registerHLSIRGenPasses(PerModulePasses, *OS, EnableOptimizations, IsOpenCL);
+  }
+  {
+    PrettyStackTraceString CrashInfo("Per-module optimization passes");
+    PerModulePasses.run(*TheModule);
+  }
+
+  if (OptRecordFile)
+    OptRecordFile->keep();
+
+#else
+  EmitAssembly(Action, std::move(OS));
+#endif
+}
+
 void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
                                       std::unique_ptr<raw_pwrite_stream> OS) {
   TimeRegion Region(llvm::TimePassesIsEnabled ? &CodeGenerationTime : nullptr);
@@ -765,8 +869,7 @@ void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
       }
       PerModulePasses.add(
           createWriteThinLTOBitcodePass(*OS, ThinLinkOS.get()));
-    }
-    else
+    } else
       PerModulePasses.add(
           createBitcodeWriterPass(*OS, CodeGenOpts.EmitLLVMUseLists));
     break;
@@ -1174,14 +1277,16 @@ void clang::EmitBackendOutput(DiagnosticsEngine &Diags,
 
   EmitAssemblyHelper AsmHelper(Diags, HeaderOpts, CGOpts, TOpts, LOpts, M);
 
-  if (CGOpts.ExperimentalNewPassManager)
+  if (CGOpts.EmitHLSIR)
+    AsmHelper.EmitAssemblyWithReflow(Action, std::move(OS));
+  else if (CGOpts.ExperimentalNewPassManager)
     AsmHelper.EmitAssemblyWithNewPassManager(Action, std::move(OS));
   else
     AsmHelper.EmitAssembly(Action, std::move(OS));
 
   // Verify clang's TargetInfo DataLayout against the LLVM TargetMachine's
   // DataLayout.
-  if (AsmHelper.TM) {
+  if (AsmHelper.TM && !CGOpts.EmitHLSIR) {
     std::string DLDesc = M->getDataLayout().getStringRepresentation();
     if (DLDesc != TDesc.getStringRepresentation()) {
       unsigned DiagID = Diags.getCustomDiagID(

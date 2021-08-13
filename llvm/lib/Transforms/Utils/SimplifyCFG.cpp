@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Peephole optimize the CFG.
@@ -83,6 +88,7 @@
 using namespace llvm;
 using namespace PatternMatch;
 
+extern cl::opt<bool> HLS;
 #define DEBUG_TYPE "simplifycfg"
 
 // Chosen as 2 so as to be cheap, but still to have enough power to fold
@@ -2116,6 +2122,16 @@ static bool BlockIsSimpleEnoughToThreadThrough(BasicBlock *BB) {
       return false; // Don't clone large BB's.
     ++Size;
 
+    // HLS BEGIN
+    // Don't thread through if the block contains function call, because 
+    // the duplication may increase resource usage.
+    if (CallInst *CI = dyn_cast<CallInst>(BBI)) {
+      Function *Callee = CI->getCalledFunction();
+      if (Callee && !Callee->isDeclaration())
+        return false;
+    }
+    // HLS END
+
     // We can only support instructions that do not define values that are
     // live outside of the current basic block.
     for (User *U : BBI->users()) {
@@ -3133,12 +3149,28 @@ static bool mergeConditionalStores(BranchInst *PBI, BranchInst *QBI,
   return Changed;
 }
 
+// HLS Begin
+// Don't thread through the loop latch, because it will break the loop 
+// canonical form.
+static bool HLSCanThreadThroughBlock(BasicBlock *PBB, BasicBlock *BB,
+                                     SmallPtrSetImpl<BasicBlock *> *LoopHeaders) {
+  if (LoopHeaders && !LoopHeaders->count(PBB)) {
+    for (succ_iterator I = succ_begin(BB), E = succ_end(BB); I != E; ++I) {
+      if (LoopHeaders->count(*I))
+        return false;
+    }
+  }
+  return true;
+}
+// HLS End
+
 /// If we have a conditional branch as a predecessor of another block,
 /// this function tries to simplify it.  We know
 /// that PBI and BI are both conditional branches, and BI is in one of the
 /// successor blocks of PBI - PBI branches to BI.
 static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
-                                           const DataLayout &DL) {
+                                           const DataLayout &DL,
+                                           SmallPtrSetImpl<BasicBlock *> *LoopHeaders) {
   assert(PBI->isConditional() && BI->isConditional());
   BasicBlock *BB = BI->getParent();
 
@@ -3160,7 +3192,8 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
     // Otherwise, if there are multiple predecessors, insert a PHI that merges
     // in the constant and simplify the block result.  Subsequent passes of
     // simplifycfg will thread the block.
-    if (BlockIsSimpleEnoughToThreadThrough(BB)) {
+    if (BlockIsSimpleEnoughToThreadThrough(BB) &&
+        HLSCanThreadThroughBlock(PBI->getParent(), BB, LoopHeaders)) {
       pred_iterator PB = pred_begin(BB), PE = pred_end(BB);
       PHINode *NewPN = PHINode::Create(
           Type::getInt1Ty(BB->getContext()), std::distance(PB, PE),
@@ -5852,7 +5885,7 @@ bool SimplifyCFGOpt::SimplifyCondBranch(BranchInst *BI, IRBuilder<> &Builder) {
   // can hoist it up to the branching block.
   if (BI->getSuccessor(0)->getSinglePredecessor()) {
     if (BI->getSuccessor(1)->getSinglePredecessor()) {
-      if (HoistThenElseCodeToIf(BI, TTI))
+      if (!HLS && HoistThenElseCodeToIf(BI, TTI))
         return simplifyCFG(BB, TTI, Options) | true;
     } else {
       // If Successor #1 has multiple preds, we may be able to conditionally
@@ -5884,7 +5917,7 @@ bool SimplifyCFGOpt::SimplifyCondBranch(BranchInst *BI, IRBuilder<> &Builder) {
   for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI)
     if (BranchInst *PBI = dyn_cast<BranchInst>((*PI)->getTerminator()))
       if (PBI != BI && PBI->isConditional())
-        if (SimplifyCondBranchToCondBranch(PBI, BI, DL))
+        if (SimplifyCondBranchToCondBranch(PBI, BI, DL, LoopHeaders))
           return simplifyCFG(BB, TTI, Options) | true;
 
   // Look for diamond patterns.

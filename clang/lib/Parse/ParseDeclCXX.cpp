@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the C++ Declaration portions of the Parser interfaces.
@@ -25,6 +30,7 @@
 #include "clang/Sema/PrettyDeclStackTrace.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/SemaDiagnostic.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "llvm/ADT/SmallString.h"
 
 using namespace clang;
@@ -3085,6 +3091,14 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclarationWithPragmas(
 
     return nullptr;
   }
+
+  case tok::annot_pragma_XlxHLS:
+    Diag(Tok.getLocation(), diag::err_xlx_pragma_not_in_function_scope);
+    ConsumeAnnotationToken();
+    SkipUntil(tok::annot_pragma_XlxHLS_end, Parser::StopBeforeMatch);
+    // Consume tok::annot_pragma_XlxHLS_end terminator.
+    ConsumeAnyToken();
+    return nullptr;
 
   case tok::annot_pragma_openmp:
     return ParseOpenMPDeclarativeDirectiveWithExtDecl(AS, AccessAttrs, TagType,

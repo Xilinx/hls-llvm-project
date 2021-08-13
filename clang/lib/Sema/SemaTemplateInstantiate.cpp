@@ -4,6 +4,11 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
 //  This file implements C++ template instantiation.
@@ -28,6 +33,17 @@
 
 using namespace clang;
 using namespace sema;
+
+// Defined via #include from SemaTemplateInstantiateDecl.cpp
+namespace clang {
+  namespace sema {
+    Attr *instantiateTemplateAttribute(const Attr *At, ASTContext &C, Sema &S,
+                            const MultiLevelTemplateArgumentList &TemplateArgs);
+    Attr *instantiateTemplateAttributeForDecl(
+        const Attr *At, ASTContext &C, Sema &S,
+        const MultiLevelTemplateArgumentList &TemplateArgs);
+  }
+}
 
 //===----------------------------------------------------------------------===/
 // Template Instantiation Support
@@ -859,7 +875,51 @@ namespace {
                           NamedDecl *FirstQualifierInScope = nullptr,
                           bool AllowInjectedClassName = false);
 
+    const Attr *instantiateTemplateAttr(const Attr *AT) {
+      return instantiateTemplateAttribute(AT, SemaRef.getASTContext(), SemaRef,
+                                          TemplateArgs); 
+    }
+
     const LoopHintAttr *TransformLoopHintAttr(const LoopHintAttr *LH);
+
+    // XILINX attribute checks
+    const XCLLatencyAttr *TransformXCLLatencyAttr(const XCLLatencyAttr *A);
+    const OpenCLUnrollHintAttr *
+      TransformOpenCLUnrollHintAttr(const OpenCLUnrollHintAttr *A);
+    const XCLLoopTripCountAttr *
+      TransformXCLLoopTripCountAttr(const XCLLoopTripCountAttr *A);
+    const XlxBindOpAttr*
+      TransformXlxBindOpAttr(const XlxBindOpAttr *A);
+    const FPGAResourceLimitHintAttr*
+      TransformFPGAResourceLimitHintAttr(const FPGAResourceLimitHintAttr *A);
+    const XCLReqdPipeDepthAttr*
+      TransformXCLReqdPipeDepthAttr(const XCLReqdPipeDepthAttr *A);
+    const XlxArrayXFormAttr*
+      TransformXlxArrayXFormAttr(const XlxArrayXFormAttr *A);
+    const XlxOccurrenceAttr*
+      TransformXlxOccurrenceAttr(const XlxOccurrenceAttr *A);
+    const MAXIAdaptorAttr*
+      TransformMAXIAdaptorAttr(const MAXIAdaptorAttr *A);
+    const SAXIAdaptorAttr*
+      TransformSAXIAdaptorAttr(const SAXIAdaptorAttr *A);
+    const FPGADataFootPrintHintAttr*
+      TransformFPGADataFootPrintHintAttr(const FPGADataFootPrintHintAttr *A);
+    const FPGAMaxiMaxWidenBitwidthAttr*
+      TransformFPGAMaxiMaxWidenBitwidthAttr(const FPGAMaxiMaxWidenBitwidthAttr *A);
+    const FPGAMaxiLatencyAttr*
+      TransformFPGAMaxiLatencyAttr(const FPGAMaxiLatencyAttr *A);
+    const FPGAMaxiNumRdOutstandAttr*
+      TransformFPGAMaxiNumRdOutstandAttr(const FPGAMaxiNumRdOutstandAttr *A);
+    const FPGAMaxiNumWtOutstandAttr*
+      TransformFPGAMaxiNumWtOutstandAttr(const FPGAMaxiNumWtOutstandAttr *A);
+    const FPGAMaxiRdBurstLenAttr*
+      TransformFPGAMaxiRdBurstLenAttr(const FPGAMaxiRdBurstLenAttr *A);
+    const FPGAMaxiWtBurstLenAttr*
+      TransformFPGAMaxiWtBurstLenAttr(const FPGAMaxiWtBurstLenAttr *A);
+ 
+    const FPGAScalarInterfaceWrapperAttr *
+    TransformFPGAScalarInterfaceWrapperAttr(
+        const FPGAScalarInterfaceWrapperAttr *A);
 
     ExprResult TransformPredefinedExpr(PredefinedExpr *E);
     ExprResult TransformDeclRefExpr(DeclRefExpr *E);
@@ -1226,6 +1286,170 @@ TemplateInstantiator::TransformLoopHintAttr(const LoopHintAttr *LH) {
   return LoopHintAttr::CreateImplicit(
       getSema().Context, LH->getSemanticSpelling(), LH->getOption(),
       LH->getState(), TransformedExpr, LH->getRange());
+}
+
+const XCLLatencyAttr *
+TemplateInstantiator::TransformXCLLatencyAttr(const XCLLatencyAttr *A) {
+  Sema &S = getSema();
+  Expr *MinExpr = getDerived().TransformExpr(A->getMin()).get();
+  Expr *MaxExpr = getDerived().TransformExpr(A->getMax()).get();
+
+  if (MinExpr == A->getMin() && MaxExpr == A->getMax())
+    return A;
+
+  if (getSema().CheckXCLLatencyExprs(MinExpr, MaxExpr, A->getLocation(),
+                                     A->getSpelling())) {
+    return A;
+  }
+
+  return (::new (S.Context) XCLLatencyAttr(A->getRange(), S.Context, MinExpr,
+                                           MaxExpr, A->getSpellingListIndex()));
+}
+
+const OpenCLUnrollHintAttr *
+TemplateInstantiator::TransformOpenCLUnrollHintAttr(
+                        const OpenCLUnrollHintAttr *A) {
+  Sema &S = getSema();
+  Expr *Factor = getDerived().TransformExpr(A->getUnrollHint()).get();
+
+  if (Factor == A->getUnrollHint())
+    return A;
+
+  if (S.CheckOpenCLUnrollHintExprs(Factor, A->getLocation(),
+                                   A->getSpelling()))
+    return A;
+
+  return OpenCLUnrollHintAttr::CreateImplicit(S.Context, Factor,
+                                              A->getSkipExitCheck(),
+                                              A->getRange());
+}
+
+const XCLLoopTripCountAttr *
+TemplateInstantiator::TransformXCLLoopTripCountAttr(
+                        const XCLLoopTripCountAttr *A) {
+  Sema &S = getSema();
+  Expr *Min = getDerived().TransformExpr(A->getMin()).get();
+  Expr *Max = getDerived().TransformExpr(A->getMax()).get();
+  Expr *Avg = getDerived().TransformExpr(A->getAvg()).get();
+
+  if (Min == A->getMin() && Max == A->getMax() && Avg == A->getAvg())
+    return A;
+
+  if (S.CheckXCLLoopTripCountExprs(Min, Max, Avg, A->getLocation(),
+                                   A->getSpelling()))
+    return A;
+
+  return (::new (S.Context) XCLLoopTripCountAttr(A->getRange(), S.Context,
+                                  Min, Max, Avg, A->getSpellingListIndex()));
+}
+
+const XlxBindOpAttr *TemplateInstantiator::TransformXlxBindOpAttr(
+    const XlxBindOpAttr *A) {
+  Sema &S = getSema();
+  Expr *Latency = getDerived().TransformExpr(A->getLatency()).get();
+
+  if (Latency == A->getLatency())
+    return A;
+
+  return (::new (S.Context) XlxBindOpAttr(
+      A->getRange(), S.Context, A->getVariable(),  A->getOp(), A->getImpl(), Latency,
+      A->getSpellingListIndex()));
+}
+
+const XCLReqdPipeDepthAttr*
+TemplateInstantiator::TransformXCLReqdPipeDepthAttr(
+                          const XCLReqdPipeDepthAttr *A) {
+  return A;
+}
+
+const XlxArrayXFormAttr*
+TemplateInstantiator::TransformXlxArrayXFormAttr(const XlxArrayXFormAttr *A) {
+  return A;
+}
+
+const XlxOccurrenceAttr*
+TemplateInstantiator::TransformXlxOccurrenceAttr(const XlxOccurrenceAttr *A) {
+  Sema &S = getSema();
+  Expr *Cycle = getDerived().TransformExpr(A->getCycle()).get();
+
+  if (Cycle == A->getCycle())
+    return A;
+
+  if (S.CheckXlxOccurrenceExprs(Cycle, A->getLocation(), A->getSpelling()))
+    return A;
+
+  return (::new (S.Context) XlxOccurrenceAttr(A->getRange(), S.Context, Cycle,
+                                              A->getSpellingListIndex()));
+}
+
+const MAXIAdaptorAttr*
+TemplateInstantiator::TransformMAXIAdaptorAttr(const MAXIAdaptorAttr *A) {
+  return A;
+}
+
+const SAXIAdaptorAttr*
+TemplateInstantiator::TransformSAXIAdaptorAttr(const SAXIAdaptorAttr *A) {
+  return A;
+}
+
+const FPGAScalarInterfaceWrapperAttr *
+TemplateInstantiator::TransformFPGAScalarInterfaceWrapperAttr(
+    const FPGAScalarInterfaceWrapperAttr *A) {
+  Sema &S = getSema();
+  Expr *Offset = getDerived().TransformExpr(A->getOffset()).get();
+
+  if (Offset == nullptr)
+    return A;
+
+  if (S.CheckFPGAScalarInterfaceWrapperExprs(Offset, A->getLocation(),
+                                             A->getSpelling()))
+    return A;
+
+  return (::new (S.Context) FPGAScalarInterfaceWrapperAttr(
+      A->getRange(), S.Context, A->getMode(), A->getAdaptor(), Offset,
+      A->getSpellingListIndex()));
+}
+
+const FPGADataFootPrintHintAttr*
+TemplateInstantiator::TransformFPGADataFootPrintHintAttr(
+                          const FPGADataFootPrintHintAttr *A) {
+  return A;
+}
+
+const FPGAMaxiMaxWidenBitwidthAttr*
+TemplateInstantiator::TransformFPGAMaxiMaxWidenBitwidthAttr(
+                          const FPGAMaxiMaxWidenBitwidthAttr *A) {
+  return A;
+}
+
+const FPGAMaxiLatencyAttr*
+TemplateInstantiator::TransformFPGAMaxiLatencyAttr(
+                          const FPGAMaxiLatencyAttr *A) {
+  return A;
+}
+
+const FPGAMaxiNumRdOutstandAttr*
+TemplateInstantiator::TransformFPGAMaxiNumRdOutstandAttr(
+                          const FPGAMaxiNumRdOutstandAttr *A) {
+  return A;
+}
+
+const FPGAMaxiNumWtOutstandAttr*
+TemplateInstantiator::TransformFPGAMaxiNumWtOutstandAttr(
+                          const FPGAMaxiNumWtOutstandAttr *A) {
+  return A;
+}
+
+const FPGAMaxiRdBurstLenAttr*
+TemplateInstantiator::TransformFPGAMaxiRdBurstLenAttr(
+                          const FPGAMaxiRdBurstLenAttr *A) {
+  return A;
+}
+
+const FPGAMaxiWtBurstLenAttr*
+TemplateInstantiator::TransformFPGAMaxiWtBurstLenAttr(
+                          const FPGAMaxiWtBurstLenAttr *A) {
+  return A;
 }
 
 ExprResult TemplateInstantiator::transformNonTypeTemplateParmRef(
@@ -1947,17 +2171,6 @@ Sema::SubstBaseSpecifiers(CXXRecordDecl *Instantiation,
     Invalid = true;
 
   return Invalid;
-}
-
-// Defined via #include from SemaTemplateInstantiateDecl.cpp
-namespace clang {
-  namespace sema {
-    Attr *instantiateTemplateAttribute(const Attr *At, ASTContext &C, Sema &S,
-                            const MultiLevelTemplateArgumentList &TemplateArgs);
-    Attr *instantiateTemplateAttributeForDecl(
-        const Attr *At, ASTContext &C, Sema &S,
-        const MultiLevelTemplateArgumentList &TemplateArgs);
-  }
 }
 
 /// \brief Instantiate the definition of a class from a given pattern.

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -168,6 +173,9 @@ TEST_F(AliasAnalysisTest, getModRefInfo) {
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(C), std::vector<Type *>(), false);
   auto *F = cast<Function>(M.getOrInsertFunction("f", FTy));
+  FunctionType *CTy = FunctionType::get(Type::getVoidTy(C),
+                                        Type::getInt32PtrTy(C), false);
+  auto *Callee = cast<Function>(M.getOrInsertFunction("callee", CTy));
   auto *BB = BasicBlock::Create(C, "entry", F);
   auto IntType = Type::getInt32Ty(C);
   auto PtrType = Type::getInt32PtrTy(C);
@@ -185,6 +193,7 @@ TEST_F(AliasAnalysisTest, getModRefInfo) {
   auto *AtomicRMW =
       new AtomicRMWInst(AtomicRMWInst::Xchg, Addr, ConstantInt::get(IntType, 1),
                         AtomicOrdering::Monotonic, SyncScope::System, BB);
+  std::unique_ptr<CallInst> Caller(CallInst::Create(Callee, Addr));
 
   ReturnInst::Create(C, nullptr, BB);
 
@@ -195,6 +204,8 @@ TEST_F(AliasAnalysisTest, getModRefInfo) {
   EXPECT_EQ(AA.getModRefInfo(Store1, None), ModRefInfo::Mod);
   EXPECT_EQ(AA.getModRefInfo(Load1, MemoryLocation()), ModRefInfo::Ref);
   EXPECT_EQ(AA.getModRefInfo(Load1, None), ModRefInfo::Ref);
+  EXPECT_EQ(AA.getModRefInfo(Store1, Load1), ModRefInfo::MustModRef);
+  EXPECT_EQ(AA.getModRefInfo(Store1, Caller.get()), ModRefInfo::ModRef);
   EXPECT_EQ(AA.getModRefInfo(Add1, MemoryLocation()), ModRefInfo::NoModRef);
   EXPECT_EQ(AA.getModRefInfo(Add1, None), ModRefInfo::NoModRef);
   EXPECT_EQ(AA.getModRefInfo(VAArg1, MemoryLocation()), ModRefInfo::ModRef);

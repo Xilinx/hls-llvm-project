@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements Loop Rotation Pass.
@@ -40,6 +45,7 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Transforms/Utils/UnrollLoop.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-rotate"
@@ -693,6 +699,18 @@ public:
     const SimplifyQuery SQ = getBestSimplifyQuery(*this, F);
     LoopRotate LR(MaxHeaderSize, LI, TTI, AC, DT, SE, SQ);
     return LR.processLoop(L);
+  }
+
+  bool skipLoop(const Loop *L) const {
+    if (LoopPass::skipLoop(L))
+      return true;
+
+    MDNode *LoopMD = L->getLoopID();
+    // Skip rotating the loop if the loop attribute disables it.
+    if (LoopMD && GetUnrollMetadata(LoopMD, "llvm.loop.rotate.disable"))
+      return true;
+
+    return false;
   }
 };
 }

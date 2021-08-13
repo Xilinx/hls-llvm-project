@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines a set of enums which allow processing of intrinsic
@@ -48,6 +53,7 @@ namespace Intrinsic {
   /// Note, this version is for intrinsics with no overloads.  Use the other
   /// version of getName if overloads are required.
   StringRef getName(ID id);
+  StringRef lookupName(ID id);
 
   /// Return the LLVM name for an intrinsic, such as "llvm.ppc.altivec.lvx".
   /// Note, this version of getName supports overloads, but is less efficient
