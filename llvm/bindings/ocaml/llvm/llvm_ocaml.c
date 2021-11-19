@@ -860,10 +860,10 @@ CAMLprim LLVMValueRef llvm_const_of_int64(LLVMTypeRef IntTy, value N,
 CAMLprim value llvm_int64_of_const(LLVMValueRef Const)
 {
   CAMLparam0();
+  CAMLparam1(Option);
   if (LLVMIsAConstantInt(Const) &&
       LLVMGetIntTypeWidth(LLVMTypeOf(Const)) <= 64) {
-    value Option = alloc(1, 0);
-    Field(Option, 0) = caml_copy_int64(LLVMConstIntGetSExtValue(Const));
+    Option = caml_alloc_some(caml_copy_int64(LLVMConstIntGetSExtValue(Const)));
     CAMLreturn(Option);
   }
   CAMLreturn(Val_int(0));
@@ -895,8 +895,7 @@ CAMLprim value llvm_float_of_const(LLVMValueRef Const)
     if (LosesInfo)
         CAMLreturn(Val_int(0));
 
-    Option = alloc(1, 0);
-    Field(Option, 0) = caml_copy_double(Result);
+    Option = caml_alloc_some(caml_copy_double(Result));
     CAMLreturn(Option);
   }
 
