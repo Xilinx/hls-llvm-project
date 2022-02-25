@@ -7,6 +7,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/DeclTemplate.h"
@@ -382,6 +387,70 @@ QualType getFullyQualifiedType(QualType QT, const ASTContext &Ctx,
     return QT;
   }
 
+  if (auto *MPT = dyn_cast<MemberPointerType>(QT.getTypePtr())) {
+   Qualifiers Quals = QT.getQualifiers();
+   QT = getFullyQualifiedType(QT->getPointeeType(), Ctx, WithGlobalNsPrefix);
+   QualType Class = getFullyQualifiedType(MPT->getClass()->getCanonicalTypeInternal(), Ctx, WithGlobalNsPrefix);
+   QT = Ctx.getMemberPointerType(QT, Class.getTypePtr());
+   QT = Ctx.getQualifiedType(QT, Quals);
+   return QT;
+  }                                                                                          
+
+  if (auto FPT = dyn_cast<FunctionProtoType>(QT.getTypePtr())) {
+    QualType RetType = getFullyQualifiedType(FPT->getReturnType(), Ctx, WithGlobalNsPrefix);
+
+    std::vector<QualType> ParamTypes;
+    ParamTypes.reserve(FPT->getNumParams());
+
+    for (auto &ParamType : FPT->param_types()) {
+      ParamTypes.push_back(getFullyQualifiedType(ParamType, Ctx, WithGlobalNsPrefix));
+    }
+
+    Qualifiers Quals = QT.getQualifiers();
+    QT = Ctx.getFunctionType(RetType, ParamTypes, FPT->getExtProtoInfo());
+    QT = Ctx.getQualifiedType(QT, Quals);
+    return QT;
+  }
+
+  if (auto CAT = dyn_cast<ConstantArrayType>(QT.getTypePtr())) {
+    QualType ElemType = getFullyQualifiedType(CAT->getElementType(), Ctx, WithGlobalNsPrefix);
+
+    Qualifiers Quals = QT.getQualifiers();
+    QT = Ctx.getConstantArrayType(ElemType, CAT->getSize(), CAT->getSizeModifier(), 
+                                          CAT->getIndexTypeCVRQualifiers());
+    QT = Ctx.getQualifiedType(QT, Quals);
+    return QT;
+  }
+
+  if (auto DSAT = dyn_cast<DependentSizedArrayType>(QT.getTypePtr())) {
+    QualType ElemType = getFullyQualifiedType(DSAT->getElementType(), Ctx, WithGlobalNsPrefix);
+
+    Qualifiers Quals = QT.getQualifiers();
+    QT = Ctx.getDependentSizedArrayType(ElemType, DSAT->getSizeExpr(), DSAT->getSizeModifier(), 
+                                          DSAT->getIndexTypeCVRQualifiers(), DSAT->getBracketsRange());
+    QT = Ctx.getQualifiedType(QT, Quals);
+    return QT;
+  }
+
+  if (auto IAT = dyn_cast<IncompleteArrayType>(QT.getTypePtr())) {
+    QualType ElemType = getFullyQualifiedType(IAT->getElementType(), Ctx, WithGlobalNsPrefix);
+
+    Qualifiers Quals = QT.getQualifiers();
+    QT = Ctx.getIncompleteArrayType(ElemType, IAT->getSizeModifier(), IAT->getIndexTypeCVRQualifiers());
+    QT = Ctx.getQualifiedType(QT, Quals);
+    return QT;
+  }
+
+  if (auto VAT = dyn_cast<VariableArrayType>(QT.getTypePtr())) {
+    QualType ElemType = getFullyQualifiedType(VAT->getElementType(), Ctx, WithGlobalNsPrefix);
+
+    Qualifiers Quals = QT.getQualifiers();
+    QT = Ctx.getVariableArrayType(ElemType, VAT->getSizeExpr(), VAT->getSizeModifier(), 
+                                      VAT->getIndexTypeCVRQualifiers(), VAT->getBracketsRange());
+    QT = Ctx.getQualifiedType(QT, Quals);
+    return QT;
+  }
+
   // In case of myType& we need to strip the reference first, fully
   // qualify and attach the reference once again.
   if (isa<ReferenceType>(QT.getTypePtr())) {
@@ -454,10 +523,15 @@ std::string getFullyQualifiedName(QualType QT,
                                   const ASTContext &Ctx,
                                   bool WithGlobalNsPrefix) {
   PrintingPolicy Policy(Ctx.getPrintingPolicy());
-  Policy.SuppressScope = false;
-  Policy.AnonymousTagLocations = false;
-  Policy.PolishForDeclaration = true;
-  Policy.SuppressUnwrittenScope = true;
+  if(Ctx.getLangOpts().HLSExt) {
+    Policy.AnonymousTagLocations = false;
+    Policy.SuppressTagKeyword = true;
+  } else {
+    Policy.SuppressScope = false;
+    Policy.AnonymousTagLocations = false;
+    Policy.PolishForDeclaration = true;
+    Policy.SuppressUnwrittenScope = true;
+  }
   QualType FQQT = getFullyQualifiedType(QT, Ctx, WithGlobalNsPrefix);
   return FQQT.getAsString(Policy);
 }

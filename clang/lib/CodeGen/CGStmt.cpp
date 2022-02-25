@@ -590,6 +590,9 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
       if (XlxDependenceAttr const *dep = dyn_cast<XlxDependenceAttr>(A)){
         EmitXlxDependenceIntrinsic(dep);
       }
+      else if (XlxMAXIAliasAttr const *maxi_alias = dyn_cast<XlxMAXIAliasAttr>(A)){
+        EmitMAXIAliasIntrinsic(maxi_alias);
+      }
       else if (XlxCrossDependenceAttr const *dep = dyn_cast<XlxCrossDependenceAttr>(A)) { 
         EmitXlxCrossDependenceIntrinsic(dep);
       }
@@ -602,8 +605,14 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
       else if (XlxSharedAttr const *SharedAttr = dyn_cast<XlxSharedAttr>(A)) { 
         EmitSharedIntrinsic(SharedAttr);
       }
-      else if (XlxArrayXFormAttr const *arrayXFormAttr = dyn_cast<XlxArrayXFormAttr>(A)) { 
-        EmitArrayXFormIntrinsic(arrayXFormAttr);
+      //else if (XlxArrayXFormAttr const *arrayXFormAttr = dyn_cast<XlxArrayXFormAttr>(A)) { 
+      //  EmitArrayXFormIntrinsic(arrayXFormAttr);
+      //}
+      else if (XlxArrayPartitionXFormAttr const *arrayPartitionXFormAttr = dyn_cast<XlxArrayPartitionXFormAttr>(A)) { 
+        EmitArrayPartitionXFormIntrinsic(arrayPartitionXFormAttr);
+      }
+      else if (XlxArrayReshapeXFormAttr const *arrayReshapeXFormAttr = dyn_cast<XlxArrayReshapeXFormAttr>(A)) { 
+        EmitArrayReshapeXFormIntrinsic(arrayReshapeXFormAttr);
       }
       else if (XlxReqdPipeDepthAttr const *reqdPipeDepthAttr =  dyn_cast<XlxReqdPipeDepthAttr>(A)) { 
         EmitReqdPipeDepthIntrinsic(reqdPipeDepthAttr);

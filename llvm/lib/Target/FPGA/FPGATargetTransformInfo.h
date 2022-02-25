@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -163,6 +163,7 @@ public:
   bool isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes,
                                     unsigned Alignment,
                                     unsigned AddrSpace) const;
+  bool isLegalToInferAttributeForFunction(Function *F) const;
 };
 
 } // end namespace llvm

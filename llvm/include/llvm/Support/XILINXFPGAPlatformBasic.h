@@ -147,9 +147,11 @@ enum OP_TYPE
     OP_FMAC = 584,
     OP_FMA  = 585,
     OP_DMA  = 586,
+    OP_FMS  = 587,
     OP_MEMORY = 666,
     OP_ALL = 777,
     OP_ADAPTER = 888,
+    OP_CHANNEL = 889,
     OP_VIVADO_IP = 999,
     OP_BITSELECT = 1000,
     OP_BITSET = 1001,
@@ -259,7 +261,10 @@ enum OP_TYPE
     OP_SPECTOPMODULE = 2200,
     OP_SPECSYNMODULE = 2201,
     OP_SPECBITSMAP = 2202,
-    OP_COMPLEXMUL = 2205
+    OP_COMPLEXMUL = 2205,
+    OP_PRINTNONE = 2206,
+    OP_PRINTINT = 2207,
+    OP_PRINTDOUBLE = 2208
 };
 
 enum IMPL_TYPE
@@ -371,6 +376,11 @@ enum IMPL_TYPE
     XPM_MEMORY_BLOCK,
     XPM_MEMORY_URAM,
     NP_MEMORY,
+    NP_MEMORY_LUTRAM,
+    NP_MEMORY_BRAM,
+    NP_MEMORY_URAM,
+    SIMO,
+    MISO,
     //NOIMPL, for resource pragma without impl
     NOIMPL = 200,
     NOIMPL_SHIFTREG,
@@ -401,7 +411,8 @@ enum IMPL_TYPE
     NOIMPL_SPROM_COREGEN,
     NOIMPL_SPROMD_ASYNC,
     NOIMPL_DPWOM,
-    NOIMPL_SPWOM
+    NOIMPL_SPWOM,
+    NOIMPL_NP_MEMORY
 };
 enum MEMORY_TYPE
 {
@@ -435,7 +446,8 @@ enum MEMORY_TYPE
     MEMORY_SPROM_COREGEN = NOIMPL_SPROM_COREGEN,
     MEMORY_SPROMD_ASYNC = NOIMPL_SPROMD_ASYNC,
     MEMORY_DPWOM = NOIMPL_DPWOM,
-    MEMORY_SPWOM = NOIMPL_SPWOM
+    MEMORY_SPWOM = NOIMPL_SPWOM,
+    MEMORY_NP_MEMORY = NOIMPL_NP_MEMORY
 };
 
 enum MEMORY_IMPL
@@ -647,7 +659,7 @@ public:
     static std::string getAutoStr();
     static std::string getAllStr();
     static std::string getFifoStr();
-    static std::string getAutoSrlStr();
+    //static std::string getAutoSrlStr();
 
     
     static void getAllConfigOpNames(std::vector<std::string> & names);

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -74,6 +74,7 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
       Value *Op;
       if (match(I, m_BitCast(m_Value(Op))) ||
           match(I, m_PtrToInt(m_Value(Op))) ||
+          match(I, m_Trunc(m_Value(Op))) ||
           match(I, m_Not(m_Value(Op)))) {
         if (isa<Instruction>(Op) || isa<Argument>(Op))
           Affected.push_back(Op);
@@ -95,6 +96,9 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
         Value *A;
         if (match(V, m_Not(m_Value(A)))) {
           AddAffected(A);
+          V = A;
+        // go deeper for V = trunc A
+        } else if (match(V, m_Trunc(m_Value(A)))) {
           V = A;
         }
 

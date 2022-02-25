@@ -220,9 +220,9 @@ static void handleXCLArrayXForm(Sema &S, Decl *D, const AttributeList &Attr) {
                                    Attr.getAttributeSpellingListIndex()));
 }
 
-static Attr *handleXlxArrayXForm(Sema &S, Stmt *stmt, const AttributeList &Attr,
+static Attr *handleXlxArrayPartitionXForm(Sema &S, Stmt *stmt, const AttributeList &Attr,
                                  SourceRange Range) {
-  assert(Attr.getKind() == AttributeList::AT_XlxArrayXForm);
+  assert(Attr.getKind() == AttributeList::AT_XlxArrayPartitionXForm);
 
   if (!Attr.isArgIdent(1)) {
     S.Diag(Attr.getLoc(), diag::err_attribute_argument_n_type)
@@ -233,9 +233,64 @@ static Attr *handleXlxArrayXForm(Sema &S, Stmt *stmt, const AttributeList &Attr,
 
   IdentifierInfo *II = Attr.getArgAsIdent(1)->Ident;
 
-  XlxArrayXFormAttr::XlxArrayXFormType T;
+  XlxArrayPartitionXFormAttr::XlxArrayPartitionXFormType T;
 
-  if (!XlxArrayXFormAttr::ConvertStrToXlxArrayXFormType(II->getName(), T)) {
+  if (!XlxArrayPartitionXFormAttr::ConvertStrToXlxArrayPartitionXFormType(II->getName(), T)) {
+    S.Diag(Attr.getLoc(), diag::err_xcl_array_unknown_xform_type)
+        << Attr.getAttributeSpellingListIndex() << II->getName();
+    return nullptr;
+  }
+
+  Expr *Dim = nullptr;
+  Expr *Factor = nullptr;
+  bool isDynamic = false;
+
+  // The XlxArrayXFormAttr has a weird definition when the type of
+  // partition/reshape is not "complete" e.g. xcl_array_partition(block, 2, 1),
+  // the factor is the second one while dim becomes the third one.
+  if (T == XlxArrayPartitionXFormAttr::Cyclic || T == XlxArrayPartitionXFormAttr::Block) {
+    if (Attr.getNumArgs() != 5) {
+      S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments) << 3;
+      return nullptr;
+    }
+    Factor = Attr.getArgAsExpr(2);
+  } else {
+    // When the partition type is complete, Factor is not necessary.
+    if (Attr.getNumArgs() != 5) {
+      S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments) << 2;
+      return nullptr;
+    }
+  }
+  Dim = Attr.getArgAsExpr(3);
+  if (Attr.getArg(4)) {
+    isDynamic = true;
+  }
+
+
+  if (Factor == nullptr)
+    Factor = createIntegerLiteral(/*Default*/ 0, S, Attr.getLoc());
+
+  return new (S.Context)
+      XlxArrayPartitionXFormAttr(Attr.getRange(), S.Context, Variable, T, Factor, Dim, isDynamic,
+                        Attr.getAttributeSpellingListIndex());
+}
+
+static Attr *handleXlxArrayReshapeXForm(Sema &S, Stmt *stmt, const AttributeList &Attr,
+                                 SourceRange Range) {
+  assert(Attr.getKind() == AttributeList::AT_XlxArrayReshapeXForm);
+
+  if (!Attr.isArgIdent(1)) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_argument_n_type)
+        << Attr.getName() << 1 << AANT_ArgumentIdentifier;
+    return nullptr;
+  }
+  Expr *Variable = Attr.getArgAsExpr(0);
+
+  IdentifierInfo *II = Attr.getArgAsIdent(1)->Ident;
+
+  XlxArrayReshapeXFormAttr::XlxArrayReshapeXFormType T;
+
+  if (!XlxArrayReshapeXFormAttr::ConvertStrToXlxArrayReshapeXFormType(II->getName(), T)) {
     S.Diag(Attr.getLoc(), diag::err_xcl_array_unknown_xform_type)
         << Attr.getAttributeSpellingListIndex() << II->getName();
     return nullptr;
@@ -247,7 +302,7 @@ static Attr *handleXlxArrayXForm(Sema &S, Stmt *stmt, const AttributeList &Attr,
   // The XlxArrayXFormAttr has a weird definition when the type of
   // partition/reshape is not "complete" e.g. xcl_array_partition(block, 2, 1),
   // the factor is the second one while dim becomes the third one.
-  if (T == XlxArrayXFormAttr::Cyclic || T == XlxArrayXFormAttr::Block) {
+  if (T == XlxArrayReshapeXFormAttr::Cyclic || T == XlxArrayReshapeXFormAttr::Block) {
     if (Attr.getNumArgs() != 4) {
       S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments) << 3;
       return nullptr;
@@ -266,7 +321,7 @@ static Attr *handleXlxArrayXForm(Sema &S, Stmt *stmt, const AttributeList &Attr,
     Factor = createIntegerLiteral(/*Default*/ 0, S, Attr.getLoc());
 
   return new (S.Context)
-      XlxArrayXFormAttr(Attr.getRange(), S.Context, Variable, T, Factor, Dim,
+      XlxArrayReshapeXFormAttr(Attr.getRange(), S.Context, Variable, T, Factor, Dim,
                         Attr.getAttributeSpellingListIndex());
 }
 
@@ -1165,6 +1220,26 @@ static Attr *handleXlxAggregate(Sema &S, Stmt *St, const AttributeList &A,
                                             A.getAttributeSpellingListIndex());
 }
 
+static Attr *handleXlxMAXIAlias(Sema &S, Stmt *St, const AttributeList &A,
+                                SourceRange Range) {
+  assert(A.getNumArgs() % 2 == 0 && "Alias Attribute argument number not correct.");
+
+  unsigned index = 0;
+  SmallVector<Expr*, 8> ports;
+  SmallVector<Expr*, 8> offsets;
+  for(; index < A.getNumArgs() / 2; ++index) {
+    ports.push_back(A.getArgAsExpr(index));
+  }
+
+  for(; index < A.getNumArgs(); ++index) {
+    offsets.push_back(A.getArgAsExpr(index));
+  }
+
+  return ::new (S.Context) XlxMAXIAliasAttr(A.getRange(), S.Context, ports.data(), ports.size(), 
+                                            offsets.data(), offsets.size(), A.getAttributeSpellingListIndex());
+}
+
+
 template <class DependenceAttr>
 static Attr *handleDependence(Sema &S, Stmt *St, const AttributeList &A,
                               SourceRange Range) {
@@ -1282,14 +1357,6 @@ static Attr *handleDependence(Sema &S, Stmt *St, const AttributeList &A,
     }
   }
 
-  if (A.getArgAsExpr(4)) {
-    dep_distance = A.getArgAsExpr(4);
-  }
-  else { 
-    //default distance  is   0
-    dep_distance = createIntegerLiteral(0, S, A.getLoc());
-  }
-
   Expr *isDep_expr = A.getArgAsExpr(5);
   if (isDep_expr) {
     llvm::Optional<int64_t> compel_op = ExtractInteger(S, A, 5, 0, 1);
@@ -1303,6 +1370,34 @@ static Attr *handleDependence(Sema &S, Stmt *St, const AttributeList &A,
     dep_compel = 0;
     S.Diag(A.getLoc(), diag::warn_xlx_dependence_missing_dependent_option);
   }
+
+  if (A.getArgAsExpr(4)) {
+    dep_distance = A.getArgAsExpr(4);
+
+    // ignore distance, if it is intra depenence
+    if (dep_compel && dep_type == DependenceAttr::intra) { 
+      S.Diag(A.getLoc(), diag::warn_conflict_pragma_parameter_and_ignored)
+          << "intra"
+          << "distance"
+          << "distance";
+      //default distance  is   0
+      dep_distance = createIntegerLiteral(0, S, A.getLoc());
+    }
+    else if (dep_compel && dep_type == DependenceAttr::inter && isa<IntegerLiteral>(dep_distance) && cast<IntegerLiteral>(dep_distance)->getValue().getZExtValue() == 0) { 
+      S.Diag(A.getLoc(), diag::warn_xlx_dependence_inter_require_distance_option );
+      //default distance  is   0
+      dep_distance = createIntegerLiteral(0, S, A.getLoc());
+    }
+
+  }
+  else { 
+    if (dep_compel && dep_type == DependenceAttr::inter) {
+      S.Diag(A.getLoc(), diag::warn_xlx_dependence_inter_require_distance_option );
+    }
+    //default distance is 0
+    dep_distance = createIntegerLiteral(0, S, A.getLoc());
+  }
+
 
   return ::new (S.Context) DependenceAttr(
       A.getRange(), S.Context, dep_variable, dep_class, dep_type, dep_direction,
@@ -1668,35 +1763,9 @@ Attr *handleMAXIInterface(Sema &S, Stmt*stm, const AttributeList &A, SourceRange
       latency, max_widen_bitwidth, A.getAttributeSpellingListIndex());
 }
 
-static bool CheckVolatileQualifier(Sema &S, Expr* port) 
-{
-  if (IsHLSStreamType(port)) { 
-    return true;
-  }
-
-  QualType Ty = port->getType();
-  if (Ty->isReferenceType() || Ty->isPointerType())
-    Ty = Ty->getPointeeType();
-
-  if (Ty.isVolatileQualified()) { 
-    return true;
-  }
-  else { 
-    S.Diag(port->getExprLoc(), diag::warn_xlx_invalid_port_expr)
-      << "top argument that is ap_fifo/axis port may require the 'volatile' qualifier to prevent the compiler from altering array accesses and/or modifying the desired streaming order";
-    return true;
-  }
-
-  return true;
-}
-
 Attr *handleAXIStreamInterface( Sema&S, Stmt* stm, const AttributeList &A, SourceRange range) 
 {
   Expr *port = A.getArgAsExpr(0);
-
-  if (!CheckVolatileQualifier(S, port)) {
-    return nullptr;
-  }
 
   bool isRegister = false;
   if (A.getArg(1)) { 
@@ -1739,8 +1808,6 @@ Attr *handleAXIStreamInterface( Sema&S, Stmt* stm, const AttributeList &A, Sourc
 Attr *handleAPFifoInterface( Sema &S, Stmt *stmt, const AttributeList &A, SourceRange range) 
 {
   Expr *port = A.getArgAsExpr(0);
-
-  CheckVolatileQualifier(S, port);
 
   bool isRegister = false;
   if (A.getArg(1)){ 
@@ -1882,6 +1949,16 @@ Attr* handleMemoryInterface(Sema &S, Stmt* stmt, const AttributeList &A, SourceR
   return new (S.Context) MemoryInterfaceAttr(A.getRange(), S.Context, port, mode, storage_type, latency, signal_name, depth, A.getAttributeSpellingListIndex());
 }
 
+Attr *handleXlxTask(Sema &S, Stmt*stmt, const AttributeList &A, SourceRange range)
+{
+  return new (S.Context) XlxTaskAttr( A.getRange(), S.Context, A.getArgAsExpr(0), A.getAttributeSpellingListIndex());
+}
+
+Attr *handleXlxInfiniteTask(Sema &S, Stmt*stmt, const AttributeList &A, SourceRange range)
+{
+  return new (S.Context) XlxInfiniteTaskAttr( A.getRange(), S.Context, A.getArgAsExpr(0), A.getAttributeSpellingListIndex());
+}
+
 Attr* handleFPGAFunctionCtrlInterface( Sema &S, Stmt *stm, const AttributeList &A, SourceRange range) 
 {
   return new (S.Context) FPGAFunctionCtrlInterfaceAttr(A.getRange(), S.Context, A.getArgAsIdent(0)->Ident->getName(), A.getArgAsIdent(1)->Ident->getName(), A.getAttributeSpellingListIndex());
@@ -1948,6 +2025,8 @@ Attr *Sema::ProcessXlxStmtAttributes(Stmt *S, const AttributeList &A,
     return handleDependence<XlxDependenceAttr>(*this, S, A, Range);
   case AttributeList::AT_XCLDependence:
     return handleDependence<XCLDependenceAttr>(*this, S, A, Range);
+  case AttributeList::AT_XlxMAXIAlias:
+    return handleXlxMAXIAlias(*this, S, A, Range);
 
   case AttributeList::AT_XlxCrossDependence: 
     return handleXlxCrossDependence(*this, S, A, Range);
@@ -1968,8 +2047,12 @@ Attr *Sema::ProcessXlxStmtAttributes(Stmt *S, const AttributeList &A,
     return handleXlxDataPack(*this, S, A, Range);
   case AttributeList::AT_XlxBindOp:
     return handleXlxBindOpAttr(*this, S, A, Range);
-  case AttributeList::AT_XlxArrayXForm:
-    return handleXlxArrayXForm(*this, S, A, Range);
+  //case AttributeList::AT_XlxArrayXForm:
+  //  return handleXlxArrayXForm(*this, S, A, Range);
+  case AttributeList::AT_XlxArrayPartitionXForm:
+    return handleXlxArrayPartitionXForm(*this, S, A, Range);
+  case AttributeList::AT_XlxArrayReshapeXForm:
+    return handleXlxArrayReshapeXForm(*this, S, A, Range);
   case AttributeList::AT_XlxArrayGeometry:
     return handleXlxArrayGeometry(*this, S, A, Range);
   case AttributeList::AT_XlxBindStorage:
@@ -1993,6 +2076,11 @@ Attr *Sema::ProcessXlxStmtAttributes(Stmt *S, const AttributeList &A,
   case AttributeList::AT_APScalarInterface: 
     return handleAPScalarInterface(*this, S, A, Range);
 
+  case AttributeList::AT_XlxTask:
+    return handleXlxTask(*this, S, A, Range);
+  case AttributeList::AT_XlxInfiniteTask:
+    return handleXlxInfiniteTask(*this, S, A, Range);
+
   case AttributeList::AT_FPGAFunctionCtrlInterface:
     return handleFPGAFunctionCtrlInterface(*this, S, A, Range);
 
@@ -2002,18 +2090,6 @@ Attr *Sema::ProcessXlxStmtAttributes(Stmt *S, const AttributeList &A,
   }
 
   return nullptr;
-}
-
-static void handleMAXIAliasAttr(Sema &S, Decl *D, const AttributeList &Attr) { 
-  if (Attr.getNumArgs() != 1) { 
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
-        << Attr.getName() << 1;
-    return ;
-  }
-  Expr * offset = Attr.getArgAsExpr(0);
-  SourceLocation loc = Attr.getLoc();
-  int alias_group = loc.getRawEncoding();
-  D->addAttr(::new(S.Context) MAXIAliasAttr(Attr.getRange(), S.Context, offset, alias_group, Attr.getAttributeSpellingListIndex()));
 }
 
 static void handleHLSPreserve(Sema &S, Decl *D, const AttributeList &Attr) { 
@@ -2055,9 +2131,6 @@ bool Sema::ProcessXlxDeclAttributes(Scope *scope, Decl *D,
     return true;
   case AttributeList::AT_XlxResourceIPCore:
     handleXlxResourceIPCore(*this, D, Attr);
-    return true;
-  case AttributeList::AT_MAXIAlias:
-    handleMAXIAliasAttr(*this, D, Attr);
     return true;
   case AttributeList::AT_HLSPreserve: 
     handleHLSPreserve(*this, D, Attr);
@@ -2700,9 +2773,12 @@ bool XlxAttrHoistConsumer::HandleTopLevelDecl(DeclGroupRef D) {
  * checker ==================*/
 // If Statement is an incemement or decrement, return true and sets the
 // variables Increment and DRE.
-static bool ProcessIterationStmt(DiagnosticsEngine &Diags, ASTContext &Context,
+static bool ProcessIterationStmt(Sema &S,
                                  Stmt *Statement, bool &Increment,
                                  DeclRefExpr *&DRE) {
+  DiagnosticsEngine &Diags = S.getDiagnostics();
+  ASTContext &Context = S.getASTContext();
+
   if (auto Cleanups = dyn_cast<ExprWithCleanups>(Statement))
     if (!Cleanups->cleanupsHaveSideEffects())
       Statement = Cleanups->getSubExpr();
@@ -2746,15 +2822,27 @@ static bool ProcessIterationStmt(DiagnosticsEngine &Diags, ASTContext &Context,
   return false;
 }
 
-static bool CheckLoopIterationVariable(DiagnosticsEngine &Diags,
-                                       ASTContext &Context, Stmt *InitStmt,
+static bool CheckLoopIterationVariable(Sema &S,
+                                       Stmt *InitStmt,
                                        Decl *CondVar, Decl *IncVar) {
+  DiagnosticsEngine &Diags = S.getDiagnostics();
+  ASTContext &Context = S.getASTContext();
 
   if (DeclStmt *Istmt = dyn_cast<DeclStmt>(InitStmt)) {
     if (Istmt->isSingleDecl()) {
       auto *DIVar = Istmt->getSingleDecl();
       if (DIVar == CondVar && DIVar == IncVar)
-        return true;
+        assert( isa<VarDecl>(DIVar) && "unexpected, Semantic Check should have assumed it is varDecl");
+        if (Expr *initExpr = cast<VarDecl>(DIVar)->getInit())  { 
+          llvm::APSInt initVal(32);
+          auto ICE = S.HLSVerifyIntegerConstantExpression(initExpr, &initVal);
+          if (ICE.isInvalid() || initVal.getSExtValue() != 0 ) {
+            Diags.Report(InitStmt->getLocStart(),
+               diag::warn_ignore_xcl_dataflow_on_invalid_loop_initial_stmt);
+            return false;
+          }
+          return true;
+        }
       else {
         Diags.Report(
             InitStmt->getLocStart(),
@@ -2770,8 +2858,11 @@ static bool CheckLoopIterationVariable(DiagnosticsEngine &Diags,
   return false;
 }
 
-static bool CheckLoopConditionStmt(DiagnosticsEngine &Diags,
-                                   ASTContext &Context, Expr *Cond) {
+static bool CheckLoopConditionStmt(Sema &S, Expr *Cond) {
+
+  DiagnosticsEngine &Diags = S.getDiagnostics();
+  ASTContext &Context = S.getASTContext();
+
   if (isa<IntegerLiteral>(Cond))
     return true;
   else if (Cond->getType()->isIntegralOrEnumerationType() &&
@@ -2999,10 +3090,12 @@ static bool IsCanonicalStmt(DiagnosticsEngine &Diags, ASTContext &Context,
   return true;
 }
 
-static bool CheckDataflowRegion(DiagnosticsEngine &Diags, ASTContext &Context,
+static bool CheckDataflowRegion(Sema &S,
                                 CompoundStmt *compoundStmt,
                                 SmallVector<VarDecl *, 4> &LocalDeclSet) {
 
+  DiagnosticsEngine &Diags = S.getDiagnostics();
+  ASTContext &Context = S.getASTContext();
   ArrayRef<Stmt *> Stmts(compoundStmt->body_begin(), compoundStmt->body_end());
   for (auto *St : Stmts) {
     if (isa<DeclStmt>(St)) {
@@ -3038,8 +3131,9 @@ static bool CheckDataflowRegion(DiagnosticsEngine &Diags, ASTContext &Context,
   return IsCanonical;
 }
 
-static bool CheckDataflowLoop(DiagnosticsEngine &Diags, ASTContext &Context,
+static bool CheckDataflowLoop(Sema &S,
                               ForStmt *for_stmt) {
+  DiagnosticsEngine &Diags = S.getDiagnostics();
   Stmt *First = for_stmt->getInit();
   Expr *Second = for_stmt->getCond();
   Expr *Third = for_stmt->getInc();
@@ -3056,10 +3150,10 @@ static bool CheckDataflowLoop(DiagnosticsEngine &Diags, ASTContext &Context,
     Expr *CondExpr = nullptr;
     ParseLoopConditionalStatement(Second, CondVar, CondExpr);
 
-    if (ProcessIterationStmt(Diags, Context, Third, LoopIncrement, LoopDRE) &&
-        CheckLoopIterationVariable(Diags, Context, First, CondVar,
+    if (ProcessIterationStmt(S, Third, LoopIncrement, LoopDRE) &&
+        CheckLoopIterationVariable(S, First, CondVar,
                                    LoopDRE->getDecl()) &&
-        CheckLoopConditionStmt(Diags, Context, CondExpr))
+        CheckLoopConditionStmt(S, CondExpr))
       return true;
   } else {
     if (!First)
@@ -3273,10 +3367,11 @@ static Stmt *hoistXlxAttrs(
           continue;
         }
         left.push_back(attr);
-      } else if (isa<XlxArrayXFormAttr>(attr)) {
+
+      } else if (isa<XlxArrayPartitionXFormAttr>(attr)) {
         // check variable expression, if function parameter decl , skip it
         bool isParam = false;
-        auto xform = dyn_cast<XlxArrayXFormAttr>(attr);
+        auto xform = dyn_cast<XlxArrayPartitionXFormAttr>(attr);
         Expr *var_expr = xform->getVariable();
         if (getOriginalType(var_expr)->isScalarType()) {
           Diags.Report(var_expr->getLocStart(),
@@ -3317,6 +3412,51 @@ static Stmt *hoistXlxAttrs(
           // don't do hoist, just emit intrinsic for HLS-Stmt in codegen
           left.push_back(attr);
         }
+      } else if (isa<XlxArrayReshapeXFormAttr>(attr)) {
+        // check variable expression, if function parameter decl , skip it
+        bool isParam = false;
+        auto xform = dyn_cast<XlxArrayReshapeXFormAttr>(attr);
+        Expr *var_expr = xform->getVariable();
+        if (getOriginalType(var_expr)->isScalarType()) {
+          Diags.Report(var_expr->getLocStart(),
+                       diag::warn_xlx_attribute_ignore_because_invalid_option)
+              << "Array_Partition/Array_Reshape"
+              << "variable is scalar type";
+          continue;
+        }
+        while (isa<MemberExpr>(var_expr)) {
+          auto sub = dyn_cast<MemberExpr>(var_expr);
+          var_expr = sub->getBase();
+        }
+
+        // it is also possible "ThisPtrExpr"
+        // folllowing check is only used to check ParamDecl ,
+        // array_partition/reshape doens't support applying on "function
+        // Parameter"
+        if (isa<DeclRefExpr>(var_expr)) {
+          auto refExpr = dyn_cast<DeclRefExpr>(var_expr);
+          Decl *decl = refExpr->getDecl();
+          if (!decl->isUsed(false)) {
+            // skip unused , there are some stupid test case , variable = unused
+            // variable
+            continue;
+          }
+          // check paramVarDecl , warning out
+          if (isa<ParmVarDecl>(decl)) {
+            isParam = true;
+          }
+        }
+        if (isParam) {
+          // In fact, partition on function argument is unsupported.
+          // Here we still generate call intrinsic for partition.
+          // Because clang is very hard to do complex checking.
+          // We will leave the correct actions to PramgaPreprocess:
+          left.push_back(attr);
+        } else {
+          // don't do hoist, just emit intrinsic for HLS-Stmt in codegen
+          left.push_back(attr);
+        }
+ 
       } else if (isa<FPGAResourceLimitHintAttr>(attr)) {
         Stmt *parent_1 = parents[parent_size - 1];
         Stmt *parent_2 = nullptr;
@@ -3360,12 +3500,7 @@ static Stmt *hoistXlxAttrs(
               << "'limit' is not const integer" << attr->getRange();
           continue;
         }
-        if (parent_2) { 
-          hoistedAttrs[parent_1].push_back(attr);
-        }
-        else { 
-          left.push_back(attr);
-        }
+        left.push_back(attr);
       } else if (isa<XlxLoopTripCountAttr>(attr)) {
         // Check the semantic of the tripcount attribute.
         // If AvgExpr is nullptr, we will create the AvgExpr during the check.
@@ -3498,6 +3633,53 @@ static Stmt *hoistXlxAttrs(
             continue;
           }
         }
+        left.push_back(attr);
+      }
+      else if(auto interface = dyn_cast<MAXIInterfaceAttr>(attr)) {
+      
+        llvm::APSInt Int(32);
+        auto ICE = S.HLSVerifyIntegerConstantExpression(
+              interface->getDepth(), &Int);
+        if (ICE.isInvalid()) {
+            Diags.Report(interface->getDepth()->getLocStart(),
+                         diag::warn_xlx_attribute_ignore_because_invalid_option)
+                << "MAXI Interface"
+                << "'depth' is not const integer" << interface->getDepth()->getSourceRange();
+            continue;
+        }
+
+        left.push_back(attr);
+      }  
+      else if (auto dependence = dyn_cast<XlxDependenceAttr>(attr)) { 
+        auto distance = dependence->getDistance();
+        llvm::APSInt dvalue(32);
+
+        auto ICE = S.HLSVerifyIntegerConstantExpression(
+              dependence->getDistance(), &dvalue);
+
+        if (ICE.isInvalid()) {
+            Diags.Report(attr->getLocation() , 
+                         diag::warn_xlx_attribute_ignore_because_invalid_option)
+                << "dependence"
+                << "'distance' is not const integer" << dependence->getDistance()->getSourceRange();
+            continue;
+        }
+
+        auto dep_distance = dvalue.getExtValue();
+        if (dep_distance <= 0  && dependence->getType() == XlxDependenceAttr::inter && dependence->getCompel() ) {
+          Diags.Report(distance->getExprLoc(), diag::warn_xlx_dependence_inter_require_distance_option )
+            << dependence->getDistance()->getSourceRange();
+        }
+
+        if (dep_distance > 0 && dependence->getType() ==  XlxDependenceAttr::intra && dependence->getCompel()){
+          Diags.Report(distance->getExprLoc(), diag::warn_conflict_pragma_parameter_and_ignored)
+              << "intra"
+              << "distance"
+              << "distance"
+              << dependence->getDistance()->getSourceRange();
+              ;
+        }
+
         left.push_back(attr);
       }
       else {
@@ -3695,8 +3877,8 @@ static Stmt *hoistXlxAttrs(
           // because , if it apply function,  current "stmt" is null ,
           auto *for_stmt = dyn_cast<ForStmt>(stmt);
           if (context.getLangOpts().StrictDataflow) {
-            // check whether loop init, cond, increment are canonincal or not
-            CheckDataflowLoop(Diags, context, for_stmt);
+            // check whether loop init, cond, increment are canonical or not
+            CheckDataflowLoop(S, for_stmt);
 
             SmallVector<VarDecl *, 4> local_decls;
             Stmt *init = for_stmt->getInit();
@@ -3710,8 +3892,7 @@ static Stmt *hoistXlxAttrs(
               }
             }
             // check stmts in body whether are  var decl and  function call
-            CheckDataflowRegion(Diags, context,
-                                dyn_cast<CompoundStmt>(for_stmt->getBody()),
+            CheckDataflowRegion(S, dyn_cast<CompoundStmt>(for_stmt->getBody()),
                                 local_decls);
           }
           GenerateDataFlowProc(dyn_cast<CompoundStmt>(for_stmt->getBody()),
@@ -3829,7 +4010,7 @@ static bool InvalidFieldType(const Type *Ty) {
 
 
 
-static bool UnsupportedAPIntType(const Type *Ty) {
+static bool UnsupportedAPIntType(const Type *Ty, bool striped) {
   if (Ty->isAPIntType())
     return true;
 
@@ -3845,7 +4026,19 @@ static bool UnsupportedAPIntType(const Type *Ty) {
     return false;
 
   for (auto *fieldDecl : Ty->getAs<RecordType>()->getDecl()->fields()) {
-    if (UnsupportedAPIntType(StripType(fieldDecl->getType())))
+    auto fieldTy = fieldDecl->getType().getTypePtr();
+    if (fieldTy->isPointerType() || fieldTy->isReferenceType()) { 
+      if (!striped){ 
+        striped = true;
+        fieldTy = fieldTy->isReferenceType() ? fieldTy->getPointeeType().getTypePtr()
+                                    : fieldTy->getPointeeOrArrayElementType();
+      }
+      else { 
+        return false;
+      }
+    }
+
+    if (UnsupportedAPIntType(fieldTy, striped))
       return true;
   }
 
@@ -3953,7 +4146,7 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
           ArrayRef<ParmVarDecl *> parameters = funcDecl->parameters();
           SmallVector<VarDecl *, 4> local_decls(parameters.begin(),
                                                 parameters.end());
-          if (CheckDataflowRegion(Diags, context,
+          if (CheckDataflowRegion(S,
                                   dyn_cast<CompoundStmt>(funcDecl->getBody()),
                                   local_decls)) {
             GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()),
@@ -3977,16 +4170,24 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
     return ;
   }
 
-  auto RetTy = StripType(funcDecl->getReturnType());
+  auto RetTy = funcDecl->getReturnType().getTypePtr();
   // return type shouldn't be APInt(Arbitrary-precision integer type) type, or
   //
-  if (UnsupportedAPIntType(RetTy))
+  if (UnsupportedAPIntType(RetTy, false))
     S.Diag(funcDecl->getLocation(), diag::err_top_argument_type_check) 
       << "the function return type is C language Arbitray-precesion type ";
 
   for( auto *param_decl : funcDecl->parameters()) { 
-    auto parm_ty = StripType(param_decl->getType());
-    if (UnsupportedAPIntType(parm_ty)) { 
+    auto parm_ty = param_decl->getType().getTypePtr();
+    bool striped = false; 
+    if (parm_ty->isPointerType() || parm_ty->isReferenceType()) { 
+      parm_ty = parm_ty->isReferenceType() ? parm_ty->getPointeeType().getTypePtr()
+                                    : parm_ty->getPointeeOrArrayElementType();
+
+      striped = true;
+    }
+
+    if (UnsupportedAPIntType(parm_ty, striped)) {
       S.Diag(param_decl->getLocation(), diag::err_top_argument_type_check) 
         << "type of the parameter is C language  Arbitray-precesion type ";
     }

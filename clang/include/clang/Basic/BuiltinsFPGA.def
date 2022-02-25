@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -65,6 +65,9 @@ BUILTIN(__fpga_axis_nb_push, "bv*v*v*v*v*v*v*vC*vC*vC*vC*vC*vC*vC*", "tn")
 BUILTIN(__fpga_maxi_read_req, "vv*i", "tn")
 BUILTIN(__fpga_maxi_read, "vv*v*", "tn")
 BUILTIN(__fpga_maxi_write_req, "vv*i", "tn")
-BUILTIN(__fpga_maxi_write, "vv*vC*ULLi.", "tn")
+BUILTIN(__fpga_maxi_write, "vv*vC*vC*", "tn")
 BUILTIN(__fpga_maxi_write_resp, "vv*", "tn")
+
+BUILTIN(__fpga_add_task, "vi*i*", "tn")
+BUILTIN(__fpga_add_infinite_task, "vi*i*", "tn")
 #undef BUILTIN

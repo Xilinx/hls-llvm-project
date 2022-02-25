@@ -113,11 +113,11 @@ std::string getAggregateTypeStr(AggregateType AggrTy) {
   case AggregateType::Default:
     return "default";
   case AggregateType::Bit:
-    return "field bit alignment";
+    return "compact=bit";
   case AggregateType::Byte:
-    return "field byte alignment";
+    return "compact=byte";
   case AggregateType::NoCompact:
-    return "non-compact";
+    return "compact=none";
   default:
     return "default";
   }

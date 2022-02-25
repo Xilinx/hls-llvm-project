@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -362,4 +362,11 @@ bool FPGATTIImpl::isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes,
                                                unsigned Alignment,
                                                unsigned AddrSpace) const {
   return true;
+}
+
+bool FPGATTIImpl::isLegalToInferAttributeForFunction(Function *F) const {
+  if (F->isDeclaration() && !F->hasFnAttribute((Attribute::OptimizeNone)) &&
+      F->getName() == "__assert_fail")
+    return true;
+  return false;
 }

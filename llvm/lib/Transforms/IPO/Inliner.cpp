@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -68,6 +68,8 @@
 #include "llvm/Transforms/Utils/ImportedFunctionsInliningStatistics.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "llvm/Analysis/XILINXFunctionInfoUtils.h"
+
 #include <algorithm>
 #include <cassert>
 #include <functional>
@@ -491,23 +493,14 @@ bool LegacyInlinerBase::runOnSCC(CallGraphSCC &SCC) {
 static bool
 canEmitMessage(const Function *Callee, const Function *Caller,
                std::unordered_multimap<std::string, std::string> &IMap) {
-  // Skip inline message if the callee is defined in ap_int/ap_fixed
-  // header files. We don't want to emit too much messages.
-  static const std::set<std::string> HLSHeaders({
-      "ap_common.h",
-      "ap_int.h",
-      "ap_int_base.h",
-      "ap_int_ref.h",
-      "ap_fixed.h",
-      "ap_fixed_base.h",
-      "ap_fixed_ref.h"
-  });
-
   if (DISubprogram *CalleeDI = Callee->getSubprogram()) {
     std::string CalleeFilename =
-                    filename(CalleeDI->getFilename(),
-                             sys::path::Style::posix);
-    if (HLSHeaders.count(CalleeFilename))
+                     filename(CalleeDI->getFilename(),
+                              sys::path::Style::posix);
+
+    // Skip inline message if the callee is defined in ap_int/ap_fixed
+    // header files. We don't want to emit too much messages.
+    if (isSystemHLSHeaderFunc(Callee))
       return false;
 
     StringRef CalleeName = Callee->getName();

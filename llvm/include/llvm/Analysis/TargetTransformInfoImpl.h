@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -542,6 +542,10 @@ public:
                                 unsigned ChainSizeInBytes,
                                 VectorType *VecTy) const {
     return VF;
+  }
+
+  bool isLegalToInferAttributeForFunction(Function *F) const {
+    return false;
   }
 
   bool useReductionIntrinsic(unsigned Opcode, Type *Ty,

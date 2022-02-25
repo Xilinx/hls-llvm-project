@@ -953,6 +953,23 @@ def XlxUnrollHint: InheritableAttr {
               DefaultBoolArgument<"IsDefaultFactor", 0>];
 }
 
+def XlxTask: StmtAttr { 
+  let Spellings = [GNU<"xlx_task">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let TemplateDependent = 1;
+  let Args = [ExprArgument<"TaskID"> ];
+
+}
+
+def XlxInfiniteTask: StmtAttr { 
+  let Spellings = [GNU<"xlx_infinite_task">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let TemplateDependent = 1;
+  let Args = [ExprArgument<"TaskID"> ];
+}
+
 def OpenCLIntelReqdSubGroupSize: InheritableAttr {
   let Spellings = [GNU<"intel_reqd_sub_group_size">];
   let Args = [UnsignedArgument<"SubGroupSize">];
@@ -3064,6 +3081,17 @@ def XlxBindOpExpr: Attr{
              ];
 }
 
+def XlxMAXIAlias: Attr{
+  let Spellings = [GNU<"xlx_maxi_alias">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              VariadicExprArgument<"Ports">,
+              VariadicExprArgument<"Offsets">
+             ];
+}
+
 def XCLDependence: Attr{ 
   let Spellings = [GNU<"xcl_dependence">];
   let LangOpts = [HLSExt];
@@ -3235,14 +3263,43 @@ def XCLArrayGeometry : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
-def XlxArrayXForm : InheritableAttr {
-  let Spellings = [GNU<"xlx_array_partition">,
-                   GNU<"xlx_array_reshape">];
+//def XlxArrayXForm : InheritableAttr {
+//  let Spellings = [GNU<"xlx_array_partition">,
+//                   GNU<"xlx_array_reshape">];
+//  //let Subjects = SubjectList<[Var], ErrorDiag>;
+//  let LangOpts = [HLSExt];
+//  let Documentation = [Undocumented];
+//  let Args = [ExprArgument<"Variable">, 
+//              EnumArgument<"Type", "XlxArrayXFormType",
+//                           ["cyclic", "block", "complete"],
+//                           ["Cyclic", "Block", "Complete"]>,
+//              ExprArgument<"Factor", 1>, // here 1 means optional
+//              ExprArgument<"Dim", 1>]; // here 1 means optional
+//  let TemplateDependent = 1;
+//}
+
+def XlxArrayPartitionXForm : InheritableAttr {
+  let Spellings = [GNU<"xlx_array_partition">];
   //let Subjects = SubjectList<[Var], ErrorDiag>;
   let LangOpts = [HLSExt];
   let Documentation = [Undocumented];
   let Args = [ExprArgument<"Variable">, 
-              EnumArgument<"Type", "XlxArrayXFormType",
+              EnumArgument<"Type", "XlxArrayPartitionXFormType",
+                           ["cyclic", "block", "complete"],
+                           ["Cyclic", "Block", "Complete"]>,
+              ExprArgument<"Factor", 1>, // here 1 means optional
+              ExprArgument<"Dim", 1>, // here 1 means optional
+              BoolArgument<"Dynamic">]; 
+  let TemplateDependent = 1;
+}
+
+def XlxArrayReshapeXForm : InheritableAttr {
+  let Spellings = [GNU<"xlx_array_reshape">];
+  //let Subjects = SubjectList<[Var], ErrorDiag>;
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Variable">, 
+              EnumArgument<"Type", "XlxArrayReshapeXFormType",
                            ["cyclic", "block", "complete"],
                            ["Cyclic", "Block", "Complete"]>,
               ExprArgument<"Factor", 1>, // here 1 means optional
@@ -3363,14 +3420,6 @@ def XCLLatency : InheritableAttr {
               ExprArgument<"Max">];
 }
 
-def MAXIAlias: InheritableAttr{ 
-  let Spellings = [GNU<"m_axi_alias">];
-  let LangOpts = [HLSExt];
-  let Documentation = [Undocumented];
-  let Args = [ExprArgument<"Offset">, DefaultIntArgument<"Group", -1>];
-  let TemplateDependent = 1;
-
-}
 def MAXIAdaptor : InheritableAttr {
   let Spellings = [XLXPragma<"m_axi_adaptor">];
   let LangOpts = [HLSExt];

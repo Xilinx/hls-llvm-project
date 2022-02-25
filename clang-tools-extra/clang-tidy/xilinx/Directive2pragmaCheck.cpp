@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -950,7 +950,7 @@ void Directive2pragmaCheck::SetPragmawithResource(
     }
 
     SetPragma(Directived, Loc, DInfo->SM, DInfo->Context,
-              DInfo->FunDecl->getName());
+              DInfo->FunDecl->getNameAsString());
     return;
   }
 
@@ -1199,7 +1199,8 @@ Stmt *Directive2pragmaCheck::needInsertIntoBrace(
 
 std::string
 Directive2pragmaCheck::dumpPragma(struct DirectiveHandle *Directived) {
-  std::string PragmaStr = "\n#pragma HLS ";
+  // HACK: Use 'HLSDIRECTIVE' instead of 'HLS' so that PramgaXlxParser knows this came from a directive
+  std::string PragmaStr = "\n#pragma HLSDIRECTIVE ";
   PragmaStr += Directived->PragmaItem.Name;
 
   for (auto Opt : Directived->PragmaItem.OptionList) {

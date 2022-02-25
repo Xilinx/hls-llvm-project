@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -31,6 +31,8 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
+#include "clang/AST/QualTypeNames.h"
+
 using namespace clang;
 using namespace CodeGen;
 
@@ -59,26 +61,29 @@ void CodeGenTypes::addRecordTypeName(const RecordDecl *RD,
   SmallString<256> TypeName;
   llvm::raw_svector_ostream OS(TypeName);
   OS << RD->getKindName() << '.';
-  
-  // Name the codegen type after the typedef name
-  // if there is no tag type name available
-  if (RD->getIdentifier()) {
-    // FIXME: We should not have to check for a null decl context here.
-    // Right now we do it because the implicit Obj-C decls don't have one.
-    if (RD->getDeclContext())
-      RD->printQualifiedName(OS);
-    else
-      RD->printName(OS);
-  } else if (const TypedefNameDecl *TDD = RD->getTypedefNameForAnonDecl()) {
-    // FIXME: We should not have to check for a null decl context here.
-    // Right now we do it because the implicit Obj-C decls don't have one.
-    if (TDD->getDeclContext())
-      TDD->printQualifiedName(OS);
-    else
-      TDD->printName(OS);
-  } else
-    OS << "anon";
-
+    
+  if(Context.getLangOpts().HLSExt) {
+    OS << clang::TypeName::getFullyQualifiedName(Context.getRecordType(RD), Context);
+  } else {
+    // Name the codegen type after the typedef name
+    // if there is no tag type name available
+    if (RD->getIdentifier()) {
+      // FIXME: We should not have to check for a null decl context here.
+      // Right now we do it because the implicit Obj-C decls don't have one.
+      if (RD->getDeclContext())
+        RD->printQualifiedName(OS);
+      else
+        RD->printName(OS);
+    } else if (const TypedefNameDecl *TDD = RD->getTypedefNameForAnonDecl()) {
+      // FIXME: We should not have to check for a null decl context here.
+      // Right now we do it because the implicit Obj-C decls don't have one.
+      if (TDD->getDeclContext())
+        TDD->printQualifiedName(OS);
+      else
+        TDD->printName(OS);
+    } else
+      OS << "anon";
+  }
   if (!suffix.empty())
     OS << suffix;
 
@@ -549,9 +554,10 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     assert(A->getIndexTypeCVRQualifiers() == 0 &&
            "FIXME: We only handle trivial array types so far!");
     // int X[] -> [0 x int], unless the element type is not sized.  If it is
-    // unsized (e.g. an incomplete struct) just use [0 x i8].
+    // unsized (e.g. an incomplete struct) just use [0 x struct.xxx], and 
+    // struct.xxx = opaque.
     ResultType = ConvertTypeForMem(A->getElementType());
-    if (!ResultType->isSized()) {
+    if (!ResultType->isSized() && (Context.getLangOpts().HLSExt && !ResultType->isStructTy())) {
       SkippedLayout = true;
       ResultType = llvm::Type::getInt8Ty(getLLVMContext());
     }
@@ -562,9 +568,9 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     const ConstantArrayType *A = cast<ConstantArrayType>(Ty);
     llvm::Type *EltTy = ConvertTypeForMem(A->getElementType());
     
-    // Lower arrays of undefined struct type to arrays of i8 just to have a 
-    // concrete type.
-    if (!EltTy->isSized()) {
+    // Lower arrays of undefined struct type to arrays of struct.xxx, and 
+    // struct.xxx = opaque.
+    if (!EltTy->isSized() && (Context.getLangOpts().HLSExt && !EltTy->isStructTy())) {
       SkippedLayout = true;
       EltTy = llvm::Type::getInt8Ty(getLLVMContext());
     }

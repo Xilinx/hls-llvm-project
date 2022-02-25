@@ -45,7 +45,10 @@ class HLSIRBuilder : public IRBuilder<> {
 
   Value *CreatePartSelectCall(Value *V, Value *Lo, Value *Hi,
                               IntegerType *RetTy);
+  Value *CreatePartSetCall(Value *V, Value *R, Value *Lo, Value *Hi,
+                           IntegerType *RetTy);
   Value *CreateLegacyPartSelectCall(Value *V, Value *Lo, Value *Hi);
+  Value *CreateLegacyPartSetCall(Value *V, Value *R, Value *Lo, Value *Hi);
 
 protected:
   const DataLayout &DL;
@@ -115,6 +118,9 @@ public:
   Value *CreatePartSelect(Value *V, Value *Lo, Value *Hi, IntegerType *RetTy);
   Value *CreatePartSelect(Value *V, uint32_t Lo, uint32_t Hi);
 
+  /// \brief Create Call to fpga.legacy.part.select
+  Value *CreateLegacyPartSelect(Value *V, Value *Lo, Value *Hi);
+
   /// \brief Generate the logic to perform fpga.part.set
   Value *GeneratePartSet(Value *Dst, Value *Src, Value *Lo, Value *Hi);
 
@@ -126,10 +132,13 @@ public:
   Value *CreatePartSet(Value *Dst, Value *Src, Value *Lo, Value *Hi);
   Value *CreatePartSet(Value *Dst, Value *Src, uint32_t Lo, uint32_t Hi);
 
+  /// \brief Create Call to fpga.legacy.part.set
+  Value *CreateLegacyPartSet(Value *V, Value *R, Value *Lo, Value *Hi);
+
   /// \brief Create Call to fpga.bit.concat
 
   /// \brief Generate the logic to perform fpga.bit.concat
-  Value *GenerateBitConat(ArrayRef<Value *> Args, IntegerType *RetTy);
+  Value *GenerateBitConcat(ArrayRef<Value *> Args, IntegerType *RetTy);
 
   /// \brief Create Call to fpga.bit.concat
   Value *CreateBitConcat(ArrayRef<Value *> Args);
@@ -137,8 +146,8 @@ public:
   /// \brief Create Call to fpga.mux
   Value *CreateMux(Value *Cond, ArrayRef<Value *> Args, const Twine &Name = "");
 
-  Value *GetherElements(MutableArrayRef<Value *> Elts);
-  Constant *GetherElements(MutableArrayRef<Constant *> Elts);
+  Value *GatherElements(MutableArrayRef<Value *> Elts);
+  Constant *GatherElements(MutableArrayRef<Constant *> Elts);
 
   /// \brief Create Call to fpga.unpack.none
   Value *CreateUnpackNone(Value *Bytes, Type *DstTy);
@@ -184,6 +193,10 @@ public:
   Value *alignByteEnableToMemory(Value *ByteEnable, Value *ByteOffset);
 
   Value *ExtractDataFromWord(Type *ResultTy, Value *Word, Value *ByteOffset);
+
+  /// \brief Creates preserved-properties-per-object access
+  Value *CreateFPGAPPPOLoadInst(Value *Ptr, unsigned Align = 0);
+  Value *CreateFPGAPPPOStoreInst(Value *V, Value *Ptr, unsigned Align = 0);
 
   Value *CreateSeqBeginEnd(Intrinsic::ID ID, Value *WordAddr, Value *Size);
   Value *CreateSeqLoadInst(Type *DataTy, Value *Token, Value *Idx);
@@ -239,7 +252,7 @@ public:
   Value *
   CreateArrayPartitionInst(Value *V,
                            ArrayXFormInst<ArrayPartitionInst>::XFormMode Mode,
-                           int32_t Dim, int32_t Factor = 0,
+                           int32_t Dim, int32_t Factor = 0, bool Dynamic = false,
                            int64_t BitSize = -1);
   Value *
   CreateArrayReshapeInst(Value *V,

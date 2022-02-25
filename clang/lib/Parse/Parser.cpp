@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -285,6 +285,8 @@ bool Parser::SkipUntil(ArrayRef<tok::TokenKind> Toks, SkipUntilFlags Flags) {
     case tok::annot_pragma_openmp_end:
       // Stop before an OpenMP pragma boundary.
     case tok::annot_pragma_XlxHLS:
+    case tok::annot_pragma_XlxHLS_directive:
+    case tok::annot_pragma_XlxHLS_old:
     case tok::annot_pragma_XlxHLS_end:
     // Stop before an HLSExt pragma boundary.
     case tok::annot_module_begin:
@@ -603,6 +605,8 @@ bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result) {
     HandlePragmaAttribute();
     return false;
   case tok::annot_pragma_XlxHLS:
+  case tok::annot_pragma_XlxHLS_directive:
+  case tok::annot_pragma_XlxHLS_old:
     Diag(Tok.getLocation(), diag::err_xlx_pragma_not_in_function_scope);
     ConsumeAnnotationToken();
     SkipUntil(tok::annot_pragma_XlxHLS_end, Parser::StopBeforeMatch);

@@ -635,8 +635,9 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
 
     Value *A, *B;
     auto m_V = m_CombineOr(m_Specific(V),
-                           m_CombineOr(m_PtrToInt(m_Specific(V)),
-                           m_BitCast(m_Specific(V))));
+                           m_CombineOr(m_Trunc(m_Specific(V)),
+                                       m_CombineOr(m_PtrToInt(m_Specific(V)),
+                                                   m_BitCast(m_Specific(V)))));
 
     CmpInst::Predicate Pred;
     uint64_t C;
@@ -790,9 +791,12 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       // to known bits in V shifted to the right by C.
       Known.Zero |= RHSKnown.One  << C;
       Known.One  |= RHSKnown.Zero << C;
-    // assume(v urem a = b)
-    } else if (match(Arg,
-                     m_c_ICmp(Pred, m_URem(m_V, m_Value(A)), m_Value(B))) &&
+    // assume(v urem a = b) || assume(trunc(urem(v)) = b)
+    } else if ((match(Arg,
+                     m_c_ICmp(Pred, m_URem(m_V, m_Value(A)), m_Value(B))) ||
+                match(Arg,
+                     m_c_ICmp(Pred, m_Trunc(m_URem(m_V, m_Value(A))),
+                              m_Value(B)))) &&
                Pred == ICmpInst::ICMP_EQ &&
                isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
       KnownBits ModKnown =

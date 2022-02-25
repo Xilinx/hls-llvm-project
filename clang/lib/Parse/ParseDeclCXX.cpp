@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3092,6 +3092,8 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclarationWithPragmas(
     return nullptr;
   }
 
+  case tok::annot_pragma_XlxHLS_directive:
+  case tok::annot_pragma_XlxHLS_old:
   case tok::annot_pragma_XlxHLS:
     Diag(Tok.getLocation(), diag::err_xlx_pragma_not_in_function_scope);
     ConsumeAnnotationToken();

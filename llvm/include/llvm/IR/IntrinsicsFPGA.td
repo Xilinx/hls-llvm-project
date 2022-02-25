@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -105,6 +105,18 @@ def int_fpga_bram_store : Intrinsic<[], [llvm_any_ty,
                                          LLVMAnyPointerType<LLVMMatchType<0>>,
                                          llvm_anyint_ty, llvm_i1_ty],
                                     [IntrWriteMem, IntrArgMemOnly]>;
+
+// preserve-properties-per-object (prevent passes from changing the number of
+// related operations or changing their order of execution relatively on the
+// pointer itself
+// fpga.pppo.load(Ptr)
+def int_fpga_pppo_load : Intrinsic<[llvm_any_ty],
+                                   [LLVMAnyPointerType<LLVMMatchType<0>>],
+                                   [IntrArgMemOnly]>;
+// fpga.pppo.store(Data, Ptr)
+def int_fpga_pppo_store : Intrinsic<[], [llvm_any_ty,
+                                         LLVMAnyPointerType<LLVMMatchType<0>>],
+                                    [IntrArgMemOnly]>;
 
 //===---
 //
@@ -382,5 +394,15 @@ def int_fpga_maxi_write : Intrinsic<[],
 // void llvm.fpga.maxi.write.resp(%type *%port)
 def int_fpga_maxi_write_resp : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>],
                                          [IntrArgMemOnly, NoCapture<0>]>;
+
+// void llvm.fgpa.add.task(%taskregion_id, %task_id)
+def int_fpga_add_task : Intrinsic<[], 
+                                  [LLVMAnyPointerType<llvm_i32_ty>, LLVMAnyPointerType<llvm_i32_ty>],
+                                  [IntrArgMemOnly, NoCapture<0>]>;
+
+// void llvm.fgpa.add.infinite.task(%taskregion_id, %task_id)
+def int_fpga_add_infinite_task : Intrinsic<[],
+                                           [LLVMAnyPointerType<llvm_i32_ty>, LLVMAnyPointerType<llvm_i32_ty>],
+                                           [IntrArgMemOnly, NoCapture<0>]>;
 
 }

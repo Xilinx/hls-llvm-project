@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -105,12 +105,12 @@ static cl::opt<int>
                                  "(default unlimited = -1)"));
 
 static cl::opt<int> MaxNumberOfBBSInPath(
-    "gvn-hoist-max-bbs", cl::Hidden, cl::init(4),
+    "gvn-hoist-max-bbs", cl::Hidden, cl::init(16),
     cl::desc("Max number of basic blocks on the path between "
              "hoisting locations (default = 4, unlimited = -1)"));
 
 static cl::opt<int> MaxDepthInBB(
-    "gvn-hoist-max-depth", cl::Hidden, cl::init(100),
+    "gvn-hoist-max-depth", cl::Hidden, cl::init(400),
     cl::desc("Hoist instructions from the beginning of the BB up to the "
              "maximum specified depth (default = 100, unlimited = -1)"));
 

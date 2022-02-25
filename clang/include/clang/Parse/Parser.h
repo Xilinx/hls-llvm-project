@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -172,6 +172,7 @@ class Parser : public CodeCompletionHandler {
   std::unique_ptr<PragmaHandler> OpenCLExtensionHandler;
   std::unique_ptr<PragmaHandler> OpenMPHandler;
   std::unique_ptr<PragmaHandler> PCSectionHandler;
+  std::unique_ptr<PragmaHandler> XlxHLSDIRECTIVEHandler;
   std::unique_ptr<PragmaHandler> XlxHLSHandler;
   std::unique_ptr<PragmaHandler> XlxhlsHandler;
   std::unique_ptr<PragmaHandler> XlxAPHandler;

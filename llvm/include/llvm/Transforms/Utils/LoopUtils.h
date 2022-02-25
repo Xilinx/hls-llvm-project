@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines some loop transformation utilities.
@@ -480,7 +485,7 @@ bool promoteLoopAccessesToScalars(const SmallSetVector<Value *, 8> &,
                                   PredIteratorCache &, LoopInfo *,
                                   DominatorTree *, const TargetLibraryInfo *,
                                   Loop *, AliasSetTracker *, LoopSafetyInfo *,
-                                  OptimizationRemarkEmitter *);
+                                  OptimizationRemarkEmitter *, AliasAnalysis *);
 
 /// Does a BFS from a given node to all of its children inside a given loop.
 /// The returned vector of nodes includes the starting point.

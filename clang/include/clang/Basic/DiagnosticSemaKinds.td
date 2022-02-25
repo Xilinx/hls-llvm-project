@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2510,57 +2510,7 @@ def warn_attribute_return_pointers_refs_only : Warning<
 def warn_attribute_pointer_or_reference_only : Warning<
   "%0 attribute only applies to a pointer or reference (%1 is invalid)">,
   InGroup<IgnoredAttributes>;
-def warn_attributes_are_not_compatible : Warning<
-  "%0 and %1 attributes are not compatible">,
-  InGroup<IgnoredAttributes>;
-def warn_attribute_argument_n_type : Warning<
-  "%0 attribute requires parameter %1 to be %select{int or bool|an integer "
-  "constant|a string|an identifier}2">,
-  InGroup<IgnoredAttributes>;
-def warn_attribute_argument_type : Warning<
-  "%0 attribute requires %select{int or bool|an integer "
-  "constant|a string|an identifier}1">,
-  InGroup<IgnoredAttributes>;
 
-def warn_xlx_attr_wrong_stmt_target : Warning<
-  "Only %1 support the %0 pragma" >,InGroup<IgnoredAttributes>;
-def warn_xcl_loop_attr_wrong_target : Warning<
-  "Only for/while loops support the '%0'">,InGroup<IgnoredAttributes>;
-def warn_xcl_dataflow_attr_wrong_target : Warning<
-  "Only for-loops and functions support the dataflow">,InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_invalid_loop_initial_stmt : Warning<
-  "Since the loop counter does not start from 0, the compiler may not successfully process the dataflow loop">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_multiple_loop_induction_variable : Warning<
-  "Due to multiple loop counters, the compiler may not successfully process the dataflow loop">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_invalid_loop_iteration_stmt : Warning<
-  "As the loop counter is not increased by 1, the compiler may not successfully process the dataflow loop">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_invalid_loop_condition_stmt : Warning<
-  "Ignore 'dataflow' on loop: Unsupported for-loop condition statement for dataflow">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_invalid_loop_bound : Warning<
-  "As the loop bound is not a constant or function argument, the compiler may not successfully process the dataflow loop">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_dataflow_static_variable : Warning<
-  "Static scalars and arrays declared inside a dataflow region will be treated like local variables">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_dataflow_non_static_stream : Warning<
-  "Streams will behave like static variables inside a dataflow region">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_invalid_call_return_type : Warning<
-  "'dataflow' ignored: Functions with a return value cannot be used inside a dataflow region">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_invalid_call_argument_type : Warning<
-  "Either use an argument of the function or declare the variable inside the dataflow loop body">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_ignore_xcl_dataflow_on_invalid_statement : Warning<
-  "Since the only kind of statements allowed in a canonical dataflow region are variable declarations and function calls, the compiler may not be able to correctly handle the region">,
-  InGroup<IgnoredDataflowAttr>;
-def warn_statistics_xcl_dataflow_on_invalid_statement : Warning<
-  "There are a total of %0 such instances of non-canonical statements in the dataflow region">,
-  InGroup<IgnoredDataflowAttr>;
 
 def err_attribute_no_member_pointers : Error<
   "%0 attribute cannot be used with pointers to members">;

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3345,7 +3345,13 @@ public:
                                        StringRef AttrName);
   bool CheckXCLReqdPipeDepthExprs(Expr *Depth, SourceLocation Loc,
                                   StringRef AttrName);
-  bool CheckXlxArrayXFormExprs(Expr *Factor, Expr *Dim, Decl *D,
+  //bool CheckXlxArrayXFormExprs(Expr *Factor, Expr *Dim, Decl *D,
+  //                             SourceRange SrcRange, SourceLocation Loc,
+  //                             StringRef AttrName);
+  bool CheckXlxArrayPartitionXFormExprs(Expr *Factor, Expr *Dim, Decl *D,
+                               SourceRange SrcRange, SourceLocation Loc,
+                               StringRef AttrName);
+  bool CheckXlxArrayReshapeXFormExprs(Expr *Factor, Expr *Dim, Decl *D,
                                SourceRange SrcRange, SourceLocation Loc,
                                StringRef AttrName);
   bool CheckXlxOccurrenceExprs(Expr *Cycle, SourceLocation Loc,

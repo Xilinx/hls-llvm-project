@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines various classes for working with Instructions and
@@ -446,6 +451,14 @@ public:
   inline op_iterator       idx_end()         { return op_end(); }
   inline const_op_iterator idx_end()   const { return op_end(); }
 
+  inline iterator_range<op_iterator> indices() {
+    return make_range(idx_begin(), idx_end());
+  }
+
+  inline iterator_range<const_op_iterator> indices() const {
+    return make_range(idx_begin(), idx_end());
+  }
+
   Value *getPointerOperand() {
     return getOperand(0);
   }
@@ -502,7 +515,7 @@ public:
   }
 
   unsigned countNonConstantIndices() const {
-    return count_if(make_range(idx_begin(), idx_end()), [](const Use& use) {
+    return count_if(indices(), [](const Use& use) {
         return !isa<ConstantInt>(*use);
       });
   }

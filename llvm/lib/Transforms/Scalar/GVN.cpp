@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -97,6 +97,8 @@ STATISTIC(NumGVNBlocks, "Number of blocks merged");
 STATISTIC(NumGVNSimpl,  "Number of instructions simplified");
 STATISTIC(NumGVNEqProp, "Number of equalities propagated");
 STATISTIC(NumPRELoad,   "Number of loads PRE'd");
+
+extern cl::opt<bool> HLS;
 
 // HLS BEGIN
 // Disable PRE since it will split critical edges. This behavior may change
@@ -1374,6 +1376,11 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
   // load, then it is fully redundant and we can use PHI insertion to compute
   // its value.  Insert PHIs and remove the fully redundant value now.
   if (UnavailableBlocks.empty()) {
+    if (HLS && LInfo) {
+      if (LInfo->getLoopFor(LI->getParent()) && ValuesPerBlock.size() > 1 &&
+          LI->getType()->isIntegerTy() && !isa<Argument>(LI->getOperand(0)))
+        return false;
+    }
     DEBUG(dbgs() << "GVN REMOVING NONLOCAL LOAD: " << *LI << '\n');
 
     // Perform PHI construction.
@@ -2041,6 +2048,7 @@ bool GVN::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
   OI = &OrderedInstrs;
   VN.setMemDep(MD);
   ORE = RunORE;
+  LInfo = LI;
 
   bool Changed = false;
   bool ShouldContinue = true;

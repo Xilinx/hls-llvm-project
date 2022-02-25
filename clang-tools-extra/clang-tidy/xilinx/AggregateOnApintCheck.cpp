@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -81,10 +81,20 @@ void AggregateOnApintCheck::registerMatchers(MatchFinder *Finder) {
       functionDecl(isDefinition(), hasAttr(attr::SDxKernel),
                    unless(cxxMethodDecl()),
                    has(compoundStmt(forEach(
-                       attributedStmt(hasAttachedAttr(attr::XlxArrayXForm))
+                       attributedStmt(hasAttachedAttr(attr::XlxArrayPartitionXForm))
                            .bind("axform")))))
           .bind("top"),
       this);
+
+  Finder->addMatcher(
+      functionDecl(isDefinition(), hasAttr(attr::SDxKernel),
+                   unless(cxxMethodDecl()),
+                   has(compoundStmt(forEach(
+                       attributedStmt(hasAttachedAttr(attr::XlxArrayReshapeXForm))
+                           .bind("axform")))))
+          .bind("top"),
+      this);
+
   Finder->addMatcher(functionDecl(isDefinition(), hasAttr(attr::SDxKernel),
                                   unless(cxxMethodDecl()))
                          .bind("top"),
@@ -100,27 +110,27 @@ void AggregateOnApintCheck::check(const MatchFinder::MatchResult &Result) {
     return;
 
   for (auto *A : Attr->getAttrs()) {
-    auto *AXFormAttr = dyn_cast<XlxArrayXFormAttr>(A);
-    if (!AXFormAttr)
+    auto *ARXFormAttr = dyn_cast<XlxArrayReshapeXFormAttr>(A);
+    if (!ARXFormAttr)
       return;
 
-    auto *V = dyn_cast<DeclRefExpr>(AXFormAttr->getVariable());
-    if (!V)
+    auto *RV = dyn_cast<DeclRefExpr>(ARXFormAttr->getVariable());
+    if (!RV)
       return;
 
-    auto *VD = dyn_cast<ParmVarDecl>(V->getDecl());
-    if (!VD)
+    auto *RVD = dyn_cast<ParmVarDecl>(RV->getDecl());
+    if (!RVD)
       return;
 
-    std::string Spelling = AXFormAttr->getSpelling();
+    std::string Spelling = ARXFormAttr->getSpelling();
     if (!Spelling.empty() && Spelling == "xlx_array_reshape" &&
-        IsAPType(GetAsStructureType(V))) {
+        IsAPType(GetAsStructureType(RV))) {
       SourceLocation TopBodyStart = Lexer::getLocForEndOfToken(
           cast<CompoundStmt>(FuncDecl->getBody())->getLBracLoc(), 0,
           *Result.SourceManager, Result.Context->getLangOpts());
-      std::string Param = VD->getQualifiedNameAsString();
+      std::string Param = RVD->getQualifiedNameAsString();
       std::string Aggr = "\n#pragma HLS aggregate variable = " + Param + "\n";
-      diag(V->getLocation(),
+      diag(RV->getLocation(),
            " array reshape on top function variable %0 that is an array of "
            "arbitrary type requires aggregation on the element type")
           << Param << FixItHint::CreateInsertion(TopBodyStart, Aggr);

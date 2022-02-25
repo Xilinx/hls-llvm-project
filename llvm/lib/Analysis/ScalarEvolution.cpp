@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1608,6 +1608,10 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
   ID.AddInteger(scZeroExtend);
   ID.AddPointer(Op);
   ID.AddPointer(Ty);
+  // HLS: add NoWrapFlags to the key of UniqueSCEVs.
+  if (const SCEVNAryExpr *NAE = dyn_cast<SCEVNAryExpr>(Op)) 
+    ID.AddInteger(NAE->getNoWrapFlags());
+
   void *IP = nullptr;
   if (const SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) return S;
   if (Depth > MaxExtDepth) {
@@ -1832,6 +1836,10 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
   ID.AddInteger(scSignExtend);
   ID.AddPointer(Op);
   ID.AddPointer(Ty);
+  // HLS: add NoWrapFlags to the key of UniqueSCEVs.
+  if (const SCEVNAryExpr *NAE = dyn_cast<SCEVNAryExpr>(Op)) 
+    ID.AddInteger(NAE->getNoWrapFlags());
+
   void *IP = nullptr;
   if (const SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) return S;
   // Limit recursion depth.
@@ -5279,8 +5287,8 @@ const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
     return getUnknown(GEP);
 
   SmallVector<const SCEV *, 4> IndexExprs;
-  for (auto Index = GEP->idx_begin(); Index != GEP->idx_end(); ++Index)
-    IndexExprs.push_back(getSCEV(*Index));
+  for (Value *Index : GEP->indices())
+    IndexExprs.push_back(getSCEV(Index));
   return getGEPExpr(GEP, IndexExprs);
 }
 

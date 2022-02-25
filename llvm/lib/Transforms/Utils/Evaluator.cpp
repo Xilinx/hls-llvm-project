@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -599,6 +599,11 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
           continue;
         } else if (II->getIntrinsicID() == Intrinsic::sideeffect) {
           DEBUG(dbgs() << "Skipping sideeffect intrinsic.\n");
+          ++CurInst;
+          continue;
+        } else if (II->getIntrinsicID() == Intrinsic::directive_scope_entry ||
+                   II->getIntrinsicID() == Intrinsic::directive_scope_exit) {
+          DEBUG(dbgs() << "Skipping scope entry/exit intrinsic.\n");
           ++CurInst;
           continue;
         } else if (II->getIntrinsicID() == Intrinsic::ssa_copy) {

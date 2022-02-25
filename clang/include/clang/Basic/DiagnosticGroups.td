@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -124,12 +124,14 @@ def DeprecatedRegister : DiagGroup<"deprecated-register">;
 def DeprecatedWritableStr : DiagGroup<"deprecated-writable-strings",
                                       [CXX11CompatDeprecatedWritableStr]>;
 // FIXME: Why is DeprecatedImplementations not in this group?
+def DeprecatedXlx : DiagGroup<"deprecated-hls">;
 def Deprecated : DiagGroup<"deprecated", [DeprecatedAttributes,
                                           DeprecatedDeclarations,
                                           DeprecatedDynamicExceptionSpec,
                                           DeprecatedIncrementBool,
                                           DeprecatedRegister,
-                                          DeprecatedWritableStr]>,
+                                          DeprecatedWritableStr,
+                                          DeprecatedXlx]>,
                  DiagCategory<"Deprecations">;
 
 def DynamicExceptionSpec
@@ -518,10 +520,15 @@ def Uninitialized  : DiagGroup<"uninitialized", [UninitializedSometimes,
                                                  UninitializedStaticSelfInit]>;
 def IgnoredPragmaIntrinsic : DiagGroup<"ignored-pragma-intrinsic">;
 def UnknownPragmas : DiagGroup<"unknown-pragmas">;
+
 def IgnoredXlxPragmas : DiagGroup<"ignored-hls-pragmas">;
 def InvalidXlxPragmas : DiagGroup<"invalid-hls-pragmas">;
-def ObsoleteeXlxPragmas : DiagGroup<"obsoleted-hls-pragmas">;
+def DumpXlxPragmas : DiagGroup<"dump-hls-pragmas">;
+def ObsoleteXlxPragmas : DiagGroup<"obsoleted-hls-pragmas">;
 def ImplicitHLSStreams : DiagGroup<"implicit-hls-streams">;
+def AllXlxPragmaDiagnostics: DiagGroup<"hls-pragma-diagnostics", [IgnoredXlxPragmas, InvalidXlxPragmas,
+                                    DumpXlxPragmas, ObsoleteXlxPragmas, ImplicitHLSStreams]>;
+
 def IgnoredPragmas : DiagGroup<"ignored-pragmas", [IgnoredPragmaIntrinsic, IgnoredXlxPragmas, InvalidXlxPragmas, ImplicitHLSStreams]>;
 def PragmaClangAttribute : DiagGroup<"pragma-clang-attribute">;
 def PragmaPackSuspiciousInclude : DiagGroup<"pragma-pack-suspicious-include">;
@@ -533,11 +540,16 @@ def NSobjectAttribute : DiagGroup<"NSObject-attribute">;
 def NSConsumedMismatch : DiagGroup<"nsconsumed-mismatch">;
 def NSReturnsMismatch : DiagGroup<"nsreturns-mismatch">;
 
-def IgnoredDataflowAttr : DiagGroup<"ignored-dataflow-attribute">; 
-def IgnoredInterfaceAttr : DiagGroup<"ignored-interface-attribute">; 
+def XlxOclDiagnostics : DiagGroup<"opencl-hls-diagnostics">; 
+def IgnoredDataflowAttr : DiagGroup<"ignored-hls-dataflow-attribute">; 
+def IgnoredInterfaceAttr : DiagGroup<"ignored-hls-interface-attribute">;
+def IgnoredXlxAttributes : DiagGroup<"ignored-hls-attributes", [IgnoredDataflowAttr, IgnoredInterfaceAttr]>;
+
+def AllXlxDiagnostics : DiagGroup<"all-hls-diagnostics", [IgnoredXlxAttributes, AllXlxPragmaDiagnostics, DeprecatedXlx, XlxOclDiagnostics]>;
+
 def IndependentClassAttribute : DiagGroup<"IndependentClass-attribute">;
 def UnknownAttributes : DiagGroup<"unknown-attributes">;
-def IgnoredAttributes : DiagGroup<"ignored-attributes", [IgnoredDataflowAttr, IgnoredInterfaceAttr]>;
+def IgnoredAttributes : DiagGroup<"ignored-attributes", [IgnoredXlxAttributes]>;
 def Attributes : DiagGroup<"attributes", [UnknownAttributes,
                                           IgnoredAttributes]>;
 def UnknownSanitizers : DiagGroup<"unknown-sanitizers">;

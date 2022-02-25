@@ -386,6 +386,59 @@ TEST_F(ValueTrackingTest, ComputeKnownBitsAssumeOnArg) {
   EXPECT_EQ(Known.One.getZExtValue(), 0u);
 }
 
+TEST_F(ValueTrackingTest, ComputeKnownBitsAssumeOnTruncArg) {
+  parseAssembly(
+      "define void @test(i8 %size) {\n"
+      "  %t = trunc i8 %size to i3"
+      "  %c = icmp eq i3 %t, 6\n"
+      "  call void @llvm.assume(i1 %c)\n"
+      "  %A = add i8 %size, 1"
+      "  ret void\n"
+      "}\n"
+      "declare void @llvm.assume(i1)\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(
+      A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 0u);
+  EXPECT_EQ(Known.One.getZExtValue(), 7u);
+}
+
+TEST_F(ValueTrackingTest, ComputeKnownBitsAssumeOnTrunc) {
+  parseAssembly(
+      "define void @test(i8 %size) {\n"
+      "  %rem = urem i8 %size, 16"
+      "  %t = trunc i8 %rem to i3"
+      "  %c = icmp eq i3 %t, 1\n"
+      "  call void @llvm.assume(i1 %c)\n"
+      "  %A = add i8 %size, 1"
+      "  ret void\n"
+      "}\n"
+      "declare void @llvm.assume(i1)\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(
+      A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 5u);
+  EXPECT_EQ(Known.One.getZExtValue(), 2u);
+}
+
+TEST_F(ValueTrackingTest, ComputeKnownBitsAssumeOnTruncNonPowerTwo) {
+  parseAssembly(
+      "define void @test(i8 %size) {\n"
+      "  %rem = urem i8 %size, 6"
+      "  %t = trunc i8 %rem to i3"
+      "  %c = icmp eq i3 %t, 1\n"
+      "  call void @llvm.assume(i1 %c)\n"
+      "  %A = add i8 %size, 1"
+      "  ret void\n"
+      "}\n"
+      "declare void @llvm.assume(i1)\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(
+      A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 1u);
+  EXPECT_EQ(Known.One.getZExtValue(), 0u);
+}
+
 TEST_F(ValueTrackingTest, ComputeKnownBitsAssumeOnArgNonPowerOfTwoRHS) {
   parseAssembly(
       "define void @test(i64 %s) {\n"

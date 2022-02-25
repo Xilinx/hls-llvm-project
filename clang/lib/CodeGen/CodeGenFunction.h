@@ -3467,6 +3467,12 @@ public:
   /// Manual burst builtins
   llvm::Value *EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID, const CallExpr*E);
 
+  llvm::Value * EmitBuiltinFPGAAddTask(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGAAddInfiniteTask(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGATaskDef(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGAInfiniteTaskDef(unsigned BuiltinID, const CallExpr *E);
+
+
   /// Legacy builtins
   RValue EmitBuiltinBitConcat(const CallExpr *E);
   RValue EmitBuiltinBitFromString(const CallExpr *E);
@@ -3777,7 +3783,9 @@ public:
   void BundleBindOpAttr(const XlxBindOpExprAttr *bindOp, SmallVectorImpl<llvm::OperandBundleDef> &BundleList);
 
   void  EmitReqdPipeDepthIntrinsic( const XlxReqdPipeDepthAttr *A);
-  void  EmitArrayXFormIntrinsic( const XlxArrayXFormAttr *A);
+  //void  EmitArrayXFormIntrinsic( const XlxArrayXFormAttr *A);
+  void  EmitArrayPartitionXFormIntrinsic( const XlxArrayPartitionXFormAttr *A);
+  void  EmitArrayReshapeXFormIntrinsic( const XlxArrayReshapeXFormAttr *A);
   void  EmitStableIntrinsic( const XlxStableAttr* A);
   void  EmitStableContentIntrinsic( const XlxStableContentAttr* A);
   void  EmitSharedIntrinsic( const XlxSharedAttr* A);
@@ -3798,9 +3806,13 @@ public:
 
   void  EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAttr *attr);
   void  EmitResetIntrinsic( const XlxResetIntrinsicAttr *reset);
+  void  EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias);
 
   llvm::Value *GetAddrOrValueForExpr(Expr* E, bool supportTopArg);
   void GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const ParmVarDecl *decl , const QualType type, llvm::SmallVector<unsigned int, 4> fields, bool is_pointer);
+
+  void EmitFPGATaskDefIntrinsic(const XlxTaskAttr *attr, const Expr *E ) ;
+  void EmitFPGAInfiniteTaskDefIntrinsic(const XlxInfiniteTaskAttr *attr, const Expr *E ) ;
 
   void HoistXlxScope( Stmt *body);
   void EmitXlxDependenceIntrinsic(const XlxDependenceAttr *attr) ;

@@ -370,6 +370,23 @@ void LLVMContext::deleteGC(const Function &Fn) {
   pImpl->GCNames.erase(&Fn);
 }
 
+bool LLVMContext::destroyUselessConstExpr() {
+  bool Changed = false;
+  bool IterChanged = false;
+  do {
+    IterChanged = false;
+    for (auto *I : pImpl->ExprConstants)
+      if (I->use_empty()) {
+        I->destroyConstant();
+        IterChanged = true;
+        Changed = true;
+        break;
+      }
+  } while (IterChanged);
+
+  return Changed;
+}
+
 bool LLVMContext::shouldDiscardValueNames() const {
   return pImpl->DiscardValueNames;
 }

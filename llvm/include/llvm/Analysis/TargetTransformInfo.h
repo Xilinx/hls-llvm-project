@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -907,6 +907,9 @@ public:
                                 unsigned ChainSizeInBytes,
                                 VectorType *VecTy) const;
 
+  /// \returns True if it is legal to infer attribute for a function.
+  bool isLegalToInferAttributeForFunction(Function *F) const;
+
   /// Flags describing the kind of vector reduction.
   struct ReductionFlags {
     ReductionFlags() : IsMaxOp(false), IsSigned(false), NoNaN(false) {}
@@ -1112,6 +1115,7 @@ public:
   virtual unsigned getStoreVectorFactor(unsigned VF, unsigned StoreSize,
                                         unsigned ChainSizeInBytes,
                                         VectorType *VecTy) const = 0;
+  virtual bool isLegalToInferAttributeForFunction(Function *F) const = 0;
   virtual bool useReductionIntrinsic(unsigned Opcode, Type *Ty,
                                      ReductionFlags) const = 0;
   virtual bool shouldExpandReduction(const IntrinsicInst *II) const = 0;
@@ -1482,6 +1486,9 @@ public:
                                 unsigned ChainSizeInBytes,
                                 VectorType *VecTy) const override {
     return Impl.getStoreVectorFactor(VF, StoreSize, ChainSizeInBytes, VecTy);
+  }
+  bool isLegalToInferAttributeForFunction(Function *F) const override {
+    return Impl.isLegalToInferAttributeForFunction(F);
   }
   bool useReductionIntrinsic(unsigned Opcode, Type *Ty,
                              ReductionFlags Flags) const override {

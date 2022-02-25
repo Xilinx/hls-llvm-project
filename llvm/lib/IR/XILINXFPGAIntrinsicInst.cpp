@@ -106,6 +106,10 @@ Value *PackBitsInst::getOperand() const { return getArgOperand(0); }
 Value *FPGALoadStoreInst::getPointerOperand() {
   if (auto *LD = dyn_cast<FPGALoadInst>(this))
     return LD->getPointerOperand();
+  if (auto *LD = dyn_cast<FPGAPPPOLoadInst>(this))
+    return LD->getPointerOperand();
+  if (auto *ST = dyn_cast<FPGAPPPOStoreInst>(this))
+    return ST->getPointerOperand();
 
   return cast<FPGAStoreInst>(this)->getPointerOperand();
 }
@@ -113,6 +117,10 @@ Value *FPGALoadStoreInst::getPointerOperand() {
 const Value *FPGALoadStoreInst::getPointerOperand() const {
   if (auto *LD = dyn_cast<FPGALoadInst>(this))
     return LD->getPointerOperand();
+  if (auto *LD = dyn_cast<FPGAPPPOLoadInst>(this))
+    return LD->getPointerOperand();
+  if (auto *ST = dyn_cast<FPGAPPPOStoreInst>(this))
+    return ST->getPointerOperand();
 
   return cast<FPGAStoreInst>(this)->getPointerOperand();
 }
@@ -125,25 +133,27 @@ PointerType *FPGALoadStoreInst::getPointerType() const {
   return cast<PointerType>(getPointerOperand()->getType());
 }
 
+unsigned FPGALoadStoreInst::getAlignment() const {
+  if (auto *LD = dyn_cast<FPGALoadInst>(this))
+    return LD->getAlignment();
+  if (auto *LD = dyn_cast<FPGAPPPOLoadInst>(this))
+    return LD->getAlignment();
+  if (auto *ST = dyn_cast<FPGAPPPOStoreInst>(this))
+    return ST->getAlignment();
+
+  return cast<FPGAStoreInst>(this)->getAlignment();
+}
+
 Type *FPGALoadStoreInst::getDataType() const {
   return getPointerType()->getElementType();
 }
 
 bool FPGALoadStoreInst::isVolatile() const {
+  if (isa<FPGAPPPOLoadStoreInst>(this))
+    return true;
+
   unsigned NumArgs = getNumArgOperands();
   return cast<ConstantInt>(getArgOperand(NumArgs - 1))->isOne();
-}
-
-Value *FPGALoadInst::getPointerOperand() { return getArgOperand(0); }
-
-const Value *FPGALoadInst::getPointerOperand() const {
-  return getArgOperand(0);
-}
-
-Value *FPGAStoreInst::getPointerOperand() { return getArgOperand(1); }
-
-const Value *FPGAStoreInst::getPointerOperand() const {
-  return getArgOperand(1);
 }
 
 Value *SeqBeginInst::getPointerOperand() const { return getArgOperand(0); }
@@ -285,7 +295,8 @@ bool PragmaInst::ShouldBeOnDeclaration() const {
             isa<ApHsInst>(this)  || isa<StreamLabelInst>(this) ||
             isa<ApCtrlNoneInst>(this)  || isa<ApCtrlChainInst>(this) ||
             isa<ApCtrlHsInst>(this) || isa<FPGAResourceLimitInst>(this) ||
-            isa<XlxFunctionAllocationInst>(this) || isa<ResetPragmaInst>(this)
+            isa<XlxFunctionAllocationInst>(this) || isa<ResetPragmaInst>(this) ||
+            isa<MAXIAliasInst>(this)
             ) && "Unexpected pragma");
     return false;
   }
@@ -319,10 +330,25 @@ bool InterfaceInst::classof(const PragmaInst *I) {
       );
 }
 
+void XlxFunctionAllocationInst::getAll( Function* target, SmallVectorImpl<XlxFunctionAllocationInst*> & allocations) 
+{
+
+  for( auto *user: target->users()){ 
+    CallInst *callInst = nullptr;
+    if(isa<CallInst>(user)) { 
+      callInst = cast<CallInst>(user);
+    }
+    if (isa<XlxFunctionAllocationInst>(callInst)) { 
+      allocations.push_back(cast<XlxFunctionAllocationInst>(callInst));
+    }
+  }
+}
+
 
 const std::string AXISChannelInst::BundleTagName = "fpga.axis.channel";
 const std::string DependenceInst::BundleTagName = "fpga.dependence";
 const std::string CrossDependenceInst::BundleTagName = "fpga.cross.dependence";
+const std::string MAXIAliasInst::BundleTagName = "fpga.maxi.alias";
 const std::string StableInst::BundleTagName = "stable";
 const std::string StableContentInst::BundleTagName = "stable_content";
 const std::string SharedInst::BundleTagName = "shared";

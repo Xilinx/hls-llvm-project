@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass performs loop invariant code motion, attempting to remove as much
@@ -79,6 +84,7 @@ STATISTIC(NumMovedLoads, "Number of load insts hoisted or sunk");
 STATISTIC(NumMovedCalls, "Number of call insts hoisted or sunk");
 STATISTIC(NumPromoted, "Number of memory locations promoted to registers");
 
+extern cl::opt<bool> HLS;
 /// Memory promotion is enabled by default.
 static cl::opt<bool>
     DisablePromotion("disable-licm-promotion", cl::Hidden, cl::init(false),
@@ -322,7 +328,7 @@ bool LoopInvariantCodeMotion::runOnLoop(
 
         Promoted |= promoteLoopAccessesToScalars(PointerMustAliases, ExitBlocks,
                                                  InsertPts, PIC, LI, DT, TLI, L,
-                                                 CurAST, &SafetyInfo, ORE);
+                                                 CurAST, &SafetyInfo, ORE, AA);
       }
 
       // Once we have promoted values across the loop body we have to
@@ -1201,6 +1207,43 @@ bool isKnownNonEscaping(Value *Object, const TargetLibraryInfo *TLI) {
 
 } // namespace
 
+static void collectPreheaders(BasicBlock *Preheader,
+                              SmallVector<BasicBlock *, 3> &Preheaders) {
+  Preheaders.push_back(Preheader);
+  while (1) {
+    auto *CurBB = Preheaders.back();
+    auto *PredBB = CurBB->getSinglePredecessor();
+    if (!PredBB)
+      return;
+    if (PredBB->getSinglePredecessor() && PredBB->getSingleSuccessor())
+      Preheaders.push_back(PredBB);
+    else
+      return;
+  }
+}
+
+// Check if there's write on the alias set in loop preheader. If it's true, then
+// it's safe to sink the store outside the loop(the access is safe), even though
+// it's condition branch.
+static bool checkWriteInLoopPreheader(Value *SomePtr, BasicBlock *Preheader,
+                                      AliasAnalysis *AA) {
+  // Collect BBs which can be merged with preheader
+  SmallVector<BasicBlock *, 3> Preheaders;
+  collectPreheaders(Preheader, Preheaders);
+  for (auto *BB : Preheaders)
+    for (auto &I : *BB) {
+      if (auto *SI = dyn_cast<StoreInst>(&I)) {
+        auto *Ptr = SI->getPointerOperand();
+        if (Ptr->getType() != SomePtr->getType())
+          continue;
+        if (AA->isMustAlias(Ptr, SomePtr))
+          return true;
+      }
+    }
+
+  return false;
+}
+
 /// Try to promote memory values to scalars by sinking stores out of the
 /// loop and moving loads to before the loop.  We do this by looping over
 /// the stores in the loop, looking for stores to Must pointers which are
@@ -1212,7 +1255,7 @@ bool llvm::promoteLoopAccessesToScalars(
     SmallVectorImpl<Instruction *> &InsertPts, PredIteratorCache &PIC,
     LoopInfo *LI, DominatorTree *DT, const TargetLibraryInfo *TLI,
     Loop *CurLoop, AliasSetTracker *CurAST, LoopSafetyInfo *SafetyInfo,
-    OptimizationRemarkEmitter *ORE) {
+    OptimizationRemarkEmitter *ORE, AliasAnalysis *AA) {
   // Verify inputs.
   assert(LI != nullptr && DT != nullptr && CurLoop != nullptr &&
          CurAST != nullptr && SafetyInfo != nullptr &&
@@ -1288,6 +1331,8 @@ bool llvm::promoteLoopAccessesToScalars(
     IsKnownThreadLocalObject = !isa<AllocaInst>(Object);
   }
 
+  bool AlreadyHasWriteInLoopPreheader =
+      checkWriteInLoopPreheader(SomePtr, Preheader, AA);
   // Check that all of the pointers in the alias set have the same type.  We
   // cannot (yet) promote a memory location that is loaded and stored in
   // different sizes.  While we are at it, collect alignment and AA info.
@@ -1341,7 +1386,8 @@ bool llvm::promoteLoopAccessesToScalars(
 
         if (!DereferenceableInPH || !SafeToInsertStore ||
             (InstAlignment > Alignment)) {
-          if (isGuaranteedToExecute(*UI, DT, CurLoop, SafetyInfo)) {
+          if ((HLS && AlreadyHasWriteInLoopPreheader) ||
+              isGuaranteedToExecute(*UI, DT, CurLoop, SafetyInfo)) {
             DereferenceableInPH = true;
             SafeToInsertStore = true;
             Alignment = std::max(Alignment, InstAlignment);

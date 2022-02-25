@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -80,6 +80,8 @@ STATISTIC(NumNoAlias, "Number of function returns marked noalias");
 STATISTIC(NumNonNullReturn, "Number of function returns marked nonnull");
 STATISTIC(NumNoRecurse, "Number of functions marked as norecurse");
 STATISTIC(NumArgMemOnly, "Number of functions marked as argmemonly");
+STATISTIC(NumInaccessibleMemOrArgMemOnly,
+          "Number of functions marked as inaccessiblemem_or_argmemonly");
 
 // FIXME: This is disabled by default to avoid exposing security vulnerabilities
 // in C/C++ code compiled by clang:
@@ -156,17 +158,27 @@ static bool pointsToArgugmentMemoryOrConstantMemory(const MemoryLocation &Loc,
   return Worklist.empty();
 }
 
-/// check whether the function only access argument memory or not.
+/// check whether the function only argument memory or not.
 ///
 /// If ThisBody is true, this function may examine the function body and will
 /// return a result pertaining to this copy of the function. If it is false, the
 /// result will be based only on AA results for the function declaration; it
 /// will be assumed that some other (perhaps less optimized) version of the
 /// function may be selected at link time.
-static bool doesFunctionOnlyAccessArgumentMemory(Function &F,
-    bool ThisBody, AAResults &AAR, const SCCNodeSet &SCCNodes) {
+///
+/// When \p OrInaccessibleMem is true, check whether the function only argument
+/// memory or access inaccessible memory to the module or not.
+static bool doesFunctionAccessOnlyArgMem(Function &F,
+    bool ThisBody, AAResults &AAR, const SCCNodeSet &SCCNodes,
+    bool OrInaccessibleMem = false) {
   FunctionModRefBehavior MRB = AAR.getModRefBehavior(&F);
   if (AliasAnalysis::onlyAccessesArgPointees(MRB))
+    // Already perfect!
+    return true;
+
+  if (OrInaccessibleMem &&
+      (AliasAnalysis::onlyAccessesInaccessibleMem(MRB) ||
+      AliasAnalysis::onlyAccessesInaccessibleOrArgMem(MRB)))
     // Already perfect!
     return true;
 
@@ -191,8 +203,17 @@ static bool doesFunctionOnlyAccessArgumentMemory(Function &F,
         continue;
       FunctionModRefBehavior MRB = AAR.getModRefBehavior(CS);
 
-      if (!AliasAnalysis::onlyAccessesArgPointees(MRB))
-        return false;
+      if (OrInaccessibleMem) {
+        if (!AliasAnalysis::onlyAccessesArgPointees(MRB) &&
+            !AliasAnalysis::onlyAccessesInaccessibleMem(MRB) &&
+            !AliasAnalysis::onlyAccessesInaccessibleOrArgMem(MRB)) {
+          return false;
+        }
+      } else {
+        if (!AliasAnalysis::onlyAccessesArgPointees(MRB)) {
+          return false;
+        }
+      }
 
       // Check whether all pointer arguments point to local memory, and
       // ignore calls that only access local memory.
@@ -361,7 +382,43 @@ MemoryAccessKind llvm::computeFunctionBodyMemoryAccess(Function &F,
   return checkFunctionMemoryAccess(F, /*ThisBody=*/true, AAR, {});
 }
 
-/// Deduce readonly/readnone attributes for the SCC.
+/// Deduce inaccessiblemem_or_argmemonly attributes for the SCC.
+template <typename AARGetterT>
+static bool addInaccessibleMemOrArgMemOnlyAttrs(const SCCNodeSet &SCCNodes,
+                                                AARGetterT &&AARGetter) {
+  for (Function *F : SCCNodes) {
+    // Call the callable parameter to look up AA results for this function.
+    AAResults &AAR = AARGetter(*F);
+
+    // Non-exact function definitions may not be selected at link time, and an
+    // alternative version that writes to memory may be selected.  See the
+    // comment on GlobalValue::isDefinitionExact for more details.
+    if (!doesFunctionAccessOnlyArgMem(*F, F->hasExactDefinition(), AAR,
+                                      SCCNodes, /*OrInaccessibleMem=*/true))
+      return false;
+  }
+
+  // Success!  Functions in this SCC only access memory through arguments.
+  // Give them the appropriate attribute.
+  bool MadeChange = false;
+  for (Function *F : SCCNodes) {
+    if (F->onlyReadsMemory() || F->onlyAccessesArgMemory() ||
+        F->onlyAccessesInaccessibleMemory() ||
+        F->onlyAccessesInaccessibleMemOrArgMem())
+      // Already perfect!
+      continue;
+
+    MadeChange = true;
+
+    // Add in the new attribute.
+    F->setOnlyAccessesInaccessibleMemOrArgMem();
+    ++NumInaccessibleMemOrArgMemOnly;
+  }
+
+  return MadeChange;
+}
+
+/// Deduce argmemonly attributes for the SCC.
 template <typename AARGetterT>
 static bool addArgMemOnlyAttrs(const SCCNodeSet &SCCNodes, AARGetterT &&AARGetter) {
   for (Function *F : SCCNodes) {
@@ -371,8 +428,8 @@ static bool addArgMemOnlyAttrs(const SCCNodeSet &SCCNodes, AARGetterT &&AARGette
     // Non-exact function definitions may not be selected at link time, and an
     // alternative version that writes to memory may be selected.  See the
     // comment on GlobalValue::isDefinitionExact for more details.
-    if (!doesFunctionOnlyAccessArgumentMemory(*F, F->hasExactDefinition(), AAR,
-                                             SCCNodes))
+    if (!doesFunctionAccessOnlyArgMem(*F, F->hasExactDefinition(), AAR,
+                                      SCCNodes))
       return false;
   }
 
@@ -435,6 +492,7 @@ static bool addReadAttrs(const SCCNodeSet &SCCNodes, AARGetterT &&AARGetter) {
     MadeChange = true;
 
     // Clear out any existing attributes.
+    F->removeFnAttr(Attribute::InaccessibleMemOrArgMemOnly);
     F->removeFnAttr(Attribute::ReadOnly);
     F->removeFnAttr(Attribute::ReadNone);
 
@@ -1423,6 +1481,7 @@ static bool runImpl(CallGraphSCC &SCC, AARGetterT AARGetter) {
   Changed |= addArgumentReturnedAttrs(SCCNodes);
   Changed |= addReadAttrs(SCCNodes, AARGetter);
   Changed |= addArgumentAttrs(SCCNodes);
+  Changed |= addInaccessibleMemOrArgMemOnlyAttrs(SCCNodes, AARGetter);
 
   // If we have no external nodes participating in the SCC, we can deduce some
   // more precise attributes as well.

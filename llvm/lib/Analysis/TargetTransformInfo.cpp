@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -592,6 +592,11 @@ unsigned TargetTransformInfo::getStoreVectorFactor(unsigned VF,
                                                    unsigned ChainSizeInBytes,
                                                    VectorType *VecTy) const {
   return TTIImpl->getStoreVectorFactor(VF, StoreSize, ChainSizeInBytes, VecTy);
+}
+
+bool TargetTransformInfo::isLegalToInferAttributeForFunction(Function *F) const
+{
+  return TTIImpl->isLegalToInferAttributeForFunction(F);
 }
 
 bool TargetTransformInfo::useReductionIntrinsic(unsigned Opcode,

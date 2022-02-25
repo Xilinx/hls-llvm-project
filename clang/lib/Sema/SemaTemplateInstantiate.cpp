@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
@@ -894,8 +894,12 @@ namespace {
       TransformFPGAResourceLimitHintAttr(const FPGAResourceLimitHintAttr *A);
     const XCLReqdPipeDepthAttr*
       TransformXCLReqdPipeDepthAttr(const XCLReqdPipeDepthAttr *A);
-    const XlxArrayXFormAttr*
-      TransformXlxArrayXFormAttr(const XlxArrayXFormAttr *A);
+    //const XlxArrayXFormAttr*
+    //  TransformXlxArrayXFormAttr(const XlxArrayXFormAttr *A);
+    const XlxArrayPartitionXFormAttr*
+      TransformXlxArrayPartitionXFormAttr(const XlxArrayPartitionXFormAttr *A);
+    const XlxArrayReshapeXFormAttr*
+      TransformXlxArrayReshapeXFormAttr(const XlxArrayReshapeXFormAttr *A);
     const XlxOccurrenceAttr*
       TransformXlxOccurrenceAttr(const XlxOccurrenceAttr *A);
     const MAXIAdaptorAttr*
@@ -1362,8 +1366,18 @@ TemplateInstantiator::TransformXCLReqdPipeDepthAttr(
   return A;
 }
 
-const XlxArrayXFormAttr*
-TemplateInstantiator::TransformXlxArrayXFormAttr(const XlxArrayXFormAttr *A) {
+//const XlxArrayXFormAttr*
+//TemplateInstantiator::TransformXlxArrayXFormAttr(const XlxArrayXFormAttr *A) {
+//  return A;
+//}
+
+const XlxArrayPartitionXFormAttr*
+TemplateInstantiator::TransformXlxArrayPartitionXFormAttr(const XlxArrayPartitionXFormAttr *A) {
+  return A;
+}
+
+const XlxArrayReshapeXFormAttr*
+TemplateInstantiator::TransformXlxArrayReshapeXFormAttr(const XlxArrayReshapeXFormAttr *A) {
   return A;
 }
 

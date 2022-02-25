@@ -31,6 +31,7 @@
 #include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/Path.h"
 
 namespace llvm {
 
@@ -70,6 +71,12 @@ Optional<const std::string> getTopFunctionName(const Function *Top);
 
 /// Returns true if Function \p F is IP core
 bool isIPCore(const Function *F);
+
+/// Returns true if Function \p F is from HLS Lib source file
+bool isSystemHLSHeaderFunc(const Function *F);
+/// Returns true if source file name is from HLS Lib
+bool isSystemHLSHeaderFile(const std::string FileName);
+std::string getFuncSourceFileName(const Function *F);
 
 } // end namespace llvm
 

@@ -6661,6 +6661,7 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   case attr::XlxUnrollHint:
   case attr::XlxCrossDependence:
   case attr::FPGAResourceLimitHint:
+  case attr::XlxMAXIAlias:
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
     return attr;
@@ -6751,10 +6752,26 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
     marker.Visit(var);
     return attr;
   }
-  case attr::XlxArrayXForm:
+//  case attr::XlxArrayXForm:
+//  {
+//    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+//    Expr* var = dyn_cast<XlxArrayXFormAttr>(attr)->getVariable();
+//    MarkDeclIsUsed  marker(SemaRef);
+//    marker.Visit(var);
+//    return attr;
+//  }
+  case attr::XlxArrayPartitionXForm:
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxArrayXFormAttr>(attr)->getVariable();
+    Expr* var = dyn_cast<XlxArrayPartitionXFormAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::XlxArrayReshapeXForm:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxArrayReshapeXFormAttr>(attr)->getVariable();
     MarkDeclIsUsed  marker(SemaRef);
     marker.Visit(var);
     return attr;

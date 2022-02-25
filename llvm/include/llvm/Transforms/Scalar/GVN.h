@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file provides the interface for LLVM's Global Value Numbering pass
@@ -158,6 +163,7 @@ private:
   AssumptionCache *AC;
   SetVector<BasicBlock *> DeadBlocks;
   OptimizationRemarkEmitter *ORE;
+  LoopInfo *LInfo;
   // Maps a block to the topmost instruction with implicit control flow in it.
   DenseMap<const BasicBlock *, const Instruction *>
       FirstImplicitControlFlowInsts;

@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -57,8 +57,41 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
   case FPGA::BI__fpga_maxi_write:
   case FPGA::BI__fpga_maxi_write_resp:
     return EmitBuiltinFPGAMAXIBurst(BuiltinID, E);
+  case FPGA::BI__fpga_add_task:
+    return EmitBuiltinFPGAAddTask(BuiltinID, E);
+  case FPGA::BI__fpga_add_infinite_task:
+    return EmitBuiltinFPGAAddInfiniteTask(BuiltinID, E);
   }
   return nullptr;
+}
+
+
+Value *CodeGenFunction::EmitBuiltinFPGAAddTask(unsigned BuiltinID, const CallExpr* E) 
+{
+  assert(BuiltinID == FPGA::BI__fpga_add_task && "unexpected");
+  const Expr *region_id = E->getArg(0);
+  const Expr *task_id = E->getArg(1);
+  Value * region = EmitScalarExpr( region_id );
+  Value * task = EmitScalarExpr( task_id );
+
+  auto *F = Intrinsic::getDeclaration(
+      &CGM.getModule(), Intrinsic::fpga_add_task, { Builder.getInt32Ty()->getPointerTo(), Builder.getInt32Ty()->getPointerTo()});
+
+  return Builder.CreateCall(F, {region, task});
+}
+
+Value *CodeGenFunction::EmitBuiltinFPGAAddInfiniteTask(unsigned BuiltinID, const CallExpr* E) 
+{
+  assert(BuiltinID == FPGA::BI__fpga_add_infinite_task && "unexpected");
+  const Expr *region_id = E->getArg(0);
+  const Expr *task_id = E->getArg(1);
+  Value * region = EmitScalarExpr( region_id );
+  Value * task = EmitScalarExpr( task_id );
+
+  auto *F = Intrinsic::getDeclaration(
+      &CGM.getModule(), Intrinsic::fpga_add_infinite_task, {Builder.getInt32Ty()->getPointerTo(), Builder.getInt32Ty()->getPointerTo()});
+
+  return Builder.CreateCall(F, {region, task});
 }
 
 Value *CodeGenFunction::EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID,
@@ -106,31 +139,20 @@ Value *CodeGenFunction::EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID,
     auto *Val = Builder.CreateLoad(ValPtr);
     uint64_t Size = CGM.getDataLayout().getTypeAllocSize(Val->getType());
     // This is byte enable bits
-    auto *BE = EmitScalarExpr(E->getArg(2));
-    uint64_t CurSize = 64;
-
-    // There are multiple Byte Enable arguments, concatenate them.
-    for (unsigned i = 3; CurSize < Size; i++) {
-      Value *BV = nullptr;
-      if (i < E->getNumArgs()) {
-        BV = EmitScalarExpr(E->getArg(i));
-        CurSize += 64;
-      } else {
-        APInt I(Size - CurSize, -1ULL, true);
-        BV = Builder.getInt(I);
-        CurSize = Size;
-      }
-
-      auto *ConcatTy = Builder.getIntNTy(BV->getType()->getIntegerBitWidth() +
-                                         BE->getType()->getIntegerBitWidth());
-      BV = Builder.CreateZExt(BV, ConcatTy);
-      BV = Builder.CreateShl(BV, BE->getType()->getIntegerBitWidth());
-      BE = Builder.CreateZExt(BE, ConcatTy);
-      BE = Builder.CreateOr(BV, BE);
+    auto BEPtr = EmitPointerWithAlignment(E->getArg(2));
+    auto *BETy = BEPtr.getElementType();
+    std::vector<Value *> IdxList;
+    IdxList.push_back(Builder.getInt64(0));
+    while (StructType *ST = dyn_cast<StructType>(BETy)) {
+      if (ST->getNumElements() != 1)
+        break;
+      IdxList.push_back(Builder.getInt32(0));
+      BETy =  ST->getElementType(0);
     }
 
-    if (Size < BE->getType()->getIntegerBitWidth())
-      BE = Builder.CreateTrunc(BE, Builder.getIntNTy(Size));
+    auto *BE = Builder.CreateAlignedLoad(
+                   Builder.CreateGEP(BEPtr.getPointer(), IdxList),
+                   BEPtr.getAlignment().getQuantity());
 
     auto *F = Intrinsic::getDeclaration(
         &CGM.getModule(), ID,

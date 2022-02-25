@@ -1,4 +1,4 @@
-﻿// (c) Copyright 2016-2020 Xilinx, Inc.
+﻿// (c) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -205,9 +205,9 @@ static std::string FormatMessage(clang::DiagnosticsEngine::Level &DiagLevel,
                                 2),
       std::pair<StringRef, int>(
           "The for-loop body must be enclosed within braces", 3),
-      std::pair<StringRef, int>("Since the loop counter does not start from 0, "
-                                "the compiler may not successfully process the "
-                                "dataflow loop",
+      std::pair<StringRef, int>("Since the loop counter is not declared in loop "
+                                "header and/or initialized to '0', "
+                                "the compiler may not successfully process the dataflow loop",
                                 4),
       std::pair<StringRef, int>("Due to multiple loop counters, the compiler "
                                 "may not successfully process the dataflow "

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -805,6 +805,8 @@ ANNOTATION(pragma_openmp_end)
 // The lexer produces these so that they only take effect when the parser
 // handles #pragma HLS|AP|AUTOPILOT ... directives.
 ANNOTATION(pragma_XlxHLS)
+ANNOTATION(pragma_XlxHLS_directive)
+ANNOTATION(pragma_XlxHLS_old)
 ANNOTATION(pragma_XlxHLS_end)
 
 // Annotations for loop pragma directives #pragma clang loop ...

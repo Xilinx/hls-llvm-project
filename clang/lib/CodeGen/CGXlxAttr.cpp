@@ -77,7 +77,7 @@ static int ExtractAttrInteger(const Attr *Attr, Expr *E,
 static int EvaluateInteger(Expr *E, const ASTContext &Ctx, int Default = -1) {
   if (!E)
     return Default;
-
+  
   llvm::APSInt Value = E->EvaluateKnownConstInt(Ctx);
   return Value.getSExtValue();
 }
@@ -705,13 +705,6 @@ void CodeGenFunction::EmitXlxParamAttributes(const ParmVarDecl *D,
     }
   }
 
-  if (auto *A = D->getAttr<MAXIAliasAttr>()) { 
-    int offset = ExtractAttrInteger(A, A->getOffset(), CGM.getDiags(), getContext(),
-                                /*LB*/ 0, /*UB*/ INT32_MAX, /*Default*/ -1);
-    Parm->addAttr(llvm::Attribute::get(Ctx, "alias.offset", std::to_string(offset)));
-    Parm->addAttr(llvm::Attribute::get(Ctx, "alias.group", std::to_string(A->getGroup())));
-  }
-
   if (D->hasAttr<XlxFuncInstantiateAttr>())
     Parm->addAttr(llvm::Attribute::get(Ctx, "fpga.func.instantiate"));
 
@@ -1291,53 +1284,6 @@ void CodeGenFunction::EmitBundleForScope(
       BundleList.emplace_back(A->getSpelling(), Args);
       break;
     }
-    case attr::XlxFunctionAllocation: {
-      auto functionAlloc = dyn_cast<XlxFunctionAllocationAttr>(A);
-      auto func_pointer = functionAlloc->getFunction();
-
-      if (isa<UnaryOperator>(func_pointer) &&
-            dyn_cast<UnaryOperator>(func_pointer)->getOpcode() == UO_AddrOf) {
-          UnaryOperator *up = dyn_cast<UnaryOperator>(func_pointer);
-          func_pointer = up->getSubExpr();
-      }
-
-      FunctionDecl *FD = nullptr;
-      if (isa<DeclRefExpr>(func_pointer)) {
-        auto value_decl = dyn_cast<DeclRefExpr>(func_pointer)->getDecl();
-        assert(isa<FunctionDecl>(value_decl) && "unexpected,  Semantic check should have checked the Decl type");
-        FD = dyn_cast<FunctionDecl>(value_decl);
-      }
-      else if(isa<MemberExpr>(func_pointer)){
-        auto member_func = dyn_cast<MemberExpr>(func_pointer);
-        NamedDecl *ND = member_func->getMemberDecl();
-        assert(isa<FunctionDecl>(ND) && "unexpected, no member function ");
-        FD = dyn_cast<FunctionDecl>(ND);
-      }
-      else { 
-        CGM.getDiags().Report(func_pointer->getLocStart(),
-               diag::warn_xlx_attribute_ignore_because_invalid_option)
-            << "ALLOCATION"
-            << "Instances value is not valid function pointer expression";
-        return ;
-      }
-      assert( FD && "unexpected, instances is not function, Sematic checker should had reported it "); 
-
-      if (FD->getAttr<AlwaysInlineAttr>()) { 
-        CGM.getDiags().Report(functionAlloc->getLocation(),
-                          diag::warn_allocation_conflict)
-                      << "inline" ;
-        break;
-      }
-      auto Limit = functionAlloc->getLimit();
-      auto LimitInt = EvaluateInteger(Limit, getContext(), /*Default*/ 0);
-      llvm::Value *Args[] = {CGM.GetAddrOfGlobal(FD),
-                             llvm::ConstantDataArray::getString(getLLVMContext(), "function"),
-                             Builder.getInt32(LimitInt)
-      };
-
-      BundleList.emplace_back(A->getSpelling(), Args);
-      break;
-    }
     case attr::XlxOccurrence: {
       auto Cycle = cast<XlxOccurrenceAttr>(A)->getCycle();
       auto CycleInt = EvaluateInteger(Cycle, getContext(), /*Default*/ 1);
@@ -1362,6 +1308,22 @@ void CodeGenFunction::EmitBundleForScope(
     case attr::XlxBindOpExpr: {
       auto *bindOp = dyn_cast<XlxBindOpExprAttr>(A);
       BundleBindOpAttr(bindOp, BundleList);
+      break;
+    }
+    case attr::XlxTask: { 
+      auto task = dyn_cast<XlxTaskAttr>(A);
+      auto task_id = EmitScalarExpr(task->getTaskID());
+
+      llvm::Value *args[] = {task_id};
+      BundleList.emplace_back("xlx_task_def", args);
+      break;
+    }
+    case attr::XlxInfiniteTask: { 
+      auto task = dyn_cast<XlxInfiniteTaskAttr>(A);
+      auto task_id = EmitScalarExpr(task->getTaskID());
+
+      llvm::Value *args[] = {task_id};
+      BundleList.emplace_back("xlx_infinite_task_def", args);
       break;
     }
     }
@@ -1505,6 +1467,12 @@ std::pair<llvm::Value*, int64_t>  CodeGenFunction::EmitHLSVariableExpr( Expr *ex
       //if the variable is function::Argument, and is pointer type, port_width is 0
       if (!originalType->isPointerType() ) { 
         llvm::Type *lv_type = ConvertType(originalType);
+ 
+        // because we have changed the ConvertType()'s behaviour for array of incomplete struct type, so we must check for this
+        while(lv_type->isArrayTy()) {
+            lv_type = lv_type->getArrayElementType();
+        }
+
         if ( isa<llvm::StructType>(lv_type) && cast<llvm::StructType>(lv_type)->isOpaque()) { 
           //TODO,  codegen  will delay the concrete type generate for the tempalte specilaization class
           //if current ParmVarDecl is about pointer type to template sepcialization 
@@ -1756,6 +1724,7 @@ void CodeGenFunction::EmitReqdPipeDepthIntrinsic(
   CI->setDoesNotThrow();
 }
 
+#if 0
 // xlx_array_partition, xlx_array_reshape
 void CodeGenFunction::EmitArrayXFormIntrinsic(const XlxArrayXFormAttr *A) {
 
@@ -1801,7 +1770,100 @@ void CodeGenFunction::EmitArrayXFormIntrinsic(const XlxArrayXFormAttr *A) {
   CI->setOnlyAccessesInaccessibleMemory();
   CI->setDoesNotThrow();
 }
+#endif
 
+// xlx_array_partition
+void CodeGenFunction::EmitArrayPartitionXFormIntrinsic(const XlxArrayPartitionXFormAttr *A) {
+
+  Expr *expr = A->getVariable();
+  std::pair<llvm::Value*, uint64_t> port_info = EmitHLSVariableExpr(expr);
+  llvm::Value *V = port_info.first;
+  int64_t port_width = port_info.second;
+
+  if (!isa<llvm::Argument>(V) && V->getType()->isPointerTy()) { 
+    //TODO, we need delete this ugly code 
+    llvm::Value *const0 = Builder.getInt32(0);
+    llvm::Value *idxs[] = {const0, const0};
+    V = Builder.CreateInBoundsGEP(V, idxs);
+  }
+
+  Expr *DimE = A->getDim();
+  Expr *FactorE = A->getFactor();
+
+  /*
+    enum XlxArrayXFromType {
+      Cyclic,
+      Block,
+      Complete
+    };
+  */
+  XlxArrayPartitionXFormAttr::XlxArrayPartitionXFormType xtype = A->getType();
+  bool Dynamic = A->getDynamic();
+
+  llvm::Value *Args[] = {V, Builder.getInt32(xtype), EmitScalarExpr(FactorE),
+                         EmitScalarExpr(DimE), Builder.getInt1(Dynamic)};
+
+  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
+  bundleDefs.emplace_back(A->getSpelling(), Args);
+
+  auto *arrayXFormDecl = llvm::Intrinsic::getDeclaration(
+      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
+
+  auto *CI = Builder.CreateCall(arrayXFormDecl, None, bundleDefs);
+
+  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
+  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
+  CI->setAttributes(attr_list);
+
+  CI->setOnlyAccessesInaccessibleMemory();
+  CI->setDoesNotThrow();
+}
+
+// xlx_array_reshape
+void CodeGenFunction::EmitArrayReshapeXFormIntrinsic(const XlxArrayReshapeXFormAttr *A) {
+
+  Expr *expr = A->getVariable();
+  std::pair<llvm::Value*, uint64_t> port_info = EmitHLSVariableExpr(expr);
+  llvm::Value *V = port_info.first;
+  int64_t port_width = port_info.second;
+
+  if (!isa<llvm::Argument>(V) && V->getType()->isPointerTy()) { 
+    //TODO, we need delete this ugly code 
+    llvm::Value *const0 = Builder.getInt32(0);
+    llvm::Value *idxs[] = {const0, const0};
+    V = Builder.CreateInBoundsGEP(V, idxs);
+  }
+
+  Expr *DimE = A->getDim();
+  Expr *FactorE = A->getFactor();
+
+  /*
+    enum XlxArrayXFromType {
+      Cyclic,
+      Block,
+      Complete
+    };
+  */
+  XlxArrayReshapeXFormAttr::XlxArrayReshapeXFormType xtype = A->getType();
+
+  llvm::Value *Args[] = {V, Builder.getInt32(xtype), EmitScalarExpr(FactorE),
+                         EmitScalarExpr(DimE)};
+
+  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
+  bundleDefs.emplace_back(A->getSpelling(), Args);
+
+  auto *arrayXFormDecl = llvm::Intrinsic::getDeclaration(
+      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
+
+  auto *CI = Builder.CreateCall(arrayXFormDecl, None, bundleDefs);
+
+  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
+  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
+  CI->setAttributes(attr_list);
+
+  CI->setOnlyAccessesInaccessibleMemory();
+  CI->setDoesNotThrow();
+}
 
 //for TopFunction use CC_FPGAAccel ccalling conversion , this need 
 //the 
@@ -2018,6 +2080,7 @@ void CodeGenFunction::EmitFunctionAllocationIntrinsic(const XlxFunctionAllocatio
   assert(FD && "unexpected, instances options is not function");
 
   llvm::Value* llvm_func = CGM.GetAddrOfGlobal(FD);
+
 
   llvm::Value *Args[] = { llvm_func,
                          llvm::ConstantDataArray::getString(getLLVMContext(), "function"),
@@ -2415,8 +2478,6 @@ void CodeGenFunction::EmitAPScalarInterfaceIntrinsic(const APScalarInterfaceAttr
   CI->setDoesNotThrow();
 }
 
-
-
 void  CodeGenFunction::EmitFPGAFunctionCtrlInterfaceIntrinsic( const FPGAFunctionCtrlInterfaceAttr *interface)
 {
   // TODO:
@@ -2489,6 +2550,32 @@ void CodeGenFunction::EmitResetIntrinsic( const XlxResetIntrinsicAttr* reset)
   CI->setDoesNotThrow();
 }
 
+void CodeGenFunction::EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias) { 
+ 
+  llvm::SmallVector<llvm::Value *, 8> args;
+  for(auto i = maxi_alias->ports_begin(), e = maxi_alias->ports_end(); i != e; ++i) {
+    auto port_info = EmitHLSVariableExpr(*i);
+    args.push_back(port_info.first);   
+  }
+
+  for(auto i = maxi_alias->offsets_begin(), e = maxi_alias->offsets_end(); i != e; ++i) {
+    auto offset = HLSEvaluateInteger(*i);
+    if(offset < 0) {
+      CGM.getDiags().Report((*i)->getExprLoc(), diag::err_invalid_offset_for_alias); 
+      return;
+    }
+    args.push_back(Builder.getInt32(offset));
+  }
+
+  auto *sideeffect = llvm::Intrinsic::getDeclaration(CurFn->getParent(), llvm::Intrinsic::sideeffect);
+
+  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
+  bundleDefs.emplace_back( "fpga.maxi.alias", args );
+
+  auto* call = Builder.CreateCall(sideeffect, None, bundleDefs );
+  call->setOnlyAccessesInaccessibleMemory();
+  call->setDoesNotThrow();
+}
 
 void  CodeGenFunction::EmitXlxDependenceIntrinsic( const XlxDependenceAttr*  XLXDependence) {
   llvm::Value* addr = nullptr;
@@ -2531,6 +2618,17 @@ void  CodeGenFunction::EmitXlxDependenceIntrinsic( const XlxDependenceAttr*  XLX
   auto dep_distance = HLSEvaluateInteger(XLXDependence->getDistance());
   auto *dependence = llvm::Intrinsic::getDeclaration(
         CurFn->getParent(), llvm::Intrinsic::sideeffect);
+
+  if (dep_distance > 0 && dep_type ==  XlxDependenceAttr::intra ){
+    dep_distance = 0;
+  }
+
+  if (dep_distance <= 0 && dep_type ==  XlxDependenceAttr::inter ){
+    dep_distance = 0;
+  }
+
+
+
 
   llvm::Value* args[] = {
        addr,

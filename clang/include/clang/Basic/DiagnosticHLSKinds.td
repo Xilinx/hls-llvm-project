@@ -45,9 +45,12 @@ def warn_invalid_variable_expr: Warning<
   "invalid variable expr ">,
   InGroup<InvalidXlxPragmas>;
 
-def warn_xlx_hls_pragma_ignored : Warning<"unknown HLS pragma ignored">,
-   InGroup<InvalidXlxPragmas>, DefaultIgnore;
+def warn_xlx_pragma_ignored : Warning<"unknown HLS pragma ignored">,
+   InGroup<InvalidXlxPragmas>;
 
+def dump_xlx_pragma : Warning<"HLS pragma dump %0">,
+   InGroup<DumpXlxPragmas>, DefaultIgnore;
+   
 def warn_unexpected_pragma_parameter : Warning<
   "unexpected pragma parameter '%0'">,
   InGroup<InvalidXlxPragmas>;
@@ -72,10 +75,10 @@ def warn_deprecated_pragma_ignored_by_scout: Warning<
   "'%0' is deprecated, and it will be removed in future release">,
   InGroup<InvalidXlxPragmas>;
 def warn_deprecated_pragma_ignored_by_scout_skip_strict_mode: Warning<
-  "'%0' is deprecated, and it will be removed in future release. It is suggested to replace it with '%1'.">,
+  "'%0' is deprecated, use '%1' instead">,
   InGroup<IgnoredXlxPragmas>;
 def warn_deprecated_pragma_option_ignored_by_scout: Warning<
-  "'%0' in '#pragma HLS %1' is deprecated, and it will be removed in future release. It is suggested to replace it with '%2'.">,
+  "'%0' in '#pragma HLS %1' is deprecated, use '%2' instead">,
   InGroup<IgnoredXlxPragmas>;
 def warn_extra_pragma_hls_token_ignored : Warning<
   "'%0' in '#pragma HLS %1' is ignored">,
@@ -92,7 +95,7 @@ def warn_conflict_pragma_parameter_and_ignored: Warning<
   InGroup<IgnoredXlxPragmas>;
 
 def warn_at_least_one_parameter_required: Warning<
-  "at leas one of '%0' and '%1' option is required">,
+  "at least one of '%0' and '%1' option is required">,
   InGroup<IgnoredXlxPragmas>;
 
 def error_pipeline_style_unsupport_value: Error<
@@ -100,11 +103,13 @@ def error_pipeline_style_unsupport_value: Error<
 def error_pipeline_style_conflict: Error<
   "The 'style' option of the 'HLS pipeline' directive or pragma has conflict with %0">;
 def warn_pipeline_enable_flush_deprecate: Warning<
-  "The 'enable_flush' option of the 'HLS pipeline' directive or pragma is deprecated, and it is suggested to use style=flp as replacement.">;
+  "The 'enable_flush' option of the 'HLS pipeline' directive or pragma is deprecated, use style=flp instead">, 
+  InGroup<IgnoredXlxPragmas>;
 def error_stream_type_conflict: Error<
   "The 'type' option of the 'HLS stream' directive or pragma cannot be used with %0">;
 def warn_stream_off_deprecate: Warning<
-  "The 'off' option of the 'HLS stream' directive or pragma is deprecated, and it is suggested to use type=pipo as replacement.">;
+  "The 'off' option of the 'HLS stream' directive or pragma is deprecated, use type=pipo instead.">, 
+  InGroup<IgnoredXlxPragmas>;
 
 
 def error_unknown_interface_mode : Error<
@@ -131,10 +136,10 @@ def warn_implicit_hls_stream : Warning<
   InGroup<InvalidXlxPragmas>;
 def warn_obsolete_pragma_hls_token_replaced : Warning<
   "'%0' in '#pragma HLS %1' is replaced by '%2'">,
-  InGroup<ObsoleteeXlxPragmas>;
+  InGroup<ObsoleteXlxPragmas>;
 def warn_obsolete_pragma_replaced : Warning<
   "'%0' is obsoleted and replaced by '%1'">,
-  InGroup<ObsoleteeXlxPragmas>;
+  InGroup<ObsoleteXlxPragmas>;
 def err_xlx_pragma_not_in_function_scope : Error<
   "'#pragma HLS' is only allowed in function scope">;
 def warn_xlx_pragma_applied_in_wrong_scope : Warning<
@@ -144,6 +149,22 @@ def err_top_pragma_appiled_in_wrong_scope : Error<
 
 def err_xlx_invalid_resource_option: Error< 
   "Invalid Directive: %0 is invalid combination options">;
+
+def err_xlx_invalid_offset_value: Error<
+  "unexpected interface offset value '%0', expects '[slave, direct, off]'">;
+
+def warn_attributes_are_not_compatible : Warning<
+  "%0 and %1 attributes are not compatible">,
+  InGroup<IgnoredXlxAttributes>;
+def warn_attribute_argument_n_type : Warning<
+  "%0 attribute requires parameter %1 to be %select{int or bool|an integer "
+  "constant|a string|an identifier}2">,
+  InGroup<IgnoredXlxAttributes>;
+def warn_attribute_argument_type : Warning<
+  "%0 attribute requires %select{int or bool|an integer "
+  "constant|a string|an identifier}1">,
+  InGroup<IgnoredXlxAttributes>;
+
 
 
 
@@ -170,7 +191,7 @@ def err_xcl_dataflow_attr_spmd_kernel: Error<
 def err_xocc_wrong_compiler_version : Error<
   "'%0' is not supported by the current compiler">;
 def warn_xocc_wrong_compiler_version : Warning<
-  "'%0' is ignored by the current compiler">, InGroup<Deprecated>;
+  "'%0' is ignored by the current compiler">, InGroup<DeprecatedXlx>;
 
 // HLS Xilinx Extension
 def err_builtin_expected_type : Error<
@@ -189,16 +210,18 @@ def err_attribute_unexpected_value
 
 
 def warn_xlx_expr_not_ice : Warning<
-  "expression is not an %select{integer|integral}0 constant expression">;
+  "expression is not an %select{integer|integral}0 constant expression">, 
+  InGroup<IgnoredXlxPragmas>;
 def warn_xlx_loop_tripcount_ignored: Warning<
-  "%0, the pragma LOOP_TRIPCOUNT is ignored">;
+  "%0, the pragma LOOP_TRIPCOUNT is ignored">, 
+  InGroup<IgnoredXlxPragmas>;
 
 def err_xlx_expr_not_ice : Error<
   "unexpected, expression is not constant integer">;
 
 def warn_allocation_conflict: Warning<
   "ALLOCATION pragma conflicts with %0, and will be ignored">,
-  InGroup<IgnoredPragmas>;
+  InGroup<IgnoredXlxPragmas>;
 
 
 def err_latency_value_is_out_of_range
@@ -211,7 +234,7 @@ def err_xlx_attribute_invalid_option
     : Error<"%0 is not valid value for option %1" >;
 def warn_xlx_attribute_ignore_option : Warning<
   "%0 attribute will ignore the option %1 because %2">,
-  InGroup<IgnoredPragmas>;
+  InGroup<IgnoredXlxPragmas>;
 def warn_xlx_attribute_ignore_because_invalid_option: Warning<
   "%0 pragma is ignored, because %1 ">, 
   InGroup<InvalidXlxPragmas>;
@@ -222,6 +245,11 @@ def warn_xlx_attribute_argument_outof_range: Warning<
 def warn_xlx_dependence_missing_dependent_option: Warning<
   "Assuming false dependence as a \"true/false\" selection was not specified">,
   InGroup<InvalidXlxPragmas>;
+
+def warn_xlx_dependence_inter_require_distance_option: Warning< 
+  "Ignoring invalid 'distance' value in 'dependence' pragma , 'inter' option require 'distance' option presented and 'distance' should be more than 0">,
+  InGroup<InvalidXlxPragmas>;
+
 
 
 // ------- Scout HLS error for pragma options: error out directly
@@ -246,14 +274,67 @@ def err_xlx_not_supported_by_scout_HLS: Error<
   "%0 is not supported">;
 
 def err_top_argument_type_check: Error<
-  "unexpected  top argumetn type: %0">;
+  "unexpected top argument type: %0">;
 
 def err_xlx_invalid_port_expr: Error<
   "the expression for 'port' option is invalid: %0">;
 
 def warn_xlx_invalid_port_expr: Warning<
-  "the expression for 'port' option is invalid, %0">;
+  "the expression for 'port' option is invalid, %0">, 
+  InGroup<AllXlxDiagnostics>;
+
+//===----------------------------------------------------------------------===//
+// Xilinx HLS  CodeGen related Diagnostic message
+//===----------------------------------------------------------------------===//
  
+def err_unsupported_virt_fuc: Warning<
+  "virtual function is not supported">, InGroup<InvalidXlxPragmas>;
+
+def err_invalid_offset_for_alias: Error<
+    "'offset' for 'alias' pragma must be non-negative">;
+
+
+def warn_xlx_attr_wrong_stmt_target : Warning<
+  "Only %1 support the %0 pragma" >,InGroup<IgnoredXlxAttributes>;
+def warn_xcl_loop_attr_wrong_target : Warning<
+  "Only for/while loops support the '%0'">,InGroup<IgnoredXlxAttributes>;
+def warn_xcl_dataflow_attr_wrong_target : Warning<
+  "Only for-loops and functions support the dataflow">,InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_initial_stmt : Warning<
+  "Since the loop counter is not declared in loop header and/or initialized to '0', the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_multiple_loop_induction_variable : Warning<
+  "Due to multiple loop counters, the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_iteration_stmt : Warning<
+  "As the loop counter is not increased by 1, the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_condition_stmt : Warning<
+  "Ignore 'dataflow' on loop: Unsupported for-loop condition statement for dataflow">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_loop_bound : Warning<
+  "As the loop bound is not a constant or function argument, the compiler may not successfully process the dataflow loop">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_dataflow_static_variable : Warning<
+  "Static scalars and arrays declared inside a dataflow region will be treated like local variables">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_dataflow_non_static_stream : Warning<
+  "Streams will behave like static variables inside a dataflow region">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_call_return_type : Warning<
+  "'dataflow' ignored: Functions with a return value cannot be used inside a dataflow region">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_call_argument_type : Warning<
+  "Either use an argument of the function or declare the variable inside the dataflow loop body">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_ignore_xcl_dataflow_on_invalid_statement : Warning<
+  "Since the only kind of statements allowed in a canonical dataflow region are variable declarations and function calls, the compiler may not be able to correctly handle the region">,
+  InGroup<IgnoredDataflowAttr>;
+def warn_statistics_xcl_dataflow_on_invalid_statement : Warning<
+  "There are a total of %0 such instances of non-canonical statements in the dataflow region">,
+  InGroup<IgnoredDataflowAttr>;
+
 }
+
 }
 

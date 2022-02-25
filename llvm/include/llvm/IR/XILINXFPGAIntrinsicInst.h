@@ -539,22 +539,83 @@ public:
     return I->getIntrinsicID() == Intrinsic::fpga_maxi_load ||
            I->getIntrinsicID() == Intrinsic::fpga_maxi_store ||
            I->getIntrinsicID() == Intrinsic::fpga_bram_load ||
-           I->getIntrinsicID() == Intrinsic::fpga_bram_store;
+           I->getIntrinsicID() == Intrinsic::fpga_bram_store ||
+           I->getIntrinsicID() == Intrinsic::fpga_pppo_load ||
+           I->getIntrinsicID() == Intrinsic::fpga_pppo_store;
   }
 
   static inline bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 
+  /// \brief Returns the pointer operand.
   Value *getPointerOperand();
   const Value *getPointerOperand() const;
 
   /// \brief Returns the address space of the pointer operand.
   unsigned getPointerAddressSpace() const;
+
+  /// \brief Returns the pointer operand type.
   PointerType *getPointerType() const;
+
+  /// \brief Returns the alignment of the pointer operand
+  unsigned getAlignment() const;
+
+  /// \brief Returns the access data type.
   Type *getDataType() const;
 
+  /// \brief Returns true if the FPGALoadStoreInst is volatile access.
+  /// Deprecated.
   bool isVolatile() const;
+};
+
+class FPGAPPPOLoadStoreInst : public FPGALoadStoreInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pppo_load ||
+           I->getIntrinsicID() == Intrinsic::fpga_pppo_store;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
+class FPGAPPPOLoadInst : public FPGAPPPOLoadStoreInst {
+public:
+  static inline bool classof(const FPGAPPPOLoadStoreInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pppo_load;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPPPOLoadStoreInst>(V) &&
+           classof(cast<FPGAPPPOLoadStoreInst>(V));
+  }
+
+  Value *getPointerOperand() { return getArgOperand(0); }
+  const Value *getPointerOperand() const { return getArgOperand(0); }
+
+  unsigned getAlignment() const { return getParamAlignment(0); }
+};
+
+class FPGAPPPOStoreInst : public FPGAPPPOLoadStoreInst {
+public:
+  static inline bool classof(const FPGAPPPOLoadStoreInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pppo_store;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPPPOLoadStoreInst>(V) &&
+           classof(cast<FPGAPPPOLoadStoreInst>(V));
+  }
+
+  Value *getValueOperand() { return getArgOperand(0); }
+  const Value *getValueOperand() const { return getArgOperand(0); }
+
+  Value *getPointerOperand() { return getArgOperand(1); }
+  const Value *getPointerOperand() const {return getArgOperand(1); }
+
+  unsigned getAlignment() const { return getParamAlignment(1); }
 };
 
 class FPGALoadInst : public FPGALoadStoreInst {
@@ -568,8 +629,10 @@ public:
     return isa<FPGALoadStoreInst>(V) && classof(cast<FPGALoadStoreInst>(V));
   }
 
-  Value *getPointerOperand();
-  const Value *getPointerOperand() const;
+  Value *getPointerOperand() { return getArgOperand(0); }
+  const Value *getPointerOperand() const { return getArgOperand(0); }
+
+  unsigned getAlignment() const { return getParamAlignment(0); }
 };
 
 class FPGAStoreInst : public FPGALoadStoreInst {
@@ -586,8 +649,10 @@ public:
   Value *getValueOperand() { return getArgOperand(0); }
   const Value *getValueOperand() const { return getArgOperand(0); }
 
-  Value *getPointerOperand();
-  const Value *getPointerOperand() const;
+  Value *getPointerOperand() { return getArgOperand(1); }
+  const Value *getPointerOperand() const { return getArgOperand(1); }
+
+  unsigned getAlignment() const { return getParamAlignment(1); }
 
   Value *getByteEnable() { return getArgOperand(2); }
   const Value *getByteEnable() const { return getArgOperand(2); }
@@ -1023,53 +1088,63 @@ public:
   Type *getDataType() const { return getPointerType()->getElementType(); }
 };
 
-class MAXIReadReqInst : public MAXIIOInst {
+class MAXIReqInst : public MAXIIOInst {
 public:
-  static inline bool classof(const MAXIIOInst *I) {
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_maxi_read_req || 
+           I->getIntrinsicID() == Intrinsic::fpga_maxi_write_req;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  Value *getLength() { return getArgOperand(1); }
+  const Value *getLength() const { return getArgOperand(1); }
+};
+
+
+class MAXIReadReqInst : public MAXIReqInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::fpga_maxi_read_req;
   }
 
   static inline bool classof(const Value *V) {
-    return isa<MAXIIOInst>(V) && classof(cast<MAXIIOInst>(V));
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
-
-  Value *getLength() { return getArgOperand(1); }
-  const Value *getLength() const { return getArgOperand(1); }
 };
 
 class MAXIReadInst : public MAXIIOInst {
 public:
-  static inline bool classof(const MAXIIOInst *I) {
+  static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::fpga_maxi_read;
   }
 
   static inline bool classof(const Value *V) {
-    return isa<MAXIIOInst>(V) && classof(cast<MAXIIOInst>(V));
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 };
 
-class MAXIWriteReqInst : public MAXIIOInst {
+class MAXIWriteReqInst : public MAXIReqInst {
 public:
-  static inline bool classof(const MAXIIOInst *I) {
+  static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::fpga_maxi_write_req;
   }
 
   static inline bool classof(const Value *V) {
-    return isa<MAXIIOInst>(V) && classof(cast<MAXIIOInst>(V));
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
-
-  Value *getLength() { return getArgOperand(1); }
-  const Value *getLength() const { return getArgOperand(1); }
 };
 
 class MAXIWriteInst : public MAXIIOInst {
 public:
-  static inline bool classof(const MAXIIOInst *I) {
+  static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::fpga_maxi_write;
   }
 
   static inline bool classof(const Value *V) {
-    return isa<MAXIIOInst>(V) && classof(cast<MAXIIOInst>(V));
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 
   Value *getValueOperand() { return getArgOperand(0); }
@@ -1081,12 +1156,12 @@ public:
 
 class MAXIWriteRespInst : public MAXIIOInst {
 public:
-  static inline bool classof(const MAXIIOInst *I) {
+  static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::fpga_maxi_write_resp;
   }
 
   static inline bool classof(const Value *V) {
-    return isa<MAXIIOInst>(V) && classof(cast<MAXIIOInst>(V));
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 };
 
@@ -1209,7 +1284,6 @@ DEFINE_DIRECTIVE_SCOPE(LoopMergeRegion, xlx_merge_loop)
 
 DEFINE_DIRECTIVE_SCOPE(ResourceRegion, fpga_resource_hint)
 DEFINE_DIRECTIVE_SCOPE(ResourceLimitRegion, fpga_resource_limit_hint)
-DEFINE_DIRECTIVE_SCOPE(XlxFunctionAllocationRegion, xlx_function_allocation)
 DEFINE_DIRECTIVE_SCOPE(ComputeRegion, fpga_compute_region)
 
 class SSACopyInst : public IntrinsicInst {
@@ -1522,6 +1596,14 @@ public:
     return V->getType()->isPointerTy() ? V : nullptr;
   }
 
+  int64_t getClass() const {
+    // class option
+    // 0: No class set; 1: Array; 2: Pointer
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal dependence intrinsic");
+    return cast<ConstantInt>(Bundle.getValue().Inputs[1])->getSExtValue();
+  }
+
   bool isEnforced() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
     assert(Bundle && "Illegal dependence intrinsic");
@@ -1550,7 +1632,7 @@ public:
     assert(Bundle && "Illegal dependence intrinsic");
     auto *Ty = cast<ConstantInt>(Bundle.getValue().Inputs[5]);
     uint64_t DepTypeCode = Ty->getSExtValue();
-    assert((DepTypeCode >= 0) && (DepTypeCode <= 1) &&
+    assert((DepTypeCode <= 1) &&
             "unexpected dependence pragma type!");
     return static_cast<DepType>(DepTypeCode);
   }
@@ -1564,9 +1646,95 @@ public:
   }
 };
 
-class CrossDependenceInst : public PragmaInst {
+class MAXIAliasInst : public PragmaInst {
 public:
   static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  static MAXIAliasInst *get(Value *V) {
+    return PragmaInst::get<MAXIAliasInst>(V, true);
+  }
+
+  static const MAXIAliasInst *get(const Value *V) {
+    return PragmaInst::get<MAXIAliasInst>(V, true);
+  }
+
+  static std::pair<const MAXIAliasInst *, int64_t> getWithOffset(const Value *V) {
+    for (auto *U : V->users()) {
+      if (auto *BC = dyn_cast<BitCastOperator>(U)) {
+        get(BC);
+      } else if (auto *GEP = dyn_cast<GEPOperator>(U)) {
+        get(GEP);
+      } else if (auto * Extract = dyn_cast<ExtractValueInst>(U)) {
+        get(Extract);
+      } else if (auto *PI = dyn_cast<MAXIAliasInst>(U)) {
+        return std::make_pair(PI, PI->getOffset(V));
+      }
+    }
+
+    return {nullptr, 0};
+  }
+
+  void getOptions(SmallVectorImpl<Value *> &Options) {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal alias intrinsic");
+    for (auto &U : Bundle.getValue().Inputs) {
+      Options.push_back(U);
+    }
+  }
+
+  void getVariables(SmallVectorImpl<Value *> &Vars) const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal alias intrinsic");
+    for (Value *V : Bundle.getValue().Inputs) {
+      if (V->getType()->isPointerTy())
+        Vars.push_back(V);
+    }
+  }
+
+  void getOffsets(SmallVectorImpl<int64_t> &Offsets) const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal alias intrinsic");
+    for (Value *V : Bundle.getValue().Inputs) {
+      if (V->getType()->isPointerTy() == false)
+        Offsets.push_back(cast<ConstantInt>(V)->getSExtValue());
+    }
+  }
+
+private:
+
+  int64_t getOffset(const Value *V) const {
+
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal maxi alias intrinsic");
+    size_t index = 0;
+    for (auto &U : Bundle.getValue().Inputs) {
+      if(U == V) break;
+      ++index;
+    }
+
+    assert(index != Bundle.getValue().Inputs.size() && "Illegal value for maxi alias intrinsic");
+    auto offsetIndex = index + Bundle.getValue().Inputs.size() / 2;
+    assert(offsetIndex < Bundle.getValue().Inputs.size() && "Illegal offset index for maxi alias intrinsic");
+
+    return cast<ConstantInt>(Bundle.getValue().Inputs[offsetIndex])->getSExtValue();
+  }
+
+};
+
+class CrossDependenceInst : public PragmaInst {
+public:
+  enum class Direction { NODIR = -1, RAW = 0, WAR = 1, WAW = 2 };
+  enum class DepType { INTRA, INTER };
+
+  static const std::string BundleTagName;
+  static const unsigned VarNum = 2;
   static inline bool classof(const PragmaInst *I) {
     return I->getOperandBundle(BundleTagName).hasValue();
   }
@@ -1591,6 +1759,48 @@ public:
         Vars.push_back(V);
     }
   }
+
+  int64_t getClass() const {
+    // class option
+    // 0: No class set; 1: Array; 2: Pointer
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal cross_dependence intrinsic");
+    return cast<ConstantInt>(Bundle.getValue().Inputs[(VarNum-1)+1])->getSExtValue();
+  }
+
+  bool isEnforced() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal cross_dependence intrinsic");
+    auto *isEnforced = cast<ConstantInt>(Bundle.getValue().Inputs[(VarNum-1)+2]);
+    return isEnforced->getZExtValue();
+  }
+
+  Direction getDirection() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal cross_dependence intrinsic");
+    auto *Dir = cast<ConstantInt>(Bundle.getValue().Inputs[(VarNum-1)+3]);
+    int64_t DirCode = Dir->getSExtValue();
+    assert((DirCode >= -1) && (DirCode <= 2) &&
+            "unexpected cross_dependence pragma direction!");
+    return static_cast<Direction>(DirCode);
+  }
+
+  int64_t getDistance() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal cross_dependence intrinsic");
+    return cast<ConstantInt>(Bundle.getValue().Inputs[(VarNum-1)+4])->getSExtValue();
+  }
+
+  DepType getType() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal cross_dependence intrinsic");
+    auto *Ty = cast<ConstantInt>(Bundle.getValue().Inputs[(VarNum-1)+5]);
+    uint64_t DepTypeCode = Ty->getSExtValue();
+    assert((DepTypeCode <= 1) &&
+            "unexpected cross_dependence pragma type!");
+    return static_cast<DepType>(DepTypeCode);
+  }
+
 };
 
 class StableInst : public PragmaInst {
@@ -1748,8 +1958,6 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 
-  static inline unsigned getConstValueNum() { return 3; }
-
   StringRef getMode() const {
     Optional<OperandBundleUse> Bundle =
         getOperandBundle(SpecificXFromInst::BundleTagName);
@@ -1787,6 +1995,19 @@ public:
 class ArrayPartitionInst : public ArrayXFormInst<ArrayPartitionInst> {
 public:
   static const std::string BundleTagName;
+  static inline unsigned getConstValueNum() { return 4; }
+
+  bool isDynamic() const {
+    Optional<OperandBundleUse> Bundle =
+        getOperandBundle(ArrayPartitionInst::BundleTagName);
+    assert(Bundle && "Illegal array partition intrinsic");
+    Value *V = nullptr;
+    V = Bundle.getValue().Inputs[4];
+    if (!V || isa<ConstantAggregateZero>(V))
+      return false;
+    else
+      return cast<ConstantInt>(V)->isOne();
+  }
 
   static void get(Value *V, SetVector<ArrayPartitionInst *> &PSet) {
     return PragmaInst::get(V, PSet, true);
@@ -1809,6 +2030,7 @@ public:
 class ArrayReshapeInst : public ArrayXFormInst<ArrayReshapeInst> {
 public:
   static const std::string BundleTagName;
+  static inline unsigned getConstValueNum() { return 3; }
 
   static void get(Value *V, SetVector<ArrayReshapeInst *> &PSet) {
     return PragmaInst::get(V, PSet, true);
@@ -2068,10 +2290,10 @@ public:
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
     assert( Bundle && "Illegal ConstSpec intrinsic" );
     StringRef InstanceType = dyn_cast<ConstantDataArray>(Bundle.getValue().Inputs[1])->getAsString();
-    if (InstanceType.equals_lower("operation")) { 
+    if (InstanceType.contains_lower("operation")) { 
       return 0;
     }
-    else if (InstanceType.equals_lower("core")) { 
+    else if (InstanceType.contains_lower("core")) { 
       return 1;
     }
     else { 
@@ -2128,6 +2350,8 @@ public:
   static const XlxFunctionAllocationInst *get(const Value *V) {
     return PragmaInst::get<XlxFunctionAllocationInst>(V, false);
   }
+
+  static void getAll( Function *fn, SmallVectorImpl<XlxFunctionAllocationInst*>  &AllocPragmas) ; 
 };
 
 class StreamLabelInst : public PragmaInst {

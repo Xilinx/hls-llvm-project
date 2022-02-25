@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -168,9 +168,11 @@ private:
 
 /// PragmaXlxHLSHandler - "\#pragma HLS ...".
 struct PragmaXlxHandler : public PragmaHandler {
-  PragmaXlxHandler(StringRef Name) : PragmaHandler(Name) {}
+  PragmaXlxHandler(StringRef Name) : PragmaHandler(Name), StartKind(tok::annot_pragma_XlxHLS) {}
+  PragmaXlxHandler(StringRef Name, tok::TokenKind TokKind) : PragmaHandler(Name), StartKind(TokKind) {}
   void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
                     Token &FirstToken) override;
+  tok::TokenKind StartKind;
 };
 
 /// PragmaCommentHandler - "\#pragma comment ...".
@@ -332,24 +334,29 @@ void Parser::initializePragmaHandlers() {
       XlxhlsHandler.reset(new PragmaXlxHandler("hls"));
       PP.AddPragmaHandler(XlxhlsHandler.get());
     }
+    
+    if (!PP.hasPragmaHandler("HLSDIRECTIVE")) {
+      XlxHLSDIRECTIVEHandler.reset(new PragmaXlxHandler("HLSDIRECTIVE", tok::annot_pragma_XlxHLS_directive));
+      PP.AddPragmaHandler(XlxHLSDIRECTIVEHandler.get());
+    }
 
     if (!PP.hasPragmaHandler("AP")) {
-      XlxAPHandler.reset(new PragmaXlxHandler("AP"));
+      XlxAPHandler.reset(new PragmaXlxHandler("AP", tok::annot_pragma_XlxHLS_old));
       PP.AddPragmaHandler(XlxAPHandler.get());
     }
 
     if (!PP.hasPragmaHandler("ap")) {
-      XlxapHandler.reset(new PragmaXlxHandler("ap"));
+      XlxapHandler.reset(new PragmaXlxHandler("ap", tok::annot_pragma_XlxHLS_old));
       PP.AddPragmaHandler(XlxapHandler.get());
     }
 
     if (!PP.hasPragmaHandler("AUTOPILOT")) {
-      XlxAUTOPILOTHandler.reset(new PragmaXlxHandler("AUTOPILOT"));
+      XlxAUTOPILOTHandler.reset(new PragmaXlxHandler("AUTOPILOT", tok::annot_pragma_XlxHLS_old));
       PP.AddPragmaHandler(XlxAUTOPILOTHandler.get());
     }
 
     if (!PP.hasPragmaHandler("autopilot")) {
-      XlxautopilotHandler.reset(new PragmaXlxHandler("autopilot"));
+      XlxautopilotHandler.reset(new PragmaXlxHandler("autopilot", tok::annot_pragma_XlxHLS_old));
       PP.AddPragmaHandler(XlxautopilotHandler.get());
     }
   }
@@ -445,6 +452,10 @@ void Parser::resetPragmaHandlers() {
     if (XlxHLSHandler) {
       PP.RemovePragmaHandler(XlxHLSHandler.get());
       XlxHLSHandler.reset();
+    }
+    if (XlxHLSDIRECTIVEHandler) {
+      PP.RemovePragmaHandler(XlxHLSDIRECTIVEHandler.get());
+      XlxHLSDIRECTIVEHandler.reset();
     }
     if (XlxhlsHandler) {
       PP.RemovePragmaHandler(XlxhlsHandler.get());
@@ -3180,7 +3191,7 @@ void PragmaXlxHandler::HandlePragma(Preprocessor &PP,
   SmallVector<Token, 16> Pragma;
   Token Tok;
   Tok.startToken();
-  Tok.setKind(tok::annot_pragma_XlxHLS);
+  Tok.setKind(StartKind);
   Tok.setLocation(FirstTok.getLocation());
 
   while (Tok.isNot(tok::eod)) {

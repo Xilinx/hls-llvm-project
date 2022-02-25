@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -377,6 +377,8 @@ Retry:
     return HandlePragmaCaptured();
 
   case tok::annot_pragma_XlxHLS:
+  case tok::annot_pragma_XlxHLS_old:
+  case tok::annot_pragma_XlxHLS_directive:
     //TODO, should we support __attribute__(( ...)) { #pragma HLS .... 
     //currently, we don't support it, error out directly
     ProhibitAttributes(Attrs);
@@ -670,7 +672,7 @@ StmtResult Parser::ParseLabeledStatement(ParsedAttributesWithRange &attrs) {
           Stmts, /*Allowed=*/ACK_StatementsOpenMPNonStandalone, nullptr,
           TmpAttrs);
 
-      if (!SubStmt.isInvalid()) {
+      if (!SubStmt.isInvalid() && SubStmt.isUsable()) {
         // only sink attribute to for/while stmt or compoundstmt for now
         if (!isa<ForStmt>(SubStmt.get()) && !isa<WhileStmt>(SubStmt.get()) &&
             !isa<DoStmt>(SubStmt.get()) &&
@@ -681,7 +683,8 @@ StmtResult Parser::ParseLabeledStatement(ParsedAttributesWithRange &attrs) {
         if (!StmtAttrs.empty())
           SubStmt = Actions.ProcessStmtAttributes(
               SubStmt.get(), StmtAttrs.getList(), StmtAttrs.Range);
-      }
+      } else 
+        SubStmt = ParseStatement();
     } else
       SubStmt = ParseStatement();
   }

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -4210,7 +4210,7 @@ void Parser::ParseStructUnionBody(SourceLocation RecordLoc,
       continue;
     }
 
-    if (Tok.is(tok::annot_pragma_XlxHLS)) {
+    if (Tok.is(tok::annot_pragma_XlxHLS) || Tok.is(tok::annot_pragma_XlxHLS_old) || Tok.is(tok::annot_pragma_XlxHLS_directive)) {
       Diag(Tok.getLocation(), diag::err_xlx_pragma_not_in_function_scope);
       ConsumeAnnotationToken();
       SkipUntil(tok::annot_pragma_XlxHLS_end, Parser::StopBeforeMatch);

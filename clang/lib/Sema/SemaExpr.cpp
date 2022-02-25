@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -12191,7 +12191,7 @@ ExprResult Sema::BuildBinOp(Scope *S, SourceLocation OpLoc,
     RHSExpr = resolvedRHS.get();
   }
 
-  if (getLangOpts().CPlusPlus) {
+  if (getLangOpts().CPlusPlus && !(Opc == BO_Comma && IsHLSParsing())) {
     // If either expression is type-dependent, always build an
     // overloaded op.
     if (LHSExpr->isTypeDependent() || RHSExpr->isTypeDependent())

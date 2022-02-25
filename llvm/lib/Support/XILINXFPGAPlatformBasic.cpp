@@ -46,7 +46,7 @@
 #define STR_FABRIC  "fabric"
 #define STR_DSP     "dsp"
 #define STR_FIFO    "fifo"
-#define STR_AUTOSRL "autosrl"
+//#define STR_AUTOSRL "autosrl"
 #define STR_MEMORY  "memory"
 
 namespace 
@@ -250,7 +250,7 @@ void PFUserControl::init()
 
   //addstorageimpl(STR_ALL,  "All implementations");
   addstorageimpl(STR_AUTO,    "Automatic selection");
-  addstorageimpl(STR_AUTOSRL, "Automatic SRL");
+  //addstorageimpl(STR_AUTOSRL, "Automatic SRL");
   addstorageimpl("bram",      "Block RAM");
   addstorageimpl("bram_ecc",  "Block RAM with ECC mode");
   addstorageimpl("lutram",    "Distributed RAM");
@@ -348,7 +348,7 @@ const PFUserControl & getUserControlData()
 namespace platform
 {
 
-std::string PlatformBasic::getAutoSrlStr() { return STR_AUTOSRL; }
+//std::string PlatformBasic::getAutoSrlStr() { return STR_AUTOSRL; }
 std::string PlatformBasic::getAutoStr() { return STR_AUTO; }
 std::string PlatformBasic::getAllStr() { return STR_ALL; }
 std::string PlatformBasic::getFifoStr() { return STR_FIFO; }
@@ -396,8 +396,9 @@ void PlatformBasic::getAllBindStorageImpls(std::vector<std::string> & impls)
   for (auto val : allimpls) 
   {
   // NOTE: config_storage support "autosrl" impl. However, bind_storage doesn't support. 
-    if (val != STR_AUTOSRL)
-      impls.push_back(val);
+  //  if (val != STR_AUTOSRL)
+  //    impls.push_back(val);
+    impls.push_back(val);
   }
 }
 void PlatformBasic::getAllConfigStorageImpls(std::vector<std::string> & impls)
@@ -405,8 +406,9 @@ void PlatformBasic::getAllConfigStorageImpls(std::vector<std::string> & impls)
   auto allimpls = getUserControlData().getAllImpls(true/*isStorage*/);
   for (auto val : allimpls) 
   {
-  // NOTE: bind_storage support "auto" impl. However, config_storage doesn't support. 
-    if (val != STR_AUTO && val != "bram_ecc" && val != "uram_ecc")
+  // NOTE: bind_storage support "auto" impl. However, config_storage doesn't support. in 2021.1
+  // NOTE: 'config_storage' should also support "auto" impl in 2021.2
+    if (val != "bram_ecc" && val != "uram_ecc")
       impls.push_back(val);
   }
 }
@@ -467,11 +469,12 @@ void PlatformBasic::getStorageTypeImpls(std::string storageType, std::vector<std
     getAllConfigStorageImpls(allimpls);
   for (auto impl : allimpls)
   {
-    if (impl == STR_AUTOSRL)
-    {
-        impls.push_back(STR_AUTOSRL);
-    } 
-    else if (PlatformBasic::getPublicCore(storageType, impl, true/*isStorage*/))
+    //if (impl == STR_AUTOSRL)
+    //{
+    //    impls.push_back(STR_AUTOSRL);
+    //} 
+    //else if (PlatformBasic::getPublicCore(storageType, impl, true/*isStorage*/))
+    if (PlatformBasic::getPublicCore(storageType, impl, true/*isStorage*/))
     {
         impls.push_back(impl);
     }
@@ -583,6 +586,18 @@ std::pair<PlatformBasic::MEMORY_TYPE, PlatformBasic::MEMORY_IMPL> PlatformBasic:
             break;
         case PlatformBasic::RAM_1WNR_URAM:
             memoryPair = std::make_pair(MEMORY_RAM_1WNR, MEMORY_IMPL_URAM);
+            break;
+        case PlatformBasic::NP_MEMORY:
+            memoryPair = std::make_pair(MEMORY_NP_MEMORY, MEMORY_IMPL_AUTO);
+            break;
+        case PlatformBasic::NP_MEMORY_LUTRAM:
+            memoryPair = std::make_pair(MEMORY_NP_MEMORY, MEMORY_IMPL_LUTRAM);
+            break;
+        case PlatformBasic::NP_MEMORY_BRAM:
+            memoryPair = std::make_pair(MEMORY_NP_MEMORY, MEMORY_IMPL_BRAM);
+            break;
+        case PlatformBasic::NP_MEMORY_URAM:
+            memoryPair = std::make_pair(MEMORY_NP_MEMORY, MEMORY_IMPL_URAM);
             break;
         case PlatformBasic::RAM_1P_AUTO:
             memoryPair = std::make_pair(MEMORY_RAM_1P, MEMORY_IMPL_AUTO);
@@ -703,7 +718,7 @@ std::pair<PlatformBasic::MEMORY_TYPE, PlatformBasic::MEMORY_IMPL> PlatformBasic:
             memoryPair = std::make_pair(MEMORY_XPM_MEMORY, MEMORY_NOIMPL);
             break;
         case PlatformBasic::NOIMPL_FIFO:
-            memoryPair = std::make_pair(MEMORY_RAM, MEMORY_NOIMPL);
+            memoryPair = std::make_pair(MEMORY_FIFO, MEMORY_NOIMPL);
             break;
         case PlatformBasic::NOIMPL_RAM_1WNR:
             memoryPair = std::make_pair(MEMORY_RAM_1WNR, MEMORY_NOIMPL);
@@ -1073,7 +1088,7 @@ std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::verif
     IMPL_TYPE impl = UNSUPPORTED;
     // to support impl=all
     auto coreImpl = getUserControlData().getCoreImpl(type, implName, true);
-    if(coreImpl.empty())
+    if(coreImpl.empty() || getMemImplFromName(getLowerString(coreImpl)) == MEMORY_IMPL_AUTO)
     {
         // Use NOIMPL 
         auto memType = getMemTypeFromName(type);
@@ -1877,7 +1892,6 @@ void PlatformBasic::checkEnumEncode()
     assert(XPM_MEMORY_BLOCK == getImplFromName("xpm_memory_block"));
     assert(XPM_MEMORY_DISTRIBUTE == getImplFromName("xpm_memory_distribute"));
     assert(XPM_MEMORY_URAM == getImplFromName("xpm_memory_uram"));
-    assert(NP_MEMORY == getImplFromName("np_memory"));
     assert(MEMORY_DPWOM == getMemTypeFromName("dpwom"));
     assert(MEMORY_FIFO == getMemTypeFromName("fifo"));
     assert(MEMORY_RAM == getMemTypeFromName("ram"));

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -865,6 +865,31 @@ static bool SemaBuiltinSetStreamDepth(Sema&S, CallExpr *Call) {
 
 }
 
+static bool SemaBuiltinFPGAAddTask(Sema &S, CallExpr* Call) { 
+  if (Call->getNumArgs() != 2) 
+    return true;
+
+  const auto *PtrTy1 = Call->getArg(0)->getType()->getAs<PointerType>();
+  const auto *PtrTy2 = Call->getArg(1)->getType()->getAs<PointerType>();
+  if (!PtrTy1 || !PtrTy2) {
+    return true;
+  }
+  return false;
+}
+
+
+static bool SemaBuiltinFPGAAddInfiniteTask(Sema &S, CallExpr* Call) { 
+  if (Call->getNumArgs() != 2) 
+    return true;
+
+  const auto *PtrTy1 = Call->getArg(0)->getType()->getAs<PointerType>();
+  const auto *PtrTy2 = Call->getArg(1)->getType()->getAs<PointerType>();
+  if (!PtrTy1 || !PtrTy2) {
+    return true;
+  }
+  return false;
+}
+
 bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   switch (BuiltinID) {
   case FPGA::BI__fpga_set_stream_depth:
@@ -891,6 +916,10 @@ bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   case FPGA::BI__fpga_axis_nb_pop:
   case FPGA::BI__fpga_axis_nb_push:
     return SemaBuiltinAXISNBPopAndPush(*this, Call);
+  case FPGA::BI__fpga_add_infinite_task:
+    return SemaBuiltinFPGAAddInfiniteTask(*this, Call);
+  case FPGA::BI__fpga_add_task:
+    return SemaBuiltinFPGAAddTask(*this, Call);
   default:
     break;
   }

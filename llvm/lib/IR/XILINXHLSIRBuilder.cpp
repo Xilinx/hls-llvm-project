@@ -298,7 +298,7 @@ Constant *HLSIRBuilder::rewriteConstant(Constant *C, Type *T) {
 
   SmallVector<Constant *, 16> Elts;
   if (T->isIntegerTy() && FillBytes(C, Elts))
-    return cast<Constant>(CreateZExtOrTrunc(GetherElements(Elts), T));
+    return cast<Constant>(CreateZExtOrTrunc(GatherElements(Elts), T));
 
   if (auto *ST = dyn_cast<StructType>(T))
     if (ST->isPacked()) {
@@ -406,7 +406,6 @@ Value *HLSIRBuilder::CreatePartSelect(Value *V, uint32_t Lo, uint32_t Hi) {
 
 Value *HLSIRBuilder::CreatePartSelect(Value *V, Value *Lo, Value *Hi,
                                       IntegerType *RetTy) {
-
   if (isa<UndefValue>(V))
     return UndefValue::get(RetTy);
 
@@ -427,6 +426,8 @@ Value *HLSIRBuilder::CreatePartSelect(Value *V, Value *Lo, Value *Hi,
 Value *HLSIRBuilder::CreatePartSelectCall(Value *V, Value *Lo, Value *Hi,
                                           IntegerType *RetTy) {
   V = twoStepsBitCast(V);
+  Lo = CreateZExtOrTrunc(Lo, V->getType());
+  Hi = CreateZExtOrTrunc(Hi, V->getType());
   auto *SrcTy = cast<IntegerType>(V->getType());
   Type *ArgTys[] = {RetTy, SrcTy};
   auto *PartSelect = Intrinsic::getDeclaration(
@@ -436,7 +437,23 @@ Value *HLSIRBuilder::CreatePartSelectCall(Value *V, Value *Lo, Value *Hi,
   return CreateCall(PartSelect, Args);
 }
 
-/// Generate the fpga.legacy.part.select call without any optimizations
+/// Generate the fpga.part.set call without any optimizations
+Value *HLSIRBuilder::CreatePartSetCall(Value *V, Value *R, Value *Lo, Value *Hi,
+                                       IntegerType *RetTy) {
+  V = twoStepsBitCast(V);
+  R = twoStepsBitCast(R);
+  Lo = CreateZExtOrTrunc(Lo, RetTy);
+  Hi = CreateZExtOrTrunc(Hi, RetTy);
+  auto *SrcTy = cast<IntegerType>(R->getType());
+  Type *ArgTys[] = {RetTy, SrcTy};
+  auto *PartSet = Intrinsic::getDeclaration(
+      getModule(), Intrinsic::fpga_part_set, ArgTys);
+
+  Value *Args[] = {V, R, Lo, Hi};
+  return CreateCall(PartSet, Args);
+}
+
+/// Create the fpga.legacy.part.select call without any optimizations
 Value *HLSIRBuilder::CreateLegacyPartSelectCall(Value *V, Value *Lo,
                                                 Value *Hi) {
   IntegerType *ValTy = dyn_cast<llvm::IntegerType>(V->getType());
@@ -455,6 +472,46 @@ Value *HLSIRBuilder::CreateLegacyPartSelectCall(Value *V, Value *Lo,
       getModule(), Intrinsic::fpga_legacy_part_select, {ValTy});
   Value *Args[] = {V, Lo, Hi};
   return CreateCall(PartSelect, Args);
+}
+
+/// Create the fpga.legacy.part.select call
+Value *HLSIRBuilder::CreateLegacyPartSelect(Value *V, Value *Lo, Value *Hi) {
+  if (isa<UndefValue>(V))
+    return UndefValue::get(V->getType());
+
+  return CreateLegacyPartSelectCall(V, Lo, Hi);
+}
+
+/// Create the fpga.legacy.part.set call without any optimizations
+Value *HLSIRBuilder::CreateLegacyPartSetCall(Value *V, Value *R,
+                                             Value *Lo, Value *Hi) {
+  IntegerType *ValTy = dyn_cast<llvm::IntegerType>(V->getType());
+  assert(ValTy && "Only accept IntegerType value to do part select!");
+  IntegerType *RepTy = dyn_cast<llvm::IntegerType>(R->getType());
+  assert(RepTy && "Only accept IntegerType repl to do part select!");
+
+  IntegerType *LoTy = dyn_cast<llvm::IntegerType>(Lo->getType());
+  assert(LoTy && "Lo should be IntegerType!");
+  IntegerType *HiTy = dyn_cast<llvm::IntegerType>(Hi->getType());
+  assert(HiTy && "Hi should be IntegerType!");
+  if (LoTy != Type::getInt32Ty(Context))
+    Lo = CreateIntCast(Lo, Type::getInt32Ty(Context), false, "");
+  if (HiTy != Type::getInt32Ty(Context))
+    Hi = CreateIntCast(Hi, Type::getInt32Ty(Context), false, "");
+
+  auto *PartSet = Intrinsic::getDeclaration(
+      getModule(), Intrinsic::fpga_legacy_part_set, {ValTy, RepTy});
+  Value *Args[] = {V, R, Lo, Hi};
+  return CreateCall(PartSet, Args);
+}
+
+/// Create the fpga.legacy.part.set call
+Value *HLSIRBuilder::CreateLegacyPartSet(Value *V, Value *R, Value *Lo,
+                                         Value *Hi) {
+  if (isa<UndefValue>(V) && isa<UndefValue>(R))
+    return UndefValue::get(V->getType());
+
+  return CreateLegacyPartSetCall(V, R, Lo, Hi);
 }
 
 Value *HLSIRBuilder::CreateBitSelect(Value *V, unsigned Bit) {
@@ -547,6 +604,8 @@ Value *HLSIRBuilder::CreatePartSet(Value *Dst, Value *Src, Value *Lo,
   Src = twoStepsBitCast(Src);
   assert(cast<IntegerType>(Dst->getType())->getBitWidth() >=
          cast<IntegerType>(Src->getType())->getBitWidth());
+  Lo = CreateZExtOrTrunc(Lo, Dst->getType());
+  Hi = CreateZExtOrTrunc(Hi, Dst->getType());
 
   // assert(Lo->getZExtValue() <= Hi->getZExtValue() && "Bad range!");
   Type *ArgTys[] = {Dst->getType(), Src->getType()};
@@ -556,8 +615,8 @@ Value *HLSIRBuilder::CreatePartSet(Value *Dst, Value *Src, Value *Lo,
   return CreateCall(PartSet, Args);
 }
 
-Value *HLSIRBuilder::GenerateBitConat(ArrayRef<Value *> Args,
-                                      IntegerType *RetTy) {
+Value *HLSIRBuilder::GenerateBitConcat(ArrayRef<Value *> Args,
+                                       IntegerType *RetTy) {
   unsigned TotalSizeInBits = 0;
 
   Value *Result = ConstantInt::get(RetTy, 0);
@@ -588,7 +647,7 @@ Value *HLSIRBuilder::CreateBitConcat(ArrayRef<Value *> Args) {
   auto *RetTy = getIntNTy(TotalSizeInBits);
 
   if (AllConstant)
-    return cast<Constant>(GenerateBitConat(IntArgs, RetTy));
+    return cast<Constant>(GenerateBitConcat(IntArgs, RetTy));
 
   // Create the result type
   auto *BitConcat =
@@ -612,8 +671,8 @@ Value *HLSIRBuilder::CreateMux(Value *Cond, ArrayRef<Value *> Args,
   return CreateCall(Mux, AllArgs, Name);
 }
 
-Value *HLSIRBuilder::GetherElements(MutableArrayRef<Value *> Elts) {
-  assert(!Elts.empty() && "No element to gether!");
+Value *HLSIRBuilder::GatherElements(MutableArrayRef<Value *> Elts) {
+  assert(!Elts.empty() && "No element to gather!");
 
   if (Elts.size() == 1 && Elts[0]->getType()->isIntegerTy())
     return Elts[0];
@@ -631,8 +690,8 @@ Value *HLSIRBuilder::GetherElements(MutableArrayRef<Value *> Elts) {
   return CreateBitConcat(Elts);
 }
 
-Constant *HLSIRBuilder::GetherElements(MutableArrayRef<Constant *> Elts) {
-  assert(!Elts.empty() && "No element to gether!");
+Constant *HLSIRBuilder::GatherElements(MutableArrayRef<Constant *> Elts) {
+  assert(!Elts.empty() && "No element to gather!");
 
   if (Elts.size() == 1 && Elts[0]->getType()->isIntegerTy())
     return Elts[0];
@@ -656,7 +715,7 @@ Constant *HLSIRBuilder::GetherElements(MutableArrayRef<Constant *> Elts) {
 
   ArrayRef<Value *> Values(reinterpret_cast<Value **>(Elts.data()),
                            Elts.size());
-  return cast<Constant>(GenerateBitConat(Values, RetTy));
+  return cast<Constant>(GenerateBitConcat(Values, RetTy));
 }
 
 Constant *HLSIRBuilder::GetAggregateAsInteger(Constant *C, IntegerType *IntTy) {
@@ -987,11 +1046,46 @@ uint64_t HLSIRBuilder::calculateByteOffset(Type *T,
   return Offset + calculateByteOffset(EltT, Indices.drop_front());
 }
 
+Value *HLSIRBuilder::CreateFPGAPPPOLoadInst(Value *Ptr, unsigned Align) {
+  auto M = getModule();
+  auto L = Intrinsic::getDeclaration(
+      M, Intrinsic::fpga_pppo_load,
+      {Ptr->getType()->getPointerElementType(), Ptr->getType()});
+  auto CI = cast<CallInst>(CreateCall(L, {Ptr}));
+  if (Align == 0)
+    return CI;
+
+  Attribute AlignAttr = Attribute::get(M->getContext(),
+                                       Attribute::Alignment, Align);
+  CI->addParamAttr(0, AlignAttr);
+  return CI;
+}
+
+Value *HLSIRBuilder::CreateFPGAPPPOStoreInst(Value *V, Value *Ptr,
+                                             unsigned Align) {
+  auto M = getModule();
+  auto S = Intrinsic::getDeclaration(
+      M, Intrinsic::fpga_pppo_store,
+      {Ptr->getType()->getPointerElementType(), Ptr->getType()});
+  auto CI = CreateCall(S, {V, Ptr});
+  if (Align == 0)
+    return CI;
+
+  Attribute AlignAttr = Attribute::get(M->getContext(),
+                                       Attribute::Alignment, Align);
+  CI->addParamAttr(1, AlignAttr);
+  return CI;
+}
+
 Value *HLSIRBuilder::CreateSeqBeginEnd(Intrinsic::ID ID, Value *WordAddr,
                                        Value *Size) {
   auto *PtrTy = WordAddr->getType();
   auto *SizeTy = Size->getType();
   auto *SeqFn = Intrinsic::getDeclaration(getModule(), ID, {PtrTy, SizeTy});
+  if (ID == Intrinsic::fpga_seq_load_begin ||
+      ID == Intrinsic::fpga_seq_store_begin)
+    return CreateCall(SeqFn, {WordAddr, Size},
+                      Twine(WordAddr->getName(), "seq"));
   return CreateCall(SeqFn, {WordAddr, Size});
 }
 
@@ -1787,12 +1881,13 @@ Value *HLSIRBuilder::unpackIntToStructInByteLevel(Value *IntObj,
 
 Value *HLSIRBuilder::CreateArrayPartitionInst(
     Value *V, ArrayXFormInst<ArrayPartitionInst>::XFormMode Mode, int32_t Dim,
-    int32_t Factor, int64_t BitSize) {
+    int32_t Factor, bool Dynamic, int64_t BitSize) {
   auto *M = getModule();
   Type *Int32Ty = Type::getInt32Ty(M->getContext());
+  Type *Int1Ty = Type::getInt1Ty(M->getContext());
   return Insert(PragmaInst::Create<ArrayPartitionInst>(
       {V, ConstantInt::get(Int32Ty, Mode), ConstantInt::get(Int32Ty, Factor),
-       ConstantInt::getSigned(Int32Ty, Dim)},
+       ConstantInt::getSigned(Int32Ty, Dim), ConstantInt::get(Int1Ty, Dynamic)},
       nullptr, M, BitSize));
 }
 

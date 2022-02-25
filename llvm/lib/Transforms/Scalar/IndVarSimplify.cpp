@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This transformation analyzes and transforms the induction variables (and
@@ -2342,6 +2347,10 @@ void IndVarSimplify::sinkUnusedInvariants(Loop *L) {
     // New instructions were inserted at the end of the preheader.
     if (isa<PHINode>(I))
       break;
+
+    if (isa<LatencyRegionEntry>(I) || isa<LatencyRegionExit>(I)) { 
+      break;
+    }
 
     // Don't move instructions which might have side effects, since the side
     // effects need to complete before instructions inside the loop.  Also don't

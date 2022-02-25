@@ -28,7 +28,7 @@ void sub2(int a[M][M], int b[M][M], int c[M][M]) {
     for (j = 0; j < M; j++) {
 #pragma HLS dataflow
       //CHECK-FIXES: #pragma HLS dataflow
-      //CHECK-MESSAGES: Since the loop counter does not start from 0, the compiler may not successfully process the dataflow loop
+      //CHECK-MESSAGES: Since the loop counter is not declared in loop header and/or initialized to '0', the compiler may not successfully process the dataflow loop 
       divide(&a[i][j], &b[i][j], &c[i][j]);
     }
   }

@@ -735,12 +735,12 @@ namespace {
 
     void writeValue(raw_ostream &OS) const override {
       OS << "\";\n";
-      OS << "  bool isFirst = true;\n"
+      OS << "{\n  bool isFirst = true;\n"
          << "  for (const auto &Val : " << RangeName << "()) {\n"
          << "    if (isFirst) isFirst = false;\n"
          << "    else OS << \", \";\n";
       writeValueImpl(OS);
-      OS << "  }\n";
+      OS << "  }\n}\n";
       OS << "  OS << \"";
     }
 

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -43,6 +43,7 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include "clang/Basic/HLSDiagnostic.h"
 using namespace clang;
 using namespace CodeGen;
 
@@ -1286,7 +1287,6 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
                                    const CGFunctionInfo &FnInfo) {
   const FunctionDecl *FD = cast<FunctionDecl>(GD.getDecl());
   CurGD = GD;
-
   FunctionArgList Args;
   QualType ResTy = BuildFunctionArgList(GD, Args);
 
@@ -1324,6 +1324,11 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
       attrs.push_back(attr);
     }
     LowerBindOpScope(Body, attrs);
+  
+    if(auto Method = dyn_cast<CXXMethodDecl>(FD)) {
+        if(Method->isVirtual()) 
+            CGM.getDiags().Report(FD->getLocStart(), diag::err_unsupported_virt_fuc);
+    }
   }
 
   // Initialize helper which will detect jumps which can cause invalid lifetime
