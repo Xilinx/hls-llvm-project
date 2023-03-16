@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -83,6 +83,7 @@
 using namespace llvm;
 using namespace jumpthreading;
 
+extern cl::opt<bool> HLS;
 #define DEBUG_TYPE "jump-threading"
 
 STATISTIC(NumThreads, "Number of jumps threaded");
@@ -512,6 +513,11 @@ static unsigned getJumpThreadDuplicationCost(BasicBlock *BB,
 
     // Debugger intrinsics don't incur code size.
     if (isa<DbgInfoIntrinsic>(I)) continue;
+
+    // HLS BEGIN
+    // consider load, GEP, cast is free for HLS 
+    if(HLS && (isa<LoadInst>(I) || isa<GetElementPtrInst>(I) || isa<CastInst>(I))) continue;
+    // HLS END
 
     // If this is a pointer->pointer bitcast, it is free.
     if (isa<BitCastInst>(I) && I->getType()->isPointerTy())
@@ -1191,7 +1197,7 @@ bool JumpThreadingPass::ProcessBlock(BasicBlock *BB) {
   if (CondInst->getOpcode() == Instruction::Xor &&
       CondInst->getParent() == BB && isa<BranchInst>(BB->getTerminator()))
     return ProcessBranchOnXOR(cast<BinaryOperator>(CondInst));
-
+ 
   // Search for a stronger dominating condition that can be used to simplify a
   // conditional branch leaving BB.
   if (ProcessImpliedCondition(BB))
@@ -1572,6 +1578,16 @@ bool JumpThreadingPass::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
             << " for pred '" << PredValue.second->getName() << "'.\n";
         });
 
+  // HLS BEGIN
+  if(HLS) {
+    // we only do JT when BB's All Pred will jump to the only one BB's Succ,
+    // this will keep the CFG more simple, and may enbale some access merge
+    unsigned PredNum = std::distance(pred_begin(BB), pred_end(BB));
+    if(PredNum != PredValues.size())
+      return false;
+  }
+  // HLS END
+  
   // Decide what we want to thread through.  Convert our list of known values to
   // a list of known destinations for each pred.  This also discards duplicate
   // predecessors and keeps track of the undefined inputs (which are represented
@@ -1589,7 +1605,7 @@ bool JumpThreadingPass::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
     BasicBlock *Pred = PredValue.second;
     if (!SeenPreds.insert(Pred).second)
       continue;  // Duplicate predecessor entry.
-
+  
     Constant *Val = PredValue.first;
 
     BasicBlock *DestBB;
@@ -2369,6 +2385,12 @@ bool JumpThreadingPass::DuplicateCondBranchOnPHIIntoPred(
 /// And expand the select into a branch structure if one of its arms allows %c
 /// to be folded. This later enables threading from bb1 over bb2.
 bool JumpThreadingPass::TryToUnfoldSelect(CmpInst *CondCmp, BasicBlock *BB) {
+  // HLS BEGIN
+  // unfold select in latch may cause loop header has extra incoming edge
+  if(HLS && LoopHeaders.count(BB))
+    return false;
+  // HLS END
+ 
   BranchInst *CondBr = dyn_cast<BranchInst>(BB->getTerminator());
   PHINode *CondLHS = dyn_cast<PHINode>(CondCmp->getOperand(0));
   Constant *CondRHS = cast<Constant>(CondCmp->getOperand(1));

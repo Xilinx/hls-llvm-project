@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -755,6 +755,38 @@ static bool SemaBuiltinFIFONonBlocking(Sema &S, CallExpr *Call) {
 }
 
 // \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinPIPOStatus(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 1))
+    return true;
+
+  const auto *Pipo = Call->getArg(0);
+  QualType PipoTy = Pipo->getType();
+  if (!PipoTy->isPointerType()) {
+    return S.Diag(Pipo->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << PipoTy << Pipo->getSourceRange();
+  }
+
+  Call->setType(S.Context.BoolTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinPIPOBlocking(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 1))
+    return true;
+
+  const auto *Pipo = Call->getArg(0);
+  QualType PipoTy = Pipo->getType();
+  if (!PipoTy->isPointerType()) {
+    return S.Diag(Pipo->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << PipoTy << Pipo->getSourceRange();
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
 static bool SemaBuiltinShiftRegPeek(Sema &S, CallExpr *Call) {
   if (checkArgCount(S, Call, 2))
     return true;
@@ -890,9 +922,54 @@ static bool SemaBuiltinFPGAAddInfiniteTask(Sema &S, CallExpr* Call) {
   return false;
 }
 
+static bool SemaBuiltinFPGANPortChannel(Sema &S, CallExpr*Call) { 
+  if (Call->getNumArgs() != 7) { 
+    return true;
+  }
+
+  if (!Call->getArg(2)->getType()->isIntegerType() ||
+      !Call->getArg(3)->getType()->isIntegerType() ||
+      !Call->getArg(4)->getType()->isIntegerType() ||
+      !Call->getArg(5)->getType()->isIntegerType() ||
+      !Call->getArg(6)->getType()->isIntegerType()) { 
+    return true;
+  }
+
+  if (!Call->getArg(0)->getType()->isPointerType()) { 
+    return true;
+
+  }
+  if (!Call->getArg(1)->getType()->isPointerType()) { 
+    return true;
+  }
+
+
+  return false;
+}
+
+bool Sema::CheckFPGABuiltinIP(CallExpr *Call) { 
+  unsigned ArgNum = Call->getNumArgs();
+  if (ArgNum % 2 != 1) { 
+    return true;
+  }
+
+  if (CheckObjCString(Call->getArg(0))) {
+    return true;
+  }
+
+  for (unsigned i = 1; i < ArgNum; i+=2) {
+    if (CheckObjCString(Call->getArg(i))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   switch (BuiltinID) {
   case FPGA::BI__fpga_set_stream_depth:
+  case FPGA::BI__fpga_set_stream_of_blocks_depth:
     return SemaBuiltinSetStreamDepth(*this, Call);
   case FPGA::BI__fpga_fifo_not_empty:
   case FPGA::BI__fpga_fifo_not_full:
@@ -903,6 +980,14 @@ bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   case FPGA::BI__fpga_fifo_nb_pop:
   case FPGA::BI__fpga_fifo_nb_push:
     return SemaBuiltinFIFONonBlocking(*this, Call);
+  case FPGA::BI__fpga_pipo_not_empty:
+  case FPGA::BI__fpga_pipo_not_full:
+    return SemaBuiltinPIPOStatus(*this, Call);
+  case FPGA::BI__fpga_pipo_pop_acquire:
+  case FPGA::BI__fpga_pipo_pop_release:
+  case FPGA::BI__fpga_pipo_push_acquire:
+  case FPGA::BI__fpga_pipo_push_release:
+    return SemaBuiltinPIPOBlocking(*this, Call);
   case FPGA::BI__fpga_shift_register_peek:
     return SemaBuiltinShiftRegPeek(*this, Call);
   case FPGA::BI__fpga_shift_register_shift:
@@ -920,6 +1005,10 @@ bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
     return SemaBuiltinFPGAAddInfiniteTask(*this, Call);
   case FPGA::BI__fpga_add_task:
     return SemaBuiltinFPGAAddTask(*this, Call);
+  case FPGA::BI__fpga_nport_channel:
+    return SemaBuiltinFPGANPortChannel(*this, Call);
+  case FPGA::BI__fpga_ip:
+    return CheckFPGABuiltinIP(Call);
   default:
     break;
   }
@@ -8385,6 +8474,11 @@ static const Expr *EvalVal(const Expr *E,
 
     case Stmt::OMPArraySectionExprClass: {
       return EvalAddr(cast<OMPArraySectionExpr>(E)->getBase(), refVars,
+                      ParentDecl);
+    }
+
+    case Stmt::HLSWholeArrayExprClass: {
+      return EvalAddr(cast<HLSWholeArrayExpr>(E)->getBase(), refVars,
                       ParentDecl);
     }
 

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -68,6 +68,8 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -79,6 +81,8 @@
 
 using namespace llvm;
 using ProfileCount = Function::ProfileCount;
+
+extern cl::opt<bool> HLS;
 
 static cl::opt<bool>
 EnableNoAliasConversion("enable-noalias-to-md-conversion", cl::init(true),
@@ -1363,6 +1367,71 @@ static bool allocaWouldBeStaticInEntry(const AllocaInst *AI ) {
   return isa<Constant>(AI->getArraySize()) && !AI->isUsedWithInAlloca();
 }
 
+/// Returns a DebugLoc for a new DILocation which is a clone of \p OrigDL
+/// inlined at \p InlinedAt. \p IANodes is an inlined-at cache.
+static DebugLoc inlineDebugLoc(DebugLoc OrigDL, 
+                               DILocation *InlinedAt,
+                               LLVMContext &Ctx,
+                               DenseMap<const MDNode *, MDNode *> &IANodes) {
+  auto IA = DebugLoc::appendInlinedAt(OrigDL, InlinedAt, Ctx, IANodes);
+  return DILocation::get(Ctx, OrigDL.getLine(), OrigDL.getCol(),
+                         OrigDL.getScope(), IA);
+}
+
+/// check metadata \p M whether contains DILocation
+static Metadata *
+updateLoopMetadataOperandLocation(Metadata *LoopMD, DILocation *InlinedAt,
+                                  LLVMContext &Ctx,
+                                  DenseMap<const MDNode *, MDNode *> &IANodes) {
+  if(!LoopMD || !isa<MDNode>(LoopMD))
+    return LoopMD;
+  
+  MDNode *LoopMDNode = dyn_cast<MDNode>(LoopMD);
+  SmallVector<Metadata *, 4> MDs;
+  for (unsigned i = 0; i < LoopMDNode->getNumOperands(); ++i) {
+    Metadata *MD = LoopMDNode->getOperand(i);
+    if (DILocation *DL = dyn_cast<DILocation>(MD)) {
+      if (DILocation *NewDL =
+              inlineDebugLoc(DebugLoc(DL), InlinedAt, Ctx, IANodes).get())
+        MDs.push_back(NewDL);
+    } else
+      MDs.push_back(MD);
+  }
+  
+  return MDNode::get(Ctx, MDs);
+}
+
+/// update all debug location in loop metadata with inlinedAt
+static void
+updateLoopMetadataDebugLocation(Instruction &I, DILocation *InlinedAt,
+                                LLVMContext &Ctx,
+                                DenseMap<const MDNode *, MDNode *> &IANodes) {
+  MDNode *OrigLoopID = I.getMetadata(LLVMContext::MD_loop);
+  if (!OrigLoopID)
+    return;
+
+  if (OrigLoopID->getNumOperands() <= 0)
+    return;
+
+  if (OrigLoopID->getOperand(0).get() != OrigLoopID)
+    return;
+
+  SmallVector<Metadata *, 4> MDs = {nullptr};
+  for (unsigned i = 1; i < OrigLoopID->getNumOperands(); ++i) {
+    Metadata *MD = OrigLoopID->getOperand(i);
+    if (DILocation *DL = dyn_cast<DILocation>(MD)) {
+      if (DILocation *NewDL =
+              inlineDebugLoc(DebugLoc(DL), InlinedAt, Ctx, IANodes).get())
+        MDs.push_back(NewDL);
+    } else
+      MDs.push_back(updateLoopMetadataOperandLocation(MD, InlinedAt, Ctx, IANodes));
+  }
+
+  MDNode *NewLoopID = MDNode::get(OrigLoopID->getContext(), MDs);
+  NewLoopID->replaceOperandWith(0, NewLoopID);
+  I.setMetadata(LLVMContext::MD_loop, NewLoopID);
+}
+
 /// Update inlined instructions' line numbers to
 /// to encode location where these instructions are inlined.
 static void fixupLineNumbers(Function *Fn, Function::iterator FI,
@@ -1388,6 +1457,11 @@ static void fixupLineNumbers(Function *Fn, Function::iterator FI,
   for (; FI != Fn->end(); ++FI) {
     for (BasicBlock::iterator BI = FI->begin(), BE = FI->end();
          BI != BE; ++BI) {
+
+      if (HLS) { /// update loop location metadata
+        updateLoopMetadataDebugLocation(*BI, InlinedAtNode, BI->getContext(), IANodes);
+      }
+
       if (DebugLoc DL = BI->getDebugLoc()) {
         auto IA = DebugLoc::appendInlinedAt(DL, InlinedAtNode, BI->getContext(),
                                             IANodes);

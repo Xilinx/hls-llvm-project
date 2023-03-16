@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
@@ -876,8 +876,11 @@ namespace {
                           bool AllowInjectedClassName = false);
 
     const Attr *instantiateTemplateAttr(const Attr *AT) {
-      return instantiateTemplateAttribute(AT, SemaRef.getASTContext(), SemaRef,
+
+      Attr * retAttr = instantiateTemplateAttribute(AT, SemaRef.getASTContext(), SemaRef,
                                           TemplateArgs); 
+      retAttr->setPragmaContext(AT->getPragmaContext()); 
+      return retAttr; 
     }
 
     const LoopHintAttr *TransformLoopHintAttr(const LoopHintAttr *LH);
@@ -888,6 +891,10 @@ namespace {
       TransformOpenCLUnrollHintAttr(const OpenCLUnrollHintAttr *A);
     const XCLLoopTripCountAttr *
       TransformXCLLoopTripCountAttr(const XCLLoopTripCountAttr *A);
+    const XlxPerformanceAttr*
+      TransformXlxPerfomanceAttr(const XlxPerformanceAttr *A);
+    const XlxArrayStencilAttr*
+      TransformXlxArrayStencilAttr(const XlxArrayStencilAttr *A);
     const XlxBindOpAttr*
       TransformXlxBindOpAttr(const XlxBindOpAttr *A);
     const FPGAResourceLimitHintAttr*
@@ -1345,6 +1352,32 @@ TemplateInstantiator::TransformXCLLoopTripCountAttr(
 
   return (::new (S.Context) XCLLoopTripCountAttr(A->getRange(), S.Context,
                                   Min, Max, Avg, A->getSpellingListIndex()));
+}
+
+const XlxPerformanceAttr *
+TemplateInstantiator::TransformXlxPerfomanceAttr(const XlxPerformanceAttr *A) {
+  Sema &S = getSema();
+
+  Expr *TargetTIExpr = getDerived().TransformExpr(A->getTargetTI()).get();
+  Expr *TargetTLExpr = getDerived().TransformExpr(A->getTargetTL()).get();
+  Expr *AssumeTIExpr = getDerived().TransformExpr(A->getAssumeTI()).get();
+  Expr *AssumeTLExpr = getDerived().TransformExpr(A->getAssumeTL()).get();
+  if (TargetTIExpr == A->getTargetTI() && TargetTLExpr == A->getTargetTL() &&
+      AssumeTIExpr == A->getAssumeTI() && AssumeTLExpr == A->getAssumeTL())
+    return A;
+
+  return (::new (S.Context) XlxPerformanceAttr(
+      A->getRange(), S.Context, TargetTIExpr, TargetTLExpr, AssumeTIExpr,
+      AssumeTLExpr, A->getPerformanceScope(), A->getSpellingListIndex()));
+}
+
+const XlxArrayStencilAttr *TemplateInstantiator::TransformXlxArrayStencilAttr(
+    const XlxArrayStencilAttr *A) {
+  Sema &S = getSema();
+
+  return (::new (S.Context) XlxArrayStencilAttr(
+      A->getRange(), S.Context, A->getVariable(), A->getEnabled(),
+      A->getSpellingListIndex()));
 }
 
 const XlxBindOpAttr *TemplateInstantiator::TransformXlxBindOpAttr(

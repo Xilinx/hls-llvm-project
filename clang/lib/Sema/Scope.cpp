@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -192,7 +192,8 @@ void Scope::dumpImpl(raw_ostream &OS) const {
       {SEHExceptScope, "SEHExceptScope"},
       {SEHFilterScope, "SEHFilterScope"},
       {CompoundStmtScope, "CompoundStmtScope"},
-      {ClassInheritanceScope, "ClassInheritanceScope"}};
+      {ClassInheritanceScope, "ClassInheritanceScope"},
+      {HLSDirectiveScope, "HLSDirectiveScope"}};
 
   for (auto Info : FlagInfo) {
     if (Flags & Info.first) {

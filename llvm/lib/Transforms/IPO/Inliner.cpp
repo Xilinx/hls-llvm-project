@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -101,6 +101,9 @@ STATISTIC(NumCallerCallersAnalyzed, "Number of caller-callers analyzed");
 /// coloring, you can pass this flag to LLVM.
 static cl::opt<bool>
     DisableInlinedAllocaMerging("disable-inlined-alloca-merging",
+                                cl::init(false), cl::Hidden);
+static cl::opt<bool>
+    EmitInlineMsgEvenNoDbgInfo("emit-inline-msg-even-no-dbg-info",
                                 cl::init(false), cl::Hidden);
 
 namespace {
@@ -518,7 +521,10 @@ canEmitMessage(const Function *Callee, const Function *Caller,
     return true;
   }
 
-  return true;
+  if (EmitInlineMsgEvenNoDbgInfo)
+    return true;
+  // If no debug info, then don't dump inline msg
+  return false;
 }
 
 static bool

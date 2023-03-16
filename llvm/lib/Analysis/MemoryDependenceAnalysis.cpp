@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements an analysis that determines, for a given memory
@@ -80,9 +85,9 @@ STATISTIC(NumCacheCompleteNonLocalPtr,
 // Limit for the number of instructions to scan in a block.
 
 static cl::opt<unsigned> BlockScanLimit(
-    "memdep-block-scan-limit", cl::Hidden, cl::init(100),
+    "memdep-block-scan-limit", cl::Hidden, cl::init(1000),
     cl::desc("The number of instructions to scan in a block in memory "
-             "dependency analysis (default = 100)"));
+             "dependency analysis (default = 1000)"));
 
 static cl::opt<unsigned>
     BlockNumberLimit("memdep-block-number-limit", cl::Hidden, cl::init(1000),
@@ -436,6 +441,12 @@ MemoryDependenceResults::getInvariantGroupPointerDependency(LoadInst *LI,
   return MemDepResult::getNonLocal();
 }
 
+OrderedBasicBlock* MemoryDependenceResults::getOrderedBasicBlock(const BasicBlock *BB) {
+  if (OrderedBB.count(BB) <= 0)
+    OrderedBB.insert({BB, make_unique<OrderedBasicBlock>(BB)});
+  return OrderedBB[BB].get();
+}
+
 MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
     const MemoryLocation &MemLoc, bool isLoad, BasicBlock::iterator ScanIt,
     BasicBlock *BB, Instruction *QueryInst, unsigned *Limit) {
@@ -491,7 +502,7 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
   // positions inside a BB. This is used to provide fast queries for relative
   // position between two instructions in a BB and can be used by
   // AliasAnalysis::callCapturesBefore.
-  OrderedBasicBlock OBB(BB);
+  OrderedBasicBlock *OBB = getOrderedBasicBlock(BB);
 
   // Return "true" if and only if the instruction I is either a non-simple
   // load or a non-simple store.
@@ -682,7 +693,7 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
     ModRefInfo MR = AA.getModRefInfo(Inst, MemLoc);
     // If necessary, perform additional analysis.
     if (isModAndRefSet(MR))
-      MR = AA.callCapturesBefore(Inst, MemLoc, &DT, &OBB);
+      MR = AA.callCapturesBefore(Inst, MemLoc, &DT, OBB);
     switch (clearMust(MR)) {
     case ModRefInfo::NoModRef:
       // If the call has no effect on the queried pointer, just ignore it.
@@ -1652,6 +1663,8 @@ void MemoryDependenceResults::removeInstruction(Instruction *RemInst) {
 
   assert(!NonLocalDeps.count(RemInst) && "RemInst got reinserted?");
   DEBUG(verifyRemoved(RemInst));
+
+  OrderedBB.erase(RemInst->getParent());
 }
 
 /// Verify that the specified instruction does not occur in our internal data

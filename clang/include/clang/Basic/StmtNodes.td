@@ -1,3 +1,17 @@
+//==--- StmtNodes.td - Stmt node --------------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
+//===----------------------------------------------------------===//
+
 class AttrSubject;
 
 class Stmt<bit abstract = 0> : AttrSubject {
@@ -67,6 +81,7 @@ def OffsetOfExpr : DStmt<Expr>;
 def UnaryExprOrTypeTraitExpr : DStmt<Expr>;
 def ArraySubscriptExpr : DStmt<Expr>;
 def OMPArraySectionExpr : DStmt<Expr>;
+def HLSWholeArrayExpr : DStmt<Expr>;
 def CallExpr : DStmt<Expr>;
 def MemberExpr : DStmt<Expr>;
 def CastExpr : DStmt<Expr, 1>;

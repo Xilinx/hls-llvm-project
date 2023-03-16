@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CLANGTIDY_H
@@ -172,6 +177,8 @@ public:
   /// The check should use ``Options.store()`` to store each option it supports
   /// whether it has the default value or it has been overridden.
   virtual void storeOptions(ClangTidyOptions::OptionMap &Options) {}
+
+  ClangTidyContext *getContext()const { return Context; }; 
 
 private:
   void run(const ast_matchers::MatchFinder::MatchResult &Result) override;

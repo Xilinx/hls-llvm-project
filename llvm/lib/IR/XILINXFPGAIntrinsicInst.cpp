@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -30,6 +30,43 @@
 
 using namespace llvm;
 using namespace PatternMatch;
+
+static bool isValidPragmaSource(StringRef S) {
+  return S == "user" || S == "infer-from-pragma" || S == "infer-from-design";
+}
+
+StringRef llvm::getPragmaSourceFromMDNode(MDNode * MD) {
+  if (!MD) {
+    return StringRef();
+  }
+
+  unsigned Index = MD->getNumOperands() - 1;
+  if (Index < 1) {
+    return StringRef();
+  }
+
+  Metadata *M = MD->getOperand(Index).get();
+  if (!M || isa<DILocation>(M)) {
+    Index--;
+    if (Index < 1) {
+      return StringRef();
+    }
+
+    M = MD->getOperand(Index).get();
+  }
+
+  auto *S = dyn_cast<MDString>(M);
+  if (!S) {
+    return StringRef();
+  }
+
+  auto Source = S->getString();
+  if (!isValidPragmaSource(Source)) {
+    return StringRef();
+  }
+
+  return Source;
+}
 
 static Value *StripBitOrPointerCast(Value *V) {
   if (auto Cast = dyn_cast<BitCastInst>(V))
@@ -65,27 +102,73 @@ Value *BitConcatInst::getElement(unsigned Hi, unsigned Lo) const {
   return StripBitOrPointerCast(getBits(Hi, Lo));
 }
 
-Value *PartSelectInst::getRawSrc() const {
-  return StripBitOrPointerCast(getSrc());
+IntegerType *PartSelectInst::getRetTy() const {
+  return cast<IntegerType>(getType());
 }
 
 Value *PartSelectInst::getSrc() const { return getOperand(0); }
 
+IntegerType *PartSelectInst::getSrcTy() const {
+  return cast<IntegerType>(getSrc()->getType());
+}
+
+Value *PartSelectInst::getOffset() const { return getOperand(1); }
+
+IntegerType *PartSelectInst::getOffsetTy() const {
+  return cast<IntegerType>(getOffset()->getType());
+}
+
+IntegerType *LegacyPartSelectInst::getRetTy() const {
+  return cast<IntegerType>(getType());
+}
+
 Value *LegacyPartSelectInst::getSrc() const { return getOperand(0); }
 
-Type *LegacyPartSelectInst::getSrcTy() const { return getSrc()->getType(); }
+IntegerType *LegacyPartSelectInst::getSrcTy() const {
+  return cast<IntegerType>(getSrc()->getType());
+}
 
 Value *LegacyPartSelectInst::getLo() const { return getOperand(1); }
 
 Value *LegacyPartSelectInst::getHi() const { return getOperand(2); }
 
+IntegerType *PartSetInst::getRetTy() const {
+  return cast<IntegerType>(getType());
+}
+
+Value *PartSetInst::getSrc() const { return getOperand(0); }
+
+IntegerType *PartSetInst::getSrcTy() const {
+  return cast<IntegerType>(getSrc()->getType());
+}
+
+Value *PartSetInst::getRep() const { return getOperand(1); }
+
+IntegerType *PartSetInst::getRepTy() const {
+  return cast<IntegerType>(getRep()->getType());
+}
+
+Value *PartSetInst::getOffset() const { return getOperand(2); }
+
+IntegerType *PartSetInst::getOffsetTy() const {
+  return cast<IntegerType>(getOffset()->getType());
+}
+
+IntegerType *LegacyPartSetInst::getRetTy() const {
+  return cast<IntegerType>(getType());
+}
+
 Value *LegacyPartSetInst::getSrc() const { return getOperand(0); }
 
-Type *LegacyPartSetInst::getSrcTy() const { return getSrc()->getType(); }
+IntegerType *LegacyPartSetInst::getSrcTy() const {
+  return cast<IntegerType>(getSrc()->getType());
+}
 
 Value *LegacyPartSetInst::getRep() const { return getOperand(1); }
 
-Type *LegacyPartSetInst::getRepTy() const { return getRep()->getType(); }
+IntegerType *LegacyPartSetInst::getRepTy() const {
+  return cast<IntegerType>(getRep()->getType());
+}
 
 Value *LegacyPartSetInst::getLo() const { return getOperand(2); }
 
@@ -278,8 +361,10 @@ DirectiveScopeExit *DirectiveScopeEntry::BuildDirectiveScope(
 bool PragmaInst::ShouldBeOnDeclaration() const {
   if (isa<DisaggrInst>(this) || isa<AggregateInst>(this) ||
       isa<ArrayPartitionInst>(this) || isa<ArrayReshapeInst>(this) ||
-      isa<StreamPragmaInst>(this) || isa<PipoPragmaInst>(this) ||
-      isa<BindStoragePragmaInst>(this) || isa<StreamLabelInst>(this)) {
+      isa<StreamPragmaInst>(this) || isa<StreamOfBlocksPragmaInst>(this) ||
+      isa<PipoPragmaInst>(this) || isa<BindStoragePragmaInst>(this) ||
+      isa<StreamLabelInst>(this) || isa<StreamOfBlocksLabelInst>(this) ||
+      isa<ShiftRegLabelInst>(this)) {
     return true;
   } else {
     // Use assert to make sure we cover all pragmas on variables.
@@ -293,10 +378,13 @@ bool PragmaInst::ShouldBeOnDeclaration() const {
             isa<ApNoneInst>(this) || isa<ApAckInst>(this) ||
             isa<ApVldInst>(this) || isa<ApOvldInst>(this) ||
             isa<ApHsInst>(this)  || isa<StreamLabelInst>(this) ||
+            isa<StreamOfBlocksLabelInst>(this) || isa<ShiftRegLabelInst>(this) ||
             isa<ApCtrlNoneInst>(this)  || isa<ApCtrlChainInst>(this) ||
             isa<ApCtrlHsInst>(this) || isa<FPGAResourceLimitInst>(this) ||
             isa<XlxFunctionAllocationInst>(this) || isa<ResetPragmaInst>(this) ||
-            isa<MAXIAliasInst>(this)
+            isa<MAXIAliasInst>(this) || isa<NPortChannelInst>(this) ||
+            isa<FuncInstantiateInst>(this) || isa<ArrayStencilInst>(this) ||
+            isa<XlxIPInst>(this)
             ) && "Unexpected pragma");
     return false;
   }
@@ -330,25 +418,27 @@ bool InterfaceInst::classof(const PragmaInst *I) {
       );
 }
 
-void XlxFunctionAllocationInst::getAll( Function* target, SmallVectorImpl<XlxFunctionAllocationInst*> & allocations) 
-{
+// collect allocation pragmas (in corresponding region if it's specified)
+void XlxFunctionAllocationInst::getAll(
+    Function *F, SmallVectorImpl<XlxFunctionAllocationInst *> &Allocations,
+    Function *RegionF) {
 
-  for( auto *user: target->users()){ 
-    CallInst *callInst = nullptr;
-    if(isa<CallInst>(user)) { 
-      callInst = cast<CallInst>(user);
-    }
-    if (isa<XlxFunctionAllocationInst>(callInst)) { 
-      allocations.push_back(cast<XlxFunctionAllocationInst>(callInst));
-    }
+  for (auto *U : F->users()) {
+    auto *CI = cast<CallInst>(U);
+    // only consider this region scope if the region is specified
+    if (RegionF && CI->getFunction() != RegionF)
+      continue;
+    if (isa<XlxFunctionAllocationInst>(U))
+      Allocations.push_back(cast<XlxFunctionAllocationInst>(U));
   }
 }
-
 
 const std::string AXISChannelInst::BundleTagName = "fpga.axis.channel";
 const std::string DependenceInst::BundleTagName = "fpga.dependence";
 const std::string CrossDependenceInst::BundleTagName = "fpga.cross.dependence";
 const std::string MAXIAliasInst::BundleTagName = "fpga.maxi.alias";
+const std::string FuncInstantiateInst::BundleTagName = "fpga.func.instantiate";
+const std::string ArrayStencilInst::BundleTagName = "fpga_array_stencil";
 const std::string StableInst::BundleTagName = "stable";
 const std::string StableContentInst::BundleTagName = "stable_content";
 const std::string SharedInst::BundleTagName = "shared";
@@ -357,6 +447,7 @@ const std::string AggregateInst::BundleTagName = "aggregate";
 const std::string ArrayPartitionInst::BundleTagName = "xlx_array_partition";
 const std::string ArrayReshapeInst::BundleTagName = "xlx_array_reshape";
 const std::string StreamPragmaInst::BundleTagName = "xlx_reqd_pipe_depth";
+const std::string StreamOfBlocksPragmaInst::BundleTagName = "xlx_reqd_sob_depth";
 const std::string PipoPragmaInst::BundleTagName = "xcl_fpga_pipo_depth";
 const std::string BindStoragePragmaInst::BundleTagName = "xlx_bind_storage";
 const std::string BindOpPragmaInst::BundleTagName = "xlx_bind_op";
@@ -380,4 +471,8 @@ const std::string ApCtrlChainInst::BundleTagName = "xlx_ap_ctrl_chain";
 const std::string ApCtrlHsInst::BundleTagName = "xlx_ap_ctrl_hs";
 const std::string ResetPragmaInst::BundleTagName = "xlx_reset";
 const std::string StreamLabelInst::BundleTagName = "stream_interface";
+const std::string ShiftRegLabelInst::BundleTagName = "shift_reg_interface";
+const std::string StreamOfBlocksLabelInst::BundleTagName = "stream_of_blocks_interface";
+const std::string NPortChannelInst::BundleTagName = "nport_channel";
+const std::string XlxIPInst::BundleTagName = "xlx_ip";
 

@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -39,29 +39,29 @@ void addLoopMetadata(Loop *L, StringRef Attr,
 /// \p Min: minimum number of loop iterations
 /// \p Max: maximum number of loop iterations
 /// \p Avg: average number of loop iterations
-void addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg);
+void addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg, StringRef Source = "");
 
 /// Add dataflow metadata to Loop \p L.
-void addDataFlow(Loop *L);
+void addDataFlow(Loop *L, StringRef Source = "");
 
 /// Add pipeline metadata to Loop \p L.
 void addPipeline(Loop *L, int32_t II = -1, bool IsRewind = false,
-                 PipelineStyle Style = PipelineStyle::Default);
+                 PipelineStyle Style = PipelineStyle::Default, StringRef Source = "", DILocation *Loc = nullptr);
 
 /// Add pipeline off(force not to pipeline) metadata to Loop \p L.
-void addPipelineOff(Loop *L);
+void addPipelineOff(Loop *L, StringRef Source = "");
 
 /// Add unroll full metadata to Loop \p L.
-void addFullyUnroll(Loop *L);
+void addFullyUnroll(Loop *L, StringRef Source = "", DILocation *Loc = nullptr);
 
 /// Add partial unroll with \p Factor metadata to Loop \p L.
-void addPartialUnroll(Loop *L, uint32_t Factor, bool SkipExitCheck);
+void addPartialUnroll(Loop *L, uint32_t Factor, bool SkipExitCheck, StringRef Source = "", DILocation *Loc = nullptr);
 
 /// Add unroll off(force not to unroll) metadata to Loop \p L.
-void addUnrollOff(Loop *L);
+void addUnrollOff(Loop *L, StringRef Source = "");
 
 /// Add flatten metadata to Loop \p L.
-void addFlatten(Loop *L);
+void addFlatten(Loop *L, StringRef Source = "infer-from-design", DILocation *Loc = nullptr);
 
 /// Add flatten off(force not to flatten) metadata to Loop \p L.
 void addFlattenOff(Loop *L);

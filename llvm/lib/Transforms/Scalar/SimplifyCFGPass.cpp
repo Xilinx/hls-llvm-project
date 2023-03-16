@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements dead code elimination and basic block merging, along
@@ -40,10 +45,13 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include <utility>
 using namespace llvm;
 
 #define DEBUG_TYPE "simplifycfg"
+
+extern cl::opt<bool> HLS;
 
 static cl::opt<unsigned> UserBonusInstThreshold(
     "bonus-inst-threshold", cl::Hidden, cl::init(1),
@@ -156,16 +164,49 @@ static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
   for (unsigned i = 0, e = Edges.size(); i != e; ++i)
     LoopHeaders.insert(const_cast<BasicBlock *>(Edges[i].second));
 
+  std::vector<BasicBlock *> WorkList;
+  WorkList.reserve(F.size());
   while (LocalChange) {
     LocalChange = false;
-
-    // Loop over all of the basic blocks and remove them if they are unneeded.
-    for (Function::iterator BBIt = F.begin(); BBIt != F.end(); ) {
-      if (simplifyCFG(&*BBIt++, TTI, Options, &LoopHeaders)) {
-        LocalChange = true;
-        ++NumSimpl;
+    if (HLS) {
+      /*************************************************************************
+       * Visit Block in reverse post order and disable ReduceSwitchRange
+       * if (i == 0) xxx
+       * if (i == 4) xxx
+       * if (i == 8) xxx
+       * if (i == 16) xxx
+       * Currently, simplifycfg will generate nested switch for above code, we
+       * need do switch merge, if switch merge is some difficult for simplify
+       * cfg, we can rely on jump threading do this merge, but we can not reduce
+       * the switch condition, it will prevent jump threading happen Visiting
+       * with reverse post order can help simplify code like below: if ((a > 10
+       * && b < 10) || c != 0), not matter what order the banches will be in the
+       * function, if we use rpo visit all blocks, we can simplify all branches
+       * into one branch
+       * ***********************************************************************/
+      WorkList.clear();
+      for (auto BBIt = po_begin(&F); BBIt != po_end(&F); ++BBIt)
+        WorkList.push_back(*BBIt);
+      std::reverse(WorkList.begin(), WorkList.end());
+      // Loop over all of the basic blocks and remove them if they are unneeded.
+      for (auto BBIt = WorkList.begin(); BBIt != WorkList.end();) {
+        BasicBlock *BB = *BBIt++;
+        DEBUG(dbgs() << "Simplify Basic Block: '" << BB->getName() << "'\n");
+        if (simplifyCFG(BB, TTI, Options, &LoopHeaders)) {
+          LocalChange = true;
+          ++NumSimpl;
+        }
+      }
+    } else {
+      // Loop over all of the basic blocks and remove them if they are unneeded.
+      for (auto BBIt = F.begin(); BBIt != F.end();) {
+        if (simplifyCFG(&*BBIt++, TTI, Options, &LoopHeaders)) {
+          LocalChange = true;
+          ++NumSimpl;
+        }
       }
     }
+
     Changed |= LocalChange;
   }
   return Changed;

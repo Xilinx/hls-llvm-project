@@ -1475,6 +1475,10 @@ LANGBUILTIN(__builtin_bit_xor_reduce, "ivC*", "nc", HLS_LANG)
 
 // HLS Extensions - sqrt for half
 LANGBUILTIN(__builtin_sqrth, "hh", "Fne", HLS_LANG)
+LANGBUILTIN(__builtin_logh, "hh", "Fne", HLS_LANG)
+LANGBUILTIN(__builtin_exph, "hh", "Fne", HLS_LANG)
+LANGBUILTIN(__builtin_reciph, "hh", "nc", HLS_LANG)
+LANGBUILTIN(__builtin_rsqrth, "hh", "nc", HLS_LANG)
 LANGBUILTIN(__builtin_recipf, "ff", "nc", HLS_LANG)
 LANGBUILTIN(__builtin_recip, "dd", "nc", HLS_LANG)
 LANGBUILTIN(__builtin_rsqrtf, "ff", "nc", HLS_LANG)

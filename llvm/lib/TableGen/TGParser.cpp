@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Implement the Parser for TableGen.
@@ -173,6 +178,8 @@ bool TGParser::AddSubClass(Record *CurRec, SubClassReference &SubClass) {
 
   // Loop over all of the template arguments, setting them to the specified
   // value or leaving them as the default if necessary.
+  MapResolver R(CurRec);
+
   for (unsigned i = 0, e = TArgs.size(); i != e; ++i) {
     if (i < SubClass.TemplateArgs.size()) {
       // If a value is specified for this template arg, set it now.
@@ -180,19 +187,19 @@ bool TGParser::AddSubClass(Record *CurRec, SubClassReference &SubClass) {
                    None, SubClass.TemplateArgs[i]))
         return true;
 
-      // Resolve it next.
-      CurRec->resolveReferencesTo(CurRec->getValue(TArgs[i]));
-
-      // Now remove it.
-      CurRec->removeValue(TArgs[i]);
-
     } else if (!CurRec->getValue(TArgs[i])->getValue()->isComplete()) {
       return Error(SubClass.RefRange.Start,
                    "Value not specified for template argument #" +
                    Twine(i) + " (" + TArgs[i]->getAsUnquotedString() +
                    ") of subclass '" + SC->getNameInitAsString() + "'!");
     }
+
+    R.set(TArgs[i], CurRec->getValue(TArgs[i])->getValue());
+
+    CurRec->removeValue(TArgs[i]);
   }
+
+  CurRec->resolveReferences(R);
 
   // Since everything went well, we can now set the "superclass" list for the
   // current record.
@@ -208,6 +215,7 @@ bool TGParser::AddSubClass(Record *CurRec, SubClassReference &SubClass) {
     return Error(SubClass.RefRange.Start,
                  "Already subclass of '" + SC->getName() + "'!\n");
   CurRec->addSuperClass(SC, SubClass.RefRange);
+
   return false;
 }
 
@@ -249,6 +257,8 @@ bool TGParser::AddSubMultiClass(MultiClass *CurMC,
 
   // Loop over all of the template arguments, setting them to the specified
   // value or leaving them as the default if necessary.
+  MapResolver CurRecResolver(CurRec);
+
   for (unsigned i = 0, e = SMCTArgs.size(); i != e; ++i) {
     if (i < SubMultiClass.TemplateArgs.size()) {
       // If a value is specified for this template arg, set it in the
@@ -257,12 +267,6 @@ bool TGParser::AddSubMultiClass(MultiClass *CurMC,
                    None, SubMultiClass.TemplateArgs[i]))
         return true;
 
-      // Resolve it next.
-      CurRec->resolveReferencesTo(CurRec->getValue(SMCTArgs[i]));
-
-      // Now remove it.
-      CurRec->removeValue(SMCTArgs[i]);
-
       // If a value is specified for this template arg, set it in the
       // new defs now.
       for (const auto &Def :
@@ -270,12 +274,6 @@ bool TGParser::AddSubMultiClass(MultiClass *CurMC,
         if (SetValue(Def.get(), SubMultiClass.RefRange.Start, SMCTArgs[i],
                      None, SubMultiClass.TemplateArgs[i]))
           return true;
-
-        // Resolve it next.
-        Def->resolveReferencesTo(Def->getValue(SMCTArgs[i]));
-
-        // Now remove it
-        Def->removeValue(SMCTArgs[i]);
       }
     } else if (!CurRec->getValue(SMCTArgs[i])->getValue()->isComplete()) {
       return Error(SubMultiClass.RefRange.Start,
@@ -283,8 +281,25 @@ bool TGParser::AddSubMultiClass(MultiClass *CurMC,
                    Twine(i) + " (" + SMCTArgs[i]->getAsUnquotedString() +
                    ") of subclass '" + SMC->Rec.getNameInitAsString() + "'!");
     }
+
+    CurRecResolver.set(SMCTArgs[i], CurRec->getValue(SMCTArgs[i])->getValue());
+
+    CurRec->removeValue(SMCTArgs[i]);
   }
 
+  CurRec->resolveReferences(CurRecResolver);
+
+  for (const auto &Def :
+       makeArrayRef(CurMC->DefPrototypes).slice(newDefStart)) {
+    MapResolver R(Def.get());
+
+    for (Init *SMCTArg : SMCTArgs) {
+      R.set(SMCTArg, Def->getValue(SMCTArg)->getValue());
+      Def->removeValue(SMCTArg);
+    }
+
+    Def->resolveReferences(R);
+  }
   return false;
 }
 
@@ -318,7 +333,8 @@ bool TGParser::ProcessForeachDefs(Record *CurRec, SMLoc Loc, IterSet &IterVals){
 
     // Process each value.
     for (unsigned i = 0; i < List->size(); ++i) {
-      Init *ItemVal = List->resolveListElementReference(*CurRec, nullptr, i);
+      RecordResolver R(*CurRec);
+      Init *ItemVal = List->getElement(i)->resolveReferences(R);
       IterVals.push_back(IterRecord(CurLoop.IterVar, ItemVal));
       if (ProcessForeachDefs(CurRec, Loc, IterVals))
         return true;
@@ -356,7 +372,7 @@ bool TGParser::ProcessForeachDefs(Record *CurRec, SMLoc Loc, IterSet &IterVals){
     if (!IterRec->isAnonymous())
       return Error(Loc, "def already exists: " +IterRec->getNameInitAsString());
 
-    IterRec->setName(GetNewAnonymousName());
+    IterRec->setName(Records.getNewAnonymousName());
   }
 
   Record *IterRecSave = IterRec.get(); // Keep a copy before release.
@@ -374,12 +390,6 @@ static bool isObjectStart(tgtok::TokKind K) {
   return K == tgtok::Class || K == tgtok::Def ||
          K == tgtok::Defm || K == tgtok::Let ||
          K == tgtok::MultiClass || K == tgtok::Foreach;
-}
-
-/// GetNewAnonymousName - Generate a unique anonymous name that can be used as
-/// an identifier.
-Init *TGParser::GetNewAnonymousName() {
-  return StringInit::get("anonymous_" + utostr(AnonCounter++));
 }
 
 /// ParseObjectName - If an object name is specified, return it.  Otherwise,
@@ -876,7 +886,7 @@ Init *TGParser::ParseOperation(Record *CurRec, RecTy *ItemType) {
       return nullptr;
     }
     Lex.Lex();  // eat the ')'
-    return (UnOpInit::get(Code, LHS, Type))->Fold(CurRec, CurMultiClass);
+    return (UnOpInit::get(Code, LHS, Type))->Fold(CurRec);
   }
 
   case tgtok::XConcat:
@@ -959,14 +969,14 @@ Init *TGParser::ParseOperation(Record *CurRec, RecTy *ItemType) {
       while (InitList.size() > 2) {
         Init *RHS = InitList.pop_back_val();
         RHS = (BinOpInit::get(Code, InitList.back(), RHS, Type))
-                           ->Fold(CurRec, CurMultiClass);
+                           ->Fold(CurRec);
         InitList.back() = RHS;
       }
     }
 
     if (InitList.size() == 2)
       return (BinOpInit::get(Code, InitList[0], InitList[1], Type))
-        ->Fold(CurRec, CurMultiClass);
+        ->Fold(CurRec);
 
     Error(OpLoc, "expected two operands to operator");
     return nullptr;
@@ -1075,6 +1085,14 @@ Init *TGParser::ParseOperation(Record *CurRec, RecTy *ItemType) {
         return nullptr;
       }
       Type = MHSt->getType();
+      if (isa<ListRecTy>(Type)) {
+        TypedInit *RHSt = dyn_cast<TypedInit>(RHS);
+        if (!RHSt) {
+          TokError("could not get type of !foreach list elements");
+          return nullptr;
+        }
+        Type = RHSt->getType()->getListTy();
+      }
       break;
     }
     case tgtok::XSubst: {
@@ -1087,8 +1105,7 @@ Init *TGParser::ParseOperation(Record *CurRec, RecTy *ItemType) {
       break;
     }
     }
-    return (TernOpInit::get(Code, LHS, MHS, RHS, Type))->Fold(CurRec,
-                                                             CurMultiClass);
+    return (TernOpInit::get(Code, LHS, MHS, RHS, Type))->Fold(CurRec);
   }
   }
 }
@@ -1204,60 +1221,49 @@ Init *TGParser::ParseSimpleValue(Record *CurRec, RecTy *ItemType,
       return nullptr;
     }
 
-    SubClassReference SCRef;
-    ParseValueList(SCRef.TemplateArgs, CurRec, Class);
-    if (SCRef.TemplateArgs.empty()) return nullptr;
+    SmallVector<Init *, 8> Args;
+    ParseValueList(Args, CurRec, Class);
+    if (Args.empty()) return nullptr;
 
     if (Lex.getCode() != tgtok::greater) {
       TokError("expected '>' at end of value list");
       return nullptr;
     }
     Lex.Lex();  // eat the '>'
-    SMLoc EndLoc = Lex.getLoc();
 
-    // Create the new record, set it as CurRec temporarily.
-    auto NewRecOwner = llvm::make_unique<Record>(GetNewAnonymousName(), NameLoc,
-                                                 Records, /*IsAnonymous=*/true);
-    Record *NewRec = NewRecOwner.get(); // Keep a copy since we may release.
-    SCRef.RefRange = SMRange(NameLoc, EndLoc);
-    SCRef.Rec = Class;
-    // Add info about the subclass to NewRec.
-    if (AddSubClass(NewRec, SCRef))
+    // Typecheck the template arguments list
+    ArrayRef<Init *> ExpectedArgs = Class->getTemplateArgs();
+    if (ExpectedArgs.size() < Args.size()) {
+      Error(NameLoc,
+            "More template args specified than expected");
       return nullptr;
-
-    if (!CurMultiClass) {
-      NewRec->resolveReferences();
-      Records.addDef(std::move(NewRecOwner));
-    } else {
-      // This needs to get resolved once the multiclass template arguments are
-      // known before any use.
-      NewRec->setResolveFirst(true);
-      // Otherwise, we're inside a multiclass, add it to the multiclass.
-      CurMultiClass->DefPrototypes.push_back(std::move(NewRecOwner));
-
-      // Copy the template arguments for the multiclass into the def.
-      for (Init *TArg : CurMultiClass->Rec.getTemplateArgs()) {
-        const RecordVal *RV = CurMultiClass->Rec.getValue(TArg);
-        assert(RV && "Template arg doesn't exist?");
-        NewRec->addValue(*RV);
-      }
-
-      // We can't return the prototype def here, instead return:
-      // !cast<ItemType>(!strconcat(NAME, AnonName)).
-      const RecordVal *MCNameRV = CurMultiClass->Rec.getValue("NAME");
-      assert(MCNameRV && "multiclass record must have a NAME");
-
-      return UnOpInit::get(UnOpInit::CAST,
-                           BinOpInit::get(BinOpInit::STRCONCAT,
-                                          VarInit::get(MCNameRV->getName(),
-                                                       MCNameRV->getType()),
-                                          NewRec->getNameInit(),
-                                          StringRecTy::get()),
-                           Class->getDefInit()->getType());
     }
 
-    // The result of the expression is a reference to the new record.
-    return DefInit::get(NewRec);
+    for (unsigned i = 0, e = ExpectedArgs.size(); i != e; ++i) {
+      RecordVal *ExpectedArg = Class->getValue(ExpectedArgs[i]);
+      if (i < Args.size()) {
+        if (TypedInit *TI = dyn_cast<TypedInit>(Args[i])) {
+          RecTy *ExpectedType = ExpectedArg->getType();
+          if (!TI->getType()->typeIsConvertibleTo(ExpectedType)) {
+            Error(NameLoc,
+                  "Value specified for template argument #" + Twine(i) + " (" +
+                  ExpectedArg->getNameInitAsString() + ") is of type '" +
+                  TI->getType()->getAsString() + "', expected '" +
+                  ExpectedType->getAsString() + "': " + TI->getAsString());
+            return nullptr;
+          }
+          continue;
+        }
+      } else if (ExpectedArg->getValue()->isComplete())
+        continue;
+
+      Error(NameLoc,
+            "Value not specified for template argument #" + Twine(i) + " (" +
+            ExpectedArgs[i]->getAsUnquotedString() + ")");
+      return nullptr;
+    }
+
+    return VarDefInit::get(Class, Args)->Fold();
   }
   case tgtok::l_brace: {           // Value ::= '{' ValueList '}'
     SMLoc BraceLoc = Lex.getLoc();
@@ -1591,7 +1597,7 @@ Init *TGParser::ParseValue(Record *CurRec, RecTy *ItemType, IDParseMode Mode) {
       }
 
       Result = BinOpInit::get(BinOpInit::STRCONCAT, LHS, RHS,
-                              StringRecTy::get())->Fold(CurRec, CurMultiClass);
+                              StringRecTy::get())->Fold(CurRec);
       break;
     }
   }
@@ -2007,7 +2013,7 @@ bool TGParser::ParseDef(MultiClass *CurMultiClass) {
   if (Name)
     CurRecOwner = make_unique<Record>(Name, DefLoc, Records);
   else
-    CurRecOwner = llvm::make_unique<Record>(GetNewAnonymousName(), DefLoc,
+    CurRecOwner = llvm::make_unique<Record>(Records.getNewAnonymousName(), DefLoc,
                                             Records, /*IsAnonymous=*/true);
   Record *CurRec = CurRecOwner.get(); // Keep a copy since we may release.
 
@@ -2350,7 +2356,7 @@ Record *TGParser::InstantiateMulticlassDef(MultiClass &MC, Record *DefProto,
 
   bool IsAnonymous = false;
   if (!DefmPrefix) {
-    DefmPrefix = GetNewAnonymousName();
+    DefmPrefix = Records.getNewAnonymousName();
     IsAnonymous = true;
   }
 
@@ -2363,8 +2369,8 @@ Record *TGParser::InstantiateMulticlassDef(MultiClass &MC, Record *DefProto,
     DefName =
       BinOpInit::get(BinOpInit::STRCONCAT,
                      UnOpInit::get(UnOpInit::CAST, DefmPrefix,
-                                   StringRecTy::get())->Fold(DefProto, &MC),
-                     DefName, StringRecTy::get())->Fold(DefProto, &MC);
+                                   StringRecTy::get())->Fold(DefProto),
+                     DefName, StringRecTy::get())->Fold(DefProto);
   }
 
   // Make a trail of SMLocs from the multiclass instantiations.
@@ -2462,21 +2468,16 @@ bool TGParser::ResolveMulticlassDefArgs(MultiClass &MC, Record *CurRec,
                                         ArrayRef<Init *> TArgs,
                                         ArrayRef<Init *> TemplateVals,
                                         bool DeleteArgs) {
-  // Loop over all of the template arguments, setting them to the specified
-  // value or leaving them as the default if necessary.
+  // Set all template arguments to the specified value or leave them as the
+  // default if necessary, then resolve them all simultaneously.
+  MapResolver R(CurRec);
+
   for (unsigned i = 0, e = TArgs.size(); i != e; ++i) {
     // Check if a value is specified for this temp-arg.
     if (i < TemplateVals.size()) {
-      // Set it now.
       if (SetValue(CurRec, DefmPrefixLoc, TArgs[i], None, TemplateVals[i]))
         return true;
 
-      // Resolve it next.
-      CurRec->resolveReferencesTo(CurRec->getValue(TArgs[i]));
-
-      if (DeleteArgs)
-        // Now remove it.
-        CurRec->removeValue(TArgs[i]);
 
     } else if (!CurRec->getValue(TArgs[i])->getValue()->isComplete()) {
       return Error(SubClassLoc, "value not specified for template argument #" +
@@ -2484,7 +2485,14 @@ bool TGParser::ResolveMulticlassDefArgs(MultiClass &MC, Record *CurRec,
                    ") of multiclassclass '" + MC.Rec.getNameInitAsString() +
                    "'");
     }
+
+    R.set(TArgs[i], CurRec->getValue(TArgs[i])->getValue());
+
+    if (DeleteArgs)
+      CurRec->removeValue(TArgs[i]);
   }
+
+  CurRec->resolveReferences(R);
   return false;
 }
 

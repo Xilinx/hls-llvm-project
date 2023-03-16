@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -62,6 +62,10 @@ static bool shouldEmitLifetimeMarkers(const CodeGenOptions &CGOpts,
   // Asan uses markers for use-after-scope checks.
   if (CGOpts.SanitizeAddressUseAfterScope)
     return true;
+
+  if (LangOpts.HLSExt) {
+    return true;
+  }
 
   // For now, only in optimized builds.
   return CGOpts.OptimizationLevel != 0;
@@ -942,12 +946,6 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
       EmitOpenCLKernelMetadata(FD, Fn);
   }
 
-  // Xilinx specific function attributes
-  if (getLangOpts().HLSExt) {
-    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D))
-      EmitXlxFunctionAttributes(FD, Fn);
-  }
-
   // If we are checking function types, emit a function type signature as
   // prologue data.
   if (getLangOpts().CPlusPlus && SanOpts.has(SanitizerKind::Function)) {
@@ -1025,6 +1023,12 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     QualType FnType = getContext().getFunctionType(
         RetTy, ArgTypes, FunctionProtoType::ExtProtoInfo(CC));
     DI->EmitFunctionStart(GD, Loc, StartLoc, FnType, CurFn, Builder);
+  }
+
+  // Xilinx specific function attributes
+  if (getLangOpts().HLSExt) {
+    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D))
+      EmitXlxFunctionAttributes(FD, Fn);
   }
 
   if (ShouldInstrumentFunction()) {
@@ -1289,6 +1293,10 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   CurGD = GD;
   FunctionArgList Args;
   QualType ResTy = BuildFunctionArgList(GD, Args);
+
+  if (getLangOpts().HLSExt && FD->hasAttr<SDxKernelAttr>()) { 
+    CGM.setTopFunc(FD, Args, Fn ); 
+  }
 
   // Check if we should generate debug info for this function.
   if (FD->hasAttr<NoDebugAttr>())
@@ -2406,4 +2414,11 @@ llvm::DebugLoc CodeGenFunction::SourceLocToDebugLoc(SourceLocation Location) {
     return DI->SourceLocToDebugLoc(Location);
 
   return llvm::DebugLoc();
+}
+
+llvm::DebugLoc CodeGenFunction::PragmaSourceLocToDebugLoc(SourceLocation Location, bool IsAutoPragma) {
+  if (CGDebugInfo *DI = getDebugInfo())
+    return DI->PragmaSourceLocToDebugLoc(Location, IsAutoPragma);
+  else 
+    return llvm::DebugLoc(); 
 }

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===//
 //
@@ -28,6 +28,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/ExprHLS.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
@@ -2228,6 +2229,16 @@ public:
     return getSema().ActOnOMPArraySectionExpr(Base, LBracketLoc, LowerBound,
                                               ColonLoc, Length, RBracketLoc);
   }
+
+  /// \brief Build a new hls whole array expression.
+  ///
+  /// By default, performs semantic analysis to build the new expression.
+  /// Subclasses may override this routine to provide different behavior.
+  ExprResult RebuildHLSWholeArrayExpr(Expr *Base, SourceLocation LBracketLoc,
+                                        SourceLocation StarLoc, SourceLocation RBracketLoc) {
+    return getSema().ActOnHLSWholeArrayExpr(/*Scope=*/nullptr, Base, LBracketLoc, StarLoc, RBracketLoc);
+  }
+
 
   /// \brief Build a new call expression.
   ///
@@ -6662,6 +6673,8 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   case attr::XlxCrossDependence:
   case attr::FPGAResourceLimitHint:
   case attr::XlxMAXIAlias:
+  case attr::XlxPerformance:
+  case attr::XlxFuncInstantiate:
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
     return attr;
@@ -6763,23 +6776,33 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   case attr::XlxArrayPartitionXForm:
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxArrayPartitionXFormAttr>(attr)->getVariable();
+    auto * PartitionAttr = dyn_cast<XlxArrayPartitionXFormAttr>(attr); 
     MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
+    marker.Visit(PartitionAttr->getVariable());
+    marker.Visit(PartitionAttr->getFactor()); 
     return attr;
   }
   case attr::XlxArrayReshapeXForm:
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxArrayReshapeXFormAttr>(attr)->getVariable();
+    auto* ReshapeAttr = dyn_cast<XlxArrayReshapeXFormAttr>(attr); 
     MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
+    marker.Visit(ReshapeAttr->getVariable());
+    marker.Visit(ReshapeAttr->getFactor()); 
     return attr;
   }
   case attr::XlxDisaggr: 
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
     Expr* var = dyn_cast<XlxDisaggrAttr>(attr)->getVariable();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::XlxArrayStencil:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxArrayStencilAttr>(attr)->getVariable();
     MarkDeclIsUsed  marker(SemaRef);
     marker.Visit(var);
     return attr;
@@ -6845,6 +6868,14 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
     Expr* var = dyn_cast<APScalarInterfaceAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
+    return attr;
+  }
+  case attr::APScalarInterruptInterface:
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<APScalarInterruptInterfaceAttr>(attr)->getPort();
     MarkDeclIsUsed  marker(SemaRef);
     marker.Visit(var);
     return attr;
@@ -9521,6 +9552,22 @@ TreeTransform<Derived>::TransformOMPArraySectionExpr(OMPArraySectionExpr *E) {
       Base.get(), E->getBase()->getLocEnd(), LowerBound.get(), E->getColonLoc(),
       Length.get(), E->getRBracketLoc());
 }
+
+template <typename Derived>
+ExprResult
+TreeTransform<Derived>::TransformHLSWholeArrayExpr(HLSWholeArrayExpr *E) {
+  ExprResult Base = getDerived().TransformExpr(E->getBase());
+  if (Base.isInvalid())
+    return ExprError();
+
+  if (!getDerived().AlwaysRebuild() && Base.get() == E->getBase())
+    return E;
+
+  return getDerived().RebuildHLSWholeArrayExpr(
+      Base.get(), E->getBase()->getLocEnd(), E->getStarLoc(),
+      E->getRBracketLoc());
+}
+
 
 template<typename Derived>
 ExprResult

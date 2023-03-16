@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Statement/expression deserialization.  This implements the
@@ -626,6 +631,14 @@ void ASTStmtReader::VisitOMPArraySectionExpr(OMPArraySectionExpr *E) {
   E->setColonLoc(ReadSourceLocation());
   E->setRBracketLoc(ReadSourceLocation());
 }
+
+void ASTStmtReader::VisitHLSWholeArrayExpr(HLSWholeArrayExpr *E) {
+  VisitExpr(E);
+  E->setBase(Record.readSubExpr());
+  E->setStarLoc(ReadSourceLocation());
+  E->setRBracketLoc(ReadSourceLocation());
+}
+
 
 void ASTStmtReader::VisitCallExpr(CallExpr *E) {
   VisitExpr(E);
@@ -3223,6 +3236,10 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
 
     case EXPR_OMP_ARRAY_SECTION:
+      S = new (Context) OMPArraySectionExpr(Empty);
+      break;
+
+    case EXPR_HLS_WHOLE_ARRAY:
       S = new (Context) OMPArraySectionExpr(Empty);
       break;
 

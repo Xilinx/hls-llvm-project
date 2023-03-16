@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -283,6 +283,39 @@ bool DebugInfoFinder::addScope(DIScope *Scope) {
   Scopes.push_back(Scope);
   return true;
 }
+
+static MDNode *updateLoopMetadataDebugLocationsImpl(
+     MDNode *OrigLoopID, function_ref<Metadata *(Metadata *)> Updater) {
+   assert(OrigLoopID && OrigLoopID->getNumOperands() > 0 &&
+          "Loop ID needs at least one operand");
+   assert(OrigLoopID && OrigLoopID->getOperand(0).get() == OrigLoopID &&
+          "Loop ID should refer to itself");
+  
+   // Save space for the self-referential LoopID.
+   SmallVector<Metadata *, 4> MDs = {nullptr};
+  
+   for (unsigned i = 1; i < OrigLoopID->getNumOperands(); ++i) {
+     Metadata *MD = OrigLoopID->getOperand(i);
+     if (!MD)
+       MDs.push_back(nullptr);
+     else if (Metadata *NewMD = Updater(MD))
+       MDs.push_back(NewMD);
+   }
+  
+   MDNode *NewLoopID = MDNode::getDistinct(OrigLoopID->getContext(), MDs);
+   // Insert the self-referential LoopID.
+   NewLoopID->replaceOperandWith(0, NewLoopID);
+   return NewLoopID;
+ }
+  
+ void llvm::updateLoopMetadataDebugLocations(
+     Instruction &I, function_ref<Metadata *(Metadata *)> Updater) {
+   MDNode *OrigLoopID = I.getMetadata(LLVMContext::MD_loop);
+   if (!OrigLoopID)
+     return;
+   MDNode *NewLoopID = updateLoopMetadataDebugLocationsImpl(OrigLoopID, Updater);
+   I.setMetadata(LLVMContext::MD_loop, NewLoopID);
+ }
 
 static MDNode *stripDebugLocFromLoopID(MDNode *N) {
   assert(N->op_begin() != N->op_end() && "Missing self reference?");

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -252,6 +252,13 @@ public:
   virtual void emitDispose(CodeGenFunction &CGF, Address field) = 0;
 };
 
+struct HLSTopFunc{ 
+  const FunctionDecl *decl; 
+  const FunctionArgList topArgs; 
+  llvm::Function * func; 
+  HLSTopFunc( const FunctionDecl* decl, const FunctionArgList &&topArgs, llvm::Function* func ) : decl(decl), topArgs(topArgs), func(func) { }
+}; 
+
 /// This class organizes the cross-function state that is used while generating
 /// LLVM code.
 class CodeGenModule : public CodeGenTypeCache {
@@ -295,6 +302,8 @@ private:
  
   /// Holds information about C++ vtables.
   CodeGenVTables VTables;
+
+  std::unique_ptr<HLSTopFunc> HLSTop;
 
   std::unique_ptr<CGObjCRuntime> ObjCRuntime;
   std::unique_ptr<CGOpenCLRuntime> OpenCLRuntime;
@@ -1253,6 +1262,15 @@ public:
   /// \param T is the LLVM type of the null pointer.
   /// \param QT is the clang QualType of the null pointer.
   llvm::Constant *getNullPointer(llvm::PointerType *T, QualType QT);
+
+  void setTopFunc( const FunctionDecl* decl, const FunctionArgList &topArgs, llvm::Function* func )
+  { 
+    HLSTop = llvm::make_unique<HLSTopFunc>(decl, std::move(topArgs), func) ; 
+  }
+  void genTopArgAnnotation(); 
+
+  using GEPFields = SmallVector<unsigned int, 4>; 
+  void GenerateStreamAnnotationIntrinsic(llvm::IRBuilder< > &Builder, llvm::Value* parm, const ParmVarDecl *decl , const QualType type, GEPFields fields, bool is_pointer);
 
 private:
   llvm::Constant *GetOrCreateLLVMFunction(

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -26,6 +26,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/ExprHLS.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/CharInfo.h"
@@ -1678,6 +1679,16 @@ void StmtPrinter::VisitOMPArraySectionExpr(OMPArraySectionExpr *Node) {
   }
   OS << "]";
 }
+
+void StmtPrinter::VisitHLSWholeArrayExpr(HLSWholeArrayExpr *Node) {
+  PrintExpr(Node->getBase());
+  OS << "[";
+  if (Node->getStarLoc().isValid()) {
+    OS << "*";
+  }
+  OS << "]";
+}
+
 
 void StmtPrinter::PrintCallArgs(CallExpr *Call) {
   for (unsigned i = 0, e = Call->getNumArgs(); i != e; ++i) {

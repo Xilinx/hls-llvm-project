@@ -5,6 +5,11 @@
 |* This file is distributed under the University of Illinois Open Source      *|
 |* License. See LICENSE.TXT for details.                                      *|
 |*                                                                            *|
+|* And has the following additional copyright:                                *|
+|*                                                                            *|
+|* (C) Copyright 2016-2022 Xilinx, Inc.                                       *|
+|* All Rights Reserved.                                                       *|
+|*                                                                            *|
 |*===----------------------------------------------------------------------===*|
 |*                                                                            *|
 |* This header provides a public interface to a Clang library for extracting  *|
@@ -2154,6 +2159,10 @@ enum CXCursorKind {
   /** \brief Represents an @available(...) check.
    */
   CXCursor_ObjCAvailabilityCheckExpr     = 148,
+
+  /** \brief Represents HLS whole array expression.
+   */
+  CXCursor_HLSWholeArrayExpr           = 149,
 
   CXCursor_LastExpr                      = CXCursor_ObjCAvailabilityCheckExpr,
 

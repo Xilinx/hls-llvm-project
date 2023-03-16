@@ -5,6 +5,10 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Stmt::Profile method, which builds a unique bit
@@ -19,6 +23,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/ExprHLS.h"
 #include "clang/AST/ODRHash.h"
 #include "clang/AST/StmtVisitor.h"
 #include "llvm/ADT/FoldingSet.h"
@@ -1060,6 +1065,11 @@ void StmtProfiler::VisitArraySubscriptExpr(const ArraySubscriptExpr *S) {
 void StmtProfiler::VisitOMPArraySectionExpr(const OMPArraySectionExpr *S) {
   VisitExpr(S);
 }
+
+void StmtProfiler::VisitHLSWholeArrayExpr(const HLSWholeArrayExpr *S) {
+  VisitExpr(S);
+}
+
 
 void StmtProfiler::VisitCallExpr(const CallExpr *S) {
   VisitExpr(S);

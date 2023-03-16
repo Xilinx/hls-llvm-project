@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -136,6 +136,9 @@ public:
 
     /// We are between inheritance colon and the real class/struct definition scope.
     ClassInheritanceScope = 0x800000,
+    
+    /// This is the scope of HLS directive.
+    HLSDirectiveScope = 0x1000000
   };
 private:
   /// The parent scope for this scope.  This is null for the translation-unit
@@ -402,6 +405,10 @@ public:
     return false;
   }
 
+  /// Determines whether this scope is the HLS directive scope
+  bool isHLSDirectiveScope() const {
+    return (getFlags() & Scope::HLSDirectiveScope);
+  }
   
   /// isTemplateParamScope - Return true if this scope is a C++
   /// template parameter scope.

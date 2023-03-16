@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2110,6 +2110,18 @@ static bool SpeculativelyExecuteBB(BranchInst *BI, BasicBlock *ThenBB,
   return true;
 }
 
+/// HLS Specific
+/// Return true if \p Call is a region ssdm call.
+static bool isRegionSSDM(const CallInst *Call) {
+  if (auto *F = Call->getCalledFunction()) {
+    auto name = F->getName();
+    return name.equals("_ssdm_RegionBegin") || name.equals("_ssdm_RegionEnd");
+  }
+
+  return false;
+}
+///
+
 /// Return true if we can thread a branch across this block.
 static bool BlockIsSimpleEnoughToThreadThrough(BasicBlock *BB) {
   BranchInst *BI = cast<BranchInst>(BB->getTerminator());
@@ -2129,6 +2141,10 @@ static bool BlockIsSimpleEnoughToThreadThrough(BasicBlock *BB) {
       Function *Callee = CI->getCalledFunction();
       if (Callee && !Callee->isDeclaration())
         return false;
+      
+      if (isRegionSSDM(CI)) {
+        return false;
+      }
     }
     // HLS END
 
@@ -2422,6 +2438,8 @@ static bool SimplifyCondBranchToTwoReturns(BranchInst *BI,
   BasicBlock *FalseSucc = BI->getSuccessor(1);
   ReturnInst *TrueRet = cast<ReturnInst>(TrueSucc->getTerminator());
   ReturnInst *FalseRet = cast<ReturnInst>(FalseSucc->getTerminator());
+  if (TrueSucc == FalseSucc)
+    return false;  
 
   // Check to ensure both blocks are empty (just a return) or optionally empty
   // with PHI nodes.  If there are other instructions, merging would cause extra
@@ -5635,7 +5653,9 @@ bool SimplifyCFGOpt::SimplifySwitch(SwitchInst *SI, IRBuilder<> &Builder) {
       SwitchToLookupTable(SI, Builder, DL, TTI))
     return simplifyCFG(BB, TTI, Options) | true;
 
-  if (ReduceSwitchRange(SI, Builder, DL, TTI))
+  /// ReduceSwitchRange will prevent merging adject switch on the same value
+  /// and can also prevent jump threading happen
+  if (!HLS && ReduceSwitchRange(SI, Builder, DL, TTI))
     return simplifyCFG(BB, TTI, Options) | true;
 
   return false;
@@ -5816,6 +5836,19 @@ static BasicBlock *allPredecessorsComeFromSameSource(BasicBlock *BB) {
 
 bool SimplifyCFGOpt::SimplifyCondBranch(BranchInst *BI, IRBuilder<> &Builder) {
   BasicBlock *BB = BI->getParent();
+
+  if (HLS) {
+    /// if the first operand is constant, we swap the two operands
+    /// it will benefit isValueEqualityComparison API, because currently,
+    /// this API only handle icmp eq/ne %x, c, for icmp eq/ne c, %x this 
+    /// API will not work, and miss optimize sequence if into switch
+    if (ICmpInst *ICI = dyn_cast<ICmpInst>(BI->getCondition())) {
+      if (GetConstantInt(ICI->getOperand(0), DL) && !GetConstantInt(ICI->getOperand(1), DL)) {
+        ICI->swapOperands();
+        return simplifyCFG(BB, TTI, Options) | true;
+      }
+    }
+  }
 
   // Conditional branch
   if (isValueEqualityComparison(BI)) {

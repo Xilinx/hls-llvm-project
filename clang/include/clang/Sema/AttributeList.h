@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -176,6 +176,8 @@ private:
   /// The next attribute allocated in the current Pool.
   AttributeList *NextInPool;
 
+  IdentifierInfo *pragmaContext; 
+
   /// Arguments, if any, are stored immediately following the object.
   ArgsUnion *getArgsBuffer() { return reinterpret_cast<ArgsUnion *>(this + 1); }
   ArgsUnion const *getArgsBuffer() const {
@@ -255,7 +257,7 @@ private:
       SyntaxUsed(syntaxUsed), Invalid(false), UsedAsTypeAttr(false),
       IsAvailability(false), IsTypeTagForDatatype(false), IsProperty(false),
       HasParsedType(false), HasProcessingCache(false),
-      NextInPosition(nullptr), NextInPool(nullptr) {
+      NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr) {
     if (numArgs) memcpy(getArgsBuffer(), args, numArgs * sizeof(ArgsUnion));
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -275,7 +277,7 @@ private:
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(true),
       IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(false),
       HasProcessingCache(false), UnavailableLoc(unavailable),
-      MessageExpr(messageExpr), NextInPosition(nullptr), NextInPool(nullptr) {
+      MessageExpr(messageExpr), NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr) {
     ArgsUnion PVal(Parm);
     memcpy(getArgsBuffer(), &PVal, sizeof(ArgsUnion));
     new (getAvailabilityData()) AvailabilityData(
@@ -294,7 +296,7 @@ private:
     ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(3), SyntaxUsed(syntaxUsed),
     Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
     IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(false),
-    HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr) {
+    HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr) {
     ArgsUnion *Args = getArgsBuffer();
     Args[0] = Parm1;
     Args[1] = Parm2;
@@ -311,7 +313,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(1), SyntaxUsed(syntaxUsed),
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
       IsTypeTagForDatatype(true), IsProperty(false), HasParsedType(false),
-      HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr) {
+      HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr) {
     ArgsUnion PVal(ArgKind);
     memcpy(getArgsBuffer(), &PVal, sizeof(ArgsUnion));
     TypeTagForDatatypeData &ExtraData = getTypeTagForDatatypeDataSlot();
@@ -329,7 +331,7 @@ private:
         ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(0), SyntaxUsed(syntaxUsed),
         Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
         IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(true),
-        HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr){
+        HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr){
     new (&getTypeBuffer()) ParsedType(typeArg);
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -343,7 +345,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(0), SyntaxUsed(syntaxUsed),
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
       IsTypeTagForDatatype(false), IsProperty(true), HasParsedType(false),
-      HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr) {
+      HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr) {
     new (&getPropertyDataBuffer()) PropertyData(getterId, setterId);
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -413,6 +415,15 @@ public:
 
   bool isUsedAsTypeAttr() const { return UsedAsTypeAttr; }
   void setUsedAsTypeAttr() { UsedAsTypeAttr = true; }
+
+  void setPragmaContext(IdentifierInfo *pragmaContext) { 
+    this->pragmaContext = pragmaContext; 
+  }
+
+  IdentifierInfo* getPragmaContext() const { 
+    return pragmaContext; 
+  }
+
 
   bool isPackExpansion() const { return EllipsisLoc.isValid(); }
   SourceLocation getEllipsisLoc() const { return EllipsisLoc; }

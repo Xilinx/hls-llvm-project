@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -416,7 +416,12 @@ class LShrOperator
   : public ConcreteOperator<PossiblyExactOperator, Instruction::LShr> {
 };
 
+class SRemOperator : public ConcreteOperator<Operator, Instruction::SRem> {};
+class URemOperator : public ConcreteOperator<Operator, Instruction::URem> {};
+
+class SExtOperator : public ConcreteOperator<Operator, Instruction::SExt> {};
 class ZExtOperator : public ConcreteOperator<Operator, Instruction::ZExt> {};
+class TruncOperator : public ConcreteOperator<Operator, Instruction::Trunc> {};
 
 class GEPOperator
   : public ConcreteOperator<Operator, Instruction::GetElementPtr> {

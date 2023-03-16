@@ -52,3 +52,22 @@ clang_tablegen(arm_fp16.inc -gen-arm-neon-sema
   -I ${CMAKE_CURRENT_SOURCE_DIR}/../../
   SOURCE arm_fp16.td
   TARGET ClangARMFP16)
+
+#HLS Pragma
+clang_tablegen(HLSPragma.json -gen-hls-pragma-json
+  -I ${CMAKE_CURRENT_SOURCE_DIR}/../../
+  SOURCE XlxPragmaOption.td
+  TARGET ClangHLSPragmaJSON)
+
+clang_tablegen(HLSPragmaParser.inc -gen-hls-pragma-parser
+  -I ${CMAKE_CURRENT_SOURCE_DIR}/../../
+  SOURCE XlxPragmaOption.td
+  TARGET ClangHLSPragmaParser)
+
+clang_tablegen(HLSPragmaPreprocessor.inc -gen-hls-pragma-preprocessor
+  -I ${CMAKE_CURRENT_SOURCE_DIR}/../../
+  SOURCE XlxPragmaOption.td
+  TARGET ClangHLSPragmaPreprocessor)
+
+
+

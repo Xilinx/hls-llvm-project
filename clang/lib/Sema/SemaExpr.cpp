@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -29,6 +29,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/ExprHLS.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/PartialDiagnostic.h"
@@ -4198,6 +4199,68 @@ Sema::ActOnArraySubscriptExpr(Scope *S, Expr *base, SourceLocation lbLoc,
 
   return CreateBuiltinArraySubscriptExpr(base, lbLoc, idx, rbLoc);
 }
+
+ExprResult 
+Sema::ActOnHLSWholeArrayExpr(Scope *S, Expr *Base, SourceLocation LBLoc,
+                             SourceLocation StarLoc, SourceLocation RBLoc) {
+  if(S && !S->isHLSDirectiveScope()) {
+    return ExprError(
+        Diag(Base->getExprLoc(), diag::err_hls_whole_array_use)
+        << Base->getSourceRange());
+  }
+
+  if (Base->getType()->isPlaceholderType()) {
+    ExprResult Result = CheckPlaceholderExpr(Base);
+    if (Result.isInvalid())
+      return ExprError();
+    Base = Result.get();
+  }
+ 
+  // Build an unanalyzed expression if either operand is type-dependent.
+  if (Base->isTypeDependent()) {
+    return new (Context)
+        HLSWholeArrayExpr(Base, Context.DependentTy,
+                            VK_LValue, OK_Ordinary, StarLoc, RBLoc);
+  }
+
+  // Perform default conversions.
+  QualType OriginalTy = HLSWholeArrayExpr::getBaseOriginalType(Base);
+  QualType ResultTy;
+  // Pointer not support now
+  if (OriginalTy->isAnyPointerType()) {
+    ResultTy = OriginalTy->getPointeeType();
+  } else if (OriginalTy->isArrayType()) {
+    ResultTy = OriginalTy->getAsArrayTypeUnsafe()->getElementType();
+  } else {
+    return ExprError(
+        Diag(Base->getExprLoc(), diag::err_hls_whole_array_typecheck_subscripted_value)
+        << Base->getSourceRange());
+  }
+
+   // C99 6.5.2.1p1: "shall have type "pointer to *object* type". Similarly,
+  // C++ [expr.sub]p1: The type "T" shall be a completely-defined object
+  // type. Note that functions are not objects, and that (in C99 parlance)
+  // incomplete types are not object types.
+  if (ResultTy->isFunctionType()) {
+    Diag(Base->getExprLoc(), diag::err_hls_whole_array_function_type)
+        << ResultTy << Base->getSourceRange();
+    return ExprError();
+  }
+
+  if (RequireCompleteType(Base->getExprLoc(), ResultTy,
+                          diag::err_hls_whole_array_incomplete_type, Base))
+    return ExprError();
+  
+  ExprResult Result = DefaultFunctionArrayLvalueConversion(Base);
+  if (Result.isInvalid())
+    return ExprError();
+  Base = Result.get();
+
+  return new (Context)
+      HLSWholeArrayExpr(Base, ResultTy,
+                          VK_LValue, OK_Ordinary, StarLoc, RBLoc);
+}
+
 
 ExprResult Sema::ActOnOMPArraySectionExpr(Expr *Base, SourceLocation LBLoc,
                                           Expr *LowerBound,
@@ -16104,7 +16167,7 @@ ExprResult Sema::CheckPlaceholderExpr(Expr *E) {
     Diag(E->getLocStart(), diag::err_omp_array_section_use);
     return ExprError();
 
-  // Everything else should be impossible.
+// Everything else should be impossible.
 #define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \
   case BuiltinType::Id:
 #include "clang/Basic/OpenCLImageTypes.def"

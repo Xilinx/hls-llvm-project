@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -557,7 +557,13 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     // unsized (e.g. an incomplete struct) just use [0 x struct.xxx], and 
     // struct.xxx = opaque.
     ResultType = ConvertTypeForMem(A->getElementType());
-    if (!ResultType->isSized() && (Context.getLangOpts().HLSExt && !ResultType->isStructTy())) {
+    
+    llvm::Type *ElementTy = ResultType;
+    while(ElementTy->isArrayTy()) {
+      ElementTy = ElementTy->getArrayElementType();
+    }
+
+    if (!ResultType->isSized() && (Context.getLangOpts().HLSExt && !ElementTy->isStructTy())) {
       SkippedLayout = true;
       ResultType = llvm::Type::getInt8Ty(getLLVMContext());
     }
@@ -567,10 +573,15 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
   case Type::ConstantArray: {
     const ConstantArrayType *A = cast<ConstantArrayType>(Ty);
     llvm::Type *EltTy = ConvertTypeForMem(A->getElementType());
-    
+   
+    llvm::Type *ElementTy = EltTy;
+    while(ElementTy->isArrayTy()) {
+      ElementTy = ElementTy->getArrayElementType();
+    }
+ 
     // Lower arrays of undefined struct type to arrays of struct.xxx, and 
     // struct.xxx = opaque.
-    if (!EltTy->isSized() && (Context.getLangOpts().HLSExt && !EltTy->isStructTy())) {
+    if (!EltTy->isSized() && (Context.getLangOpts().HLSExt && !ElementTy->isStructTy())) {
       SkippedLayout = true;
       EltTy = llvm::Type::getInt8Ty(getLLVMContext());
     }

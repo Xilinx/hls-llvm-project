@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the Value, ValueHandle, and User classes.
@@ -130,20 +135,11 @@ void Value::destroyValueName() {
 }
 
 bool Value::hasNUses(unsigned N) const {
-  const_use_iterator UI = use_begin(), E = use_end();
-
-  for (; N; --N, ++UI)
-    if (UI == E) return false;  // Too few.
-  return UI == E;
+  return hasNItems(use_begin(), use_end(), N);
 }
 
 bool Value::hasNUsesOrMore(unsigned N) const {
-  const_use_iterator UI = use_begin(), E = use_end();
-
-  for (; N; --N, ++UI)
-    if (UI == E) return false;  // Too few.
-
-  return true;
+  return hasNItemsOrMore(use_begin(), use_end(), N);
 }
 
 bool Value::isUsedInBasicBlock(const BasicBlock *BB) const {

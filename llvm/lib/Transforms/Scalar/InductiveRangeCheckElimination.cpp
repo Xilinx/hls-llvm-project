@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // The InductiveRangeCheckElimination pass splits a loop's iteration space into
@@ -442,7 +447,7 @@ static void DisableAllLoopOptsOnLoop(Loop &L) {
   // Reserve first location for self reference to the LoopID metadata node.
   MDNode *Dummy = MDNode::get(Context, {});
   MDNode *DisableUnroll = MDNode::get(
-      Context, {MDString::get(Context, "llvm.loop.unroll.disable")});
+      Context, {MDString::get(Context, "llvm.loop.unroll.disable"), MDString::get(Context, "infer-from-design")});
   Metadata *FalseVal =
       ConstantAsMetadata::get(ConstantInt::get(Type::getInt1Ty(Context), 0));
   MDNode *DisableVectorize = MDNode::get(

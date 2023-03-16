@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -36,11 +36,27 @@ BUILTIN(__fpga_fifo_nb_pop, "bv*v*", "tn")
 BUILTIN(__fpga_fifo_nb_push, "bv*vC*", "tn")
 BUILTIN(__fpga_fifo_pop, "vv*v*", "tn")
 BUILTIN(__fpga_fifo_push, "vv*vC*", "tn")
+BUILTIN(__fpga_fifo_size, "ivC*", "tn")
+BUILTIN(__fpga_fifo_capacity, "ivC*", "tn")
+
+
+//
+// PIPO
+//
+
+BUILTIN(__fpga_pipo_not_empty, "bvC*", "tn")
+BUILTIN(__fpga_pipo_not_full, "bvC*", "tn")
+BUILTIN(__fpga_pipo_pop_acquire, "vv*", "tn")
+BUILTIN(__fpga_pipo_pop_release, "vv*", "tn")
+BUILTIN(__fpga_pipo_push_acquire, "vv*", "tn")
+BUILTIN(__fpga_pipo_push_release, "vv*", "tn")
+
 
 //
 //  Stream
 //
 BUILTIN(__fpga_set_stream_depth, "vv*i", "tn")
+BUILTIN(__fpga_set_stream_of_blocks_depth, "vv*i", "tn")
 
 
 //
@@ -70,4 +86,7 @@ BUILTIN(__fpga_maxi_write_resp, "vv*", "tn")
 
 BUILTIN(__fpga_add_task, "vi*i*", "tn")
 BUILTIN(__fpga_add_infinite_task, "vi*i*", "tn")
+BUILTIN(__fpga_nport_channel,  "vv*v*iiiii", "tn")
+BUILTIN(__fpga_ip,  "vcC*a", "tn")
+BUILTIN(__fpga_fence,  "viiA", "tn")
 #undef BUILTIN

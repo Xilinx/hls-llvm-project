@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -76,6 +81,12 @@ public:
     APINT_WORD_SIZE = sizeof(WordType),
     /// Bits in a word.
     APINT_BITS_PER_WORD = APINT_WORD_SIZE * CHAR_BIT
+  };
+
+  enum class Rounding {
+    DOWN,
+    TOWARD_ZERO,
+    UP,
   };
 
   static const WordType WORD_MAX = ~WordType(0);
@@ -1034,13 +1045,16 @@ public:
   /// Perform an unsigned divide operation on this APInt by RHS. Both this and
   /// RHS are treated as unsigned quantities for purposes of this division.
   ///
-  /// \returns a new APInt value containing the division result
+  /// \returns a new APInt value containing the division result, rounded towards
+  /// zero.
   APInt udiv(const APInt &RHS) const;
   APInt udiv(uint64_t RHS) const;
 
   /// \brief Signed division function for APInt.
   ///
   /// Signed divide this APInt by APInt RHS.
+  ///
+  /// The result is rounded towards zero.
   APInt sdiv(const APInt &RHS) const;
   APInt sdiv(int64_t RHS) const;
 
@@ -2100,6 +2114,35 @@ inline const APInt &umax(const APInt &A, const APInt &B) {
   return A.ugt(B) ? A : B;
 }
 
+/// \brief Compute ceil(N * P / Q) avoiding intermediate overflow and rounding.
+///
+/// This function returns (N * P) / Q using unsigned arithmetic and rounding
+/// up the result while avoinding N * P overflow.
+///
+/// \returns the result of ceil(N * P / Q).
+inline APInt UnsignedCeilMulDiv(const APInt &N, const APInt &P,
+                                const APInt &Q) {
+  assert(N.getBitWidth() == P.getBitWidth() &&
+         N.getBitWidth() == Q.getBitWidth() &&
+         "All operands must have matching bitwidth");
+  unsigned BW = N.getBitWidth();
+  APInt N2 = N.zext(2 * BW);
+  APInt P2 = P.zext(2 * BW);
+  APInt Q2 = Q.zext(2 * BW);
+  APInt R2 = (N2 * P2 + Q2 - 1).udiv(Q2);
+  return R2.trunc(BW);
+}
+
+inline APInt UnsignedCeilMulDiv(const APInt &N, uint64_t P, uint64_t Q) {
+  unsigned BW = N.getBitWidth();
+  return UnsignedCeilMulDiv(N, APInt(BW, P), APInt(BW, Q));
+}
+
+inline uint64_t UnsignedCeilMulDiv(uint64_t N, uint64_t P, uint64_t Q) {
+  APInt R = UnsignedCeilMulDiv(APInt(64, N), APInt(64, P), APInt(64, Q));
+  return R.getZExtValue();
+}
+
 /// \brief Compute GCD of two unsigned APInt values.
 ///
 /// This function returns the greatest common divisor of the two APInt values
@@ -2145,6 +2188,12 @@ APInt RoundDoubleToAPInt(double Double, unsigned width);
 inline APInt RoundFloatToAPInt(float Float, unsigned width) {
   return RoundDoubleToAPInt(double(Float), width);
 }
+
+/// Return A unsign-divided by B, rounded by the given rounding mode.
+APInt RoundingUDiv(const APInt &A, const APInt &B, APInt::Rounding RM);
+
+/// Return A sign-divided by B, rounded by the given rounding mode.
+APInt RoundingSDiv(const APInt &A, const APInt &B, APInt::Rounding RM);
 
 } // End of APIntOps namespace
 

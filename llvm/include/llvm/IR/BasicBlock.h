@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declaration of the BasicBlock class.
@@ -245,6 +250,12 @@ public:
     return const_cast<BasicBlock *>(
                    static_cast<const BasicBlock *>(this)->getUniqueSuccessor());
   }
+
+  /// Return true if this block has exactly N predecessors.
+  bool hasNPredecessors(unsigned N) const;
+
+  /// Return true if this block has N predecessors or more.
+  bool hasNPredecessorsOrMore(unsigned N) const;
 
   //===--------------------------------------------------------------------===//
   /// Instruction iterator methods

@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -32,11 +32,21 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Transforms/Utils/UnrollLoop.h"
 
 namespace llvm {
 
+class ReflowDiagnostic;
+bool isPerfectNestLoop(Loop *loop, ScalarEvolution* SE, std::string& info) ; 
+
 /// Returns true if \p L is a for loop.
 bool isForLoop(Loop *L);
+
+/// Returns true if \p L is a rotated loop.
+bool isRotatedLoop(const Loop *L);
+
+/// Returns induction variable or auxiliary induction variable for Loop \p L.
+PHINode *getIndVarOrAuxiliaryIndVar(const Loop *L, ScalarEvolution &SE);
 
 struct LoopIndexInfoTy {
   PHINode *PN;
@@ -148,6 +158,38 @@ bool mayExposeInDataFlowRegion(ScalarEvolution &SE, const Loop *L);
 /// Returns Loop \p L 's name.
 Optional<const std::string> getLoopName(const Loop *L);
 
+StringRef getLoopPragmaSource(StringRef pragma, const Loop *L);
+
+DebugLoc getLoopPragmaLoc( StringRef pragma, const Loop *L );
+
+DebugLoc getLoopFlattenPragmaLoc( const Loop *L );
+DebugLoc getLoopTripCountPragmaLoc( const Loop* L);
+DebugLoc getLoopPipelinePragmaLoc( const Loop *L );
+DebugLoc getLoopUnrollPragmaLoc( const Loop *L );
+DebugLoc getLoopDataflowPragmaLoc( const Loop *L );
+
+struct ReflowUnrollOption {
+  unsigned Count;  /// unroll factor
+  unsigned TripCount; /// positive for constant tripcount, otherwise 0
+  unsigned TripMultiple; /// TripCount % TripMultiple == 0 when TripCount != 0
+  bool HandleFlatten;
+};
+
+LoopUnrollResult ReflowUnrollLoop(Loop *L, ReflowUnrollOption RUO, LoopInfo *LI,
+                                  ScalarEvolution *SE, DominatorTree *DT,
+                                  AssumptionCache *AC, bool PreserveLCSSA,
+                                  bool AllowUnsafeClone = false);
+
+BasicBlock *getExitingBlock(Loop *L, ScalarEvolution *SE);
+// Find trip count and trip multiple if count is not available
+void ReflowCalculateTripCountAndMultiple(Loop *L, ScalarEvolution *SE,
+                                         unsigned &TripCount,
+                                         unsigned &TripMultiple);
+
+ReflowUnrollOption populateUnrollOption(Loop *L, bool WithoutCheck,
+                                        unsigned Count, unsigned TripCount,
+                                        unsigned TripMultiple,
+                                        ScalarEvolution *SE);
 } // end namespace llvm
 
 #endif // LLVM_ANALYSIS_XILINXLOOPINFOUTILS_H

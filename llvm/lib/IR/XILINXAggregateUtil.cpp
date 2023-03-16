@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -26,13 +26,12 @@
 #include "llvm/IR/Type.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/Support/XILINXAggregateUtil.h"
+#include "llvm/IR/XILINXAggregateUtil.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace llvm {
 
-uint64_t getAggregatedBitwidthInBitLevel(const DataLayout &DL,
-                                                       Type *Ty) {
+uint64_t getAggregatedBitwidthInBitLevel(const DataLayout &DL, Type *Ty) {
   if (Ty->isArrayTy())
     return Ty->getArrayNumElements() *
            getAggregatedBitwidthInBitLevel(DL, Ty->getArrayElementType());
@@ -42,13 +41,12 @@ uint64_t getAggregatedBitwidthInBitLevel(const DataLayout &DL,
       BW += getAggregatedBitwidthInBitLevel(DL, Ty->getStructElementType(i));
     }
     return BW;
-  // Maybe VectorTy?
+    // Maybe VectorTy?
   } else
     return DL.getTypeSizeInBits(Ty);
 }
 
-uint64_t getAggregatedBitwidthInByteLevel(const DataLayout &DL,
-                                                       Type *Ty) {
+uint64_t getAggregatedBitwidthInByteLevel(const DataLayout &DL, Type *Ty) {
   if (Ty->isArrayTy())
     return Ty->getArrayNumElements() *
            getAggregatedBitwidthInByteLevel(DL, Ty->getArrayElementType());
@@ -58,7 +56,7 @@ uint64_t getAggregatedBitwidthInByteLevel(const DataLayout &DL,
       BW += getAggregatedBitwidthInByteLevel(DL, Ty->getStructElementType(i));
     }
     return BW;
-  // Maybe VectorTy?
+    // Maybe VectorTy?
   } else
     return alignTo(DL.getTypeSizeInBits(Ty), 8);
 }
@@ -80,10 +78,9 @@ uint64_t getAggregatedBitwidth(const DataLayout &DL, Type *Ty,
 
 // For AXIS 'bit' aggregation, need to align the final bitwidth to 8-bits
 uint64_t getAggregatedBitwidth(const DataLayout &DL, Type *Ty,
-                               AggregateType AggrTy, HwType HwTy) {
+                               AggregateType AggrTy, InterfaceInfo IFInfo) {
   auto BW = getAggregatedBitwidth(DL, Ty, AggrTy);
-  if ((HwTy == HwType::AXIS_ARRAY || HwTy == HwType::AXIS_HLS_STREAM) &&
-      AggrTy == AggregateType::Bit)
+  if (IFInfo.IM == InterfaceMode::AXIS && AggrTy == AggregateType::Bit)
     BW = alignTo(BW, 8);
   return BW;
 }
@@ -124,28 +121,111 @@ std::string getAggregateTypeStr(AggregateType AggrTy) {
   return "default";
 }
 
-std::string getHwTypeStr(HwType HwTy) {
-  switch (HwTy) {
-  case HwType::Scalar:
-    return "scalar";
-  case HwType::BRAM:
-    return "bram";
-  case HwType::FIFO_ARRAY:
-    return "fifo (array-to-stream)";
-  case HwType::FIFO_HLS_STREAM:
-    return "fifo (hls::stream)";
-  case HwType::AXIS_ARRAY:
-    return "axis (array-to-stream)";
-  case HwType::AXIS_HLS_STREAM:
-    return "axis (hls::stream)";
-  case HwType::AXIS_SIDE_CHANNEL:
-    return "axis (with side-channel)";
-  case HwType::MAXI:
-    return "maxi";
+std::string getInterfaceModeStr(const InterfaceInfo &Info) {
+  std::string InfoStr;
+  switch (Info.IM) {
+  case InterfaceMode::Auto:
+    InfoStr = "auto";
+    break;
+  case InterfaceMode::None:
+    InfoStr = "none";
+    break;
+  case InterfaceMode::Stable:
+    InfoStr = "stable";
+    break;
+  case InterfaceMode::Vld:
+    InfoStr = "vld";
+    break;
+  case InterfaceMode::OVld:
+    InfoStr = "ovld";
+    break;
+  case InterfaceMode::Ack:
+    InfoStr = "ack";
+    break;
+  case InterfaceMode::HS:
+    InfoStr = "hs";
+    break;
+  case InterfaceMode::Fifo:
+    InfoStr = "fifo";
+    break;
+  case InterfaceMode::MemFifo:
+    InfoStr = "memfifo";
+    break;
+  case InterfaceMode::Memory:
+    InfoStr = "ap_memory";
+    break;
+  case InterfaceMode::Bram:
+    InfoStr = "bram";
+    break;
+  case InterfaceMode::AXIS:
+    InfoStr = "axis";
+    break;
+  case InterfaceMode::MAXI:
+    InfoStr = "maxi";
+    break;
+  case InterfaceMode::SAXILite:
+    InfoStr = "s_axilite";
+    break;
   default:
-    llvm_unreachable("other HW types?!");
+    llvm_unreachable("other interface mode?!");
   }
-  return "";
+  switch (Info.IT) {
+  case ImplementType::Array:
+    InfoStr += ": array";
+    break;
+  case ImplementType::HLSStream:
+    InfoStr += ": hls::stream";
+    break;
+  case ImplementType::StreamSideChannel:
+    InfoStr += ": hls::stream with side-channels";
+    break;
+  default:
+    break;
+  }
+  return InfoStr;
+}
+
+std::string getHwTypeStr(const InterfaceInfo &Info) {
+  std::string InfoStr;
+  switch (Info.IM) {
+  case InterfaceMode::Auto:
+  case InterfaceMode::None:
+  case InterfaceMode::Stable:
+  case InterfaceMode::Vld:
+  case InterfaceMode::OVld:
+  case InterfaceMode::Ack:
+  case InterfaceMode::HS:
+  case InterfaceMode::SAXILite:
+    InfoStr = "scalar";
+    break;
+  case InterfaceMode::Fifo:
+    if (Info.IT == ImplementType::HLSStream)
+      InfoStr = "fifo (hls::stream)";
+    else
+      InfoStr = "fifo (array-to-stream)";
+    break;
+  case InterfaceMode::MemFifo:
+    InfoStr = "stream-of-blocks";
+    break;
+  case InterfaceMode::Memory:
+  case InterfaceMode::Bram:
+    InfoStr = "bram";
+    break;
+  case InterfaceMode::AXIS:
+    if (Info.IT == ImplementType::HLSStream)
+      InfoStr = "axis (hls::stream)";
+    else if (Info.IT == ImplementType::StreamSideChannel)
+      InfoStr = "axis (with side-channel)";
+    else
+      InfoStr = "axis (array-to-stream)";
+    break;
+  case InterfaceMode::MAXI:
+    InfoStr = "maxi";
+    break;
+  default:
+    llvm_unreachable("other interface mode?!");
+  }
+  return InfoStr;
 }
 
 } // namespace llvm

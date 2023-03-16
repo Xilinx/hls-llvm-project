@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -26,11 +26,68 @@
 #ifndef AGGREGATE_INFO_H
 #define AGGREGATE_INFO_H
 
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Type.h"
 #include <cstdint>
 
 namespace llvm {
+
+enum class InterfaceMode {
+  Auto = 0, // Normal mode, not set
+  None,     // None mode
+  Stable,   // Stable mode
+  Vld,      // Valid mode
+  OVld,     // Output valid mode
+  Ack,      // Acknowledge mode
+  HS,       // Handshaking mode
+  Fifo,     // Fifo mode
+  MemFifo,  // Memory fifo mode, stream_of_blocks
+  Memory,   // Memory mode
+  Bram,     // Bram mode
+  AXIS,     // AXI-stream mode
+  MAXI,     // AXI master mode
+  SAXILite, // AXI lite slave mode
+  ModeSize
+};
+
+enum class ImplementType {
+  None = 0,
+  Array = 1 << 0,            // C builtin array
+  HLSStream = 1 << 1,        // hls::stream
+  StreamSideChannel = 1 << 2 // hls::stream with side-channel
+};
+
+struct InterfaceInfo {
+  InterfaceMode IM;
+  ImplementType IT;
+  // related interface spec
+  // it's located in top function, and should not deleted/invalidated. Otherwise
+  // we need to use WeakVH instead
+  InterfaceInst *Spec;
+
+  InterfaceInfo()
+      : IM(InterfaceMode::Auto), IT(ImplementType::None), Spec(nullptr) {}
+  InterfaceInfo(const InterfaceInfo &Info)
+      : IM(Info.IM), IT(Info.IT), Spec(Info.Spec) {}
+  InterfaceInfo(InterfaceMode Mode)
+      : IM(Mode), IT(ImplementType::None), Spec(nullptr) {}
+  InterfaceInfo(InterfaceMode Mode, InterfaceInst *Spec)
+      : IM(Mode), IT(ImplementType::None), Spec(Spec) {}
+  InterfaceInfo(InterfaceMode Mode, ImplementType IT)
+      : IM(Mode), IT(IT), Spec(nullptr) {}
+
+  // useless interface info
+  bool isNull() {
+    return IM == InterfaceMode::Auto && IT == ImplementType::None && !Spec;
+  }
+  bool operator==(const InterfaceInfo &Info) {
+    return this->IM == Info.IM;
+  }
+  bool operator!=(const InterfaceInfo &Info) {
+    return !(this->IM == Info.IM);
+  }
+};
 
 enum class AggregateType {
   NoSpec = 0,   // no aggregate pragma at all
@@ -38,21 +95,6 @@ enum class AggregateType {
   Bit,          // -compact bit, field bit alignment
   Byte,         // -compact byte, field byte alignment
   NoCompact     // -compact none, no padding removal
-};
-
-enum class HwType {
-  None,
-  FIFO,              // temp type (stream pragma or ap_fifo interface)
-  HLS_STREAM,        // temp type (hls::stream)
-  AXIS,              // temp type (axis pragma)
-  Scalar,            // final type
-  BRAM,              // final type
-  FIFO_ARRAY,        // final type (array-to-stream: stream pragma on array)
-  FIFO_HLS_STREAM,   // final type (stream pragma on hls::stream)
-  AXIS_ARRAY,        // final type (array-to-axis: axis pragma on array)
-  AXIS_HLS_STREAM,   // final type (axis pragma on hls::stream)
-  AXIS_SIDE_CHANNEL, // final type (from axis-with-side-channel intrinsics)
-  MAXI               // final type (maxi pragma)
 };
 
 struct AggregateInfo {
@@ -78,7 +120,7 @@ uint64_t getAggregatedBitwidth(const DataLayout &DL, Type *Ty,
                                AggregateType AggrTy);
 
 uint64_t getAggregatedBitwidth(const DataLayout &DL, Type *Ty,
-                               AggregateType AggrTy, HwType HwTy);
+                               AggregateType AggrTy, InterfaceInfo IFInfo);
 
 void getStructFieldOffsetSizePairsInBits(
     const DataLayout &DL, Type *Ty, uint64_t Start,
@@ -86,7 +128,10 @@ void getStructFieldOffsetSizePairsInBits(
 
 std::string getAggregateTypeStr(AggregateType AggrTy);
 
-std::string getHwTypeStr(HwType HwTy);
+std::string getInterfaceModeStr(const InterfaceInfo &Info);
+// for compatible with original aggregation/disaggregation msg dump
+std::string getHwTypeStr(const InterfaceInfo &Info);
+
 
 } // namespace llvm
 #endif // !AGGREGATE_INFO_H

@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -244,7 +244,6 @@ enum OP_TYPE
     OP_SPECFUCORE = 2131,
     OP_SPECIFCORE = 2132,
     OP_SPECIPCORE = 2133,
-    OP_SPECKEEPVALUE = 2134,
     OP_SPECMEMCORE = 2135,
     OP_SPECCHCORE = 2136,
     OP_SPECRESOURCELIMIT = 2137,
@@ -359,8 +358,7 @@ enum IMPL_TYPE
     ROM5S_AUTO,
     ROM_AUTO,
     ROM_COREGEN_AUTO,
-    ROM_NP_AUTO,
-    SHIFTREG_AUTO,
+    SHIFTREG_AUTO = 150,
     SPRAM_COREGEN_AUTO,
     SPROM_COREGEN_AUTO,
     SPWOM_AUTO,
@@ -545,23 +543,38 @@ public:
     @param coreName, user specified core name string
     @return a vector of pairs of OP_TYPE and IMPL_TYPE, empty vector if coreName is unsupported
     */
+    std::vector<std::pair<OP_TYPE, IMPL_TYPE>> getOpImplFromCoreNameInCompleteRepository(const std::string& coreName) const;
+
+    /* 
+    */
     std::vector<std::pair<OP_TYPE, IMPL_TYPE>> getOpImplFromCoreName(const std::string& coreName) const;
 
     /*
     @brief for new resource pragma: bind_op
     @param opStr, user specified op
     @param implStr, user specified impl, if not specified, pass empty string ""
-    @return a pair of enum OP_TYPE and enum IMPL_TYPE, <OP_UNSUPPORTED, UNSUPPORTED> if opStr or implStr is unsupported
+    @return a pair of enum OP_TYPE and enum IMPL_TYPE, despite of the target device. Return <OP_UNSUPPORTED, UNSUPPORTED> if opStr or implStr is unsupported
+    */
+    std::pair<OP_TYPE, IMPL_TYPE> getOpImplFromStr(const std::string& opStr, const std::string& implStr) const;
+
+    /*
+    @brief similar as getOpImplFromStr, this API also checks the availability of op+impl on the current device 
+    @return a pair of enum OP_TYPE and enum IMPL_TYPE. Return <OP_UNSUPPORTED, UNSUPPORTED> if the op+impl is not available on the current device
     */
     std::pair<OP_TYPE, IMPL_TYPE> verifyBindOp(const std::string& opStr, const std::string& implStr) const;
-
     /*
     @brief for new resource pragma: bind_storage
     @param typeStr, user specified memory type 
     @param implStr, user specified memory implemention, if not specified, pass empty string ""
-    @return a pair of enum OP_TYPE and enum IMPL_TYPE, <OP_UNSUPPORTED, UNSUPPORTED> if opStr or implStr is unsupported
+    @return a pair of enum OP_TYPE and enum IMPL_TYPE, despite of the target device. Return <OP_UNSUPPORTED, UNSUPPORTED> if opStr or implStr is unsupported
     */
-    std::pair<OP_TYPE, IMPL_TYPE> verifyBindStorage(const std::string& typeStr, const std::string& implStr) const;
+    std::pair<OP_TYPE, IMPL_TYPE> getStorageTypeImplFromStr(const std::string& typeStr, const std::string& implStr) const;
+
+    /*
+    @brief similar as  getOpImplFromStr, this API also checks the availability of storage type+impl on the current device 
+    @return a pair of enum OP_TYPE and enum IMPL_TYPE. Return <OP_UNSUPPORTED, UNSUPPORTED> if the storage type+impl is not available on the current device
+    */
+    std::pair<OP_TYPE, IMPL_TYPE> verifyBindStorage(const std::string& opStr, const std::string& implStr) const;
 
     /*
     @brief for new interface pragma option: storage_type
@@ -624,7 +637,7 @@ public:
     MEMORY_IMPL getMemImplFromName(const std::string& memImplName) const;
 
     static bool isMemoryOp(OP_TYPE op);  
-      static bool isNOIMPL(IMPL_TYPE impl) { return impl >= NOIMPL; }
+    static bool isNOIMPL(IMPL_TYPE impl) { return impl >= NOIMPL; }
 // for PF
 friend class CoreInstFactory;
 friend class ConfigedLib;
@@ -696,8 +709,10 @@ private:
     void createMemoryCoreBasic(std::string coreName, std::string op, std::string impl, int maxLat, int minLat, bool isPublic);
     bool loadStrEnumConverter();
     bool loadAlias();
+    bool loadCoreBasicInCompleteRepository();
     std::map<int, CoreBasic*> mCoreBasicMap;
-    std::map<std::string, std::vector<CoreBasic*>> mCoreNameMap; //< name to core for old pragma
+    std::map<std::string, std::vector<CoreBasic*>> mCoreNameMap; 
+    std::map<std::string, std::vector<CoreBasic*>> mCoreNameMapInCompleteRepository; //< name to core for old pragma
 
     std::map<OP_TYPE, std::string> mOpEnum2Str;
     std::map<std::string, OP_TYPE> mOpStr2Enum;
@@ -714,6 +729,9 @@ private:
 }; //< class PlatformBasic
 
 void SetPlatformDbFile( std::string path );
+void SetPlatformDeviceResourceInfo( std::string resource_info );
+void SetPlatformDeviceNameInfo ( std::string deviceName );
+std::string GetPlatformDeviceNameInfo ();
 
 }//< namepsace platform
 

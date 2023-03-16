@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the interface to tear out a code region, such as an
@@ -41,6 +46,10 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
@@ -57,6 +66,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -755,7 +765,7 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
 /// emitCallAndSwitchStatement - This method sets up the caller side by adding
 /// the call instruction, splitting any PHI nodes in the header block as
 /// necessary.
-void CodeExtractor::
+CallInst *CodeExtractor::
 emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
                            ValueSet &inputs, ValueSet &outputs) {
   // Emit a call to the new function, passing in: *pointer to struct (if
@@ -982,6 +992,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
     TheSwitch->removeCase(SwitchInst::CaseIt(TheSwitch, NumExitBlocks-1));
     break;
   }
+  return call;
 }
 
 void CodeExtractor::moveCodeToFunction(Function *newFunction) {
@@ -1042,6 +1053,122 @@ void CodeExtractor::calculateNewCallTerminatorWeights(
       LLVMContext::MD_prof,
       MDBuilder(TI->getContext()).createBranchWeights(BranchWeights));
 }
+/// Erase debug info intrinsics which refer to values in \p F but aren't in
+/// \p F.
+static void eraseDebugIntrinsicsWithNonLocalRefs(Function &F) {
+   for (Instruction &I : instructions(F)) {
+     SmallVector<DbgInfoIntrinsic *, 4> DbgUsers;
+     findDbgUsers(DbgUsers, &I);
+     for (DbgInfoIntrinsic *DVI : DbgUsers)
+       if (DVI->getFunction() != &F)
+         DVI->eraseFromParent();
+   }
+ }
+  
+ /// Fix up the debug info in the old and new functions by pointing line
+ /// locations and debug intrinsics to the new subprogram scope, and by deleting
+ /// intrinsics which point to values outside of the new function.
+ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
+                                          CallInst &TheCall) {
+   DISubprogram *OldSP = OldFunc.getSubprogram();
+   LLVMContext &Ctx = OldFunc.getContext();
+  
+   if (!OldSP) {
+     // Erase any debug info the new function contains.
+     stripDebugInfo(NewFunc);
+     // Make sure the old function doesn't contain any non-local metadata refs.
+     eraseDebugIntrinsicsWithNonLocalRefs(NewFunc);
+     return;
+   }
+  
+   // Create a subprogram for the new function. Leave out a description of the
+   // function arguments, as the parameters don't correspond to anything at the
+   // source level.
+   assert(OldSP->getUnit() && "Missing compile unit for subprogram");
+   DIBuilder DIB(*OldFunc.getParent(), /*AllowUnresolved=*/false,
+                 OldSP->getUnit());
+   auto SPType = DIB.createSubroutineType(DIB.getOrCreateTypeArray(None));
+   auto NewSP = DIB.createFunction(
+       OldSP->getUnit(), NewFunc.getName(), NewFunc.getName(), OldSP->getFile(),
+       /*LineNo=*/0, SPType, true, true, /*ScopeLine=*/0, DINode::FlagZero, true);
+   NewFunc.setSubprogram(NewSP);
+  
+   // Debug intrinsics in the new function need to be updated in one of two
+   // ways:
+   //  1) They need to be deleted, because they describe a value in the old
+   //     function.
+   //  2) They need to point to fresh metadata, e.g. because they currently
+   //     point to a variable in the wrong scope.
+   SmallDenseMap<DINode *, DINode *> RemappedMetadata;
+   SmallVector<Instruction *, 4> DebugIntrinsicsToDelete;
+   for (Instruction &I : instructions(NewFunc)) {
+     auto *DII = dyn_cast<DbgInfoIntrinsic>(&I);
+     if (!DII)
+       continue;
+#if 0
+     // Point the intrinsic to a fresh label within the new function.
+     if (auto *DLI = dyn_cast<DbgLabelInst>(&I)) {
+       DILabel *OldLabel = DLI->getLabel();
+       DINode *&NewLabel = RemappedMetadata[OldLabel];
+       if (!NewLabel)
+         NewLabel = DILabel::get(Ctx, NewSP, OldLabel->getName(),
+                                 OldLabel->getFile(), OldLabel->getLine());
+       DLI->setArgOperand(0, MetadataAsValue::get(Ctx, NewLabel));
+       continue;
+     }
+#endif
+     auto IsInvalidLocation = [&NewFunc](Value *Location) {
+       // Location is invalid if it isn't a constant or an instruction, or is an
+       // instruction but isn't in the new function.
+       if (!Location ||
+           (!isa<Constant>(Location) && !isa<Instruction>(Location)))
+         return true;
+       Instruction *LocationInst = dyn_cast<Instruction>(Location);
+       return LocationInst && LocationInst->getFunction() != &NewFunc;
+     };
+  
+     auto *DVI = cast<DbgInfoIntrinsic>(DII);
+     Value *Location = DVI->getVariableLocation();
+     // If any of the used locations are invalid, delete the intrinsic.
+     if (IsInvalidLocation(Location)) {
+       DebugIntrinsicsToDelete.push_back(DVI);
+       continue;
+     }
+  
+     // Point the intrinsic to a fresh variable within the new function.
+     DILocalVariable *OldVar = DVI->getVariable();
+     DINode *&NewVar = RemappedMetadata[OldVar];
+     if (!NewVar)
+       NewVar = DIB.createAutoVariable(
+           NewSP, OldVar->getName(), OldVar->getFile(), OldVar->getLine(),
+           OldVar->getType().resolve(), /*AlwaysPreserve=*/false, DINode::FlagZero,
+           OldVar->getAlignInBits());
+     DVI->setVariable(cast<DILocalVariable>(NewVar));
+   }
+   for (auto *DII : DebugIntrinsicsToDelete)
+     DII->eraseFromParent();
+   DIB.finalizeSubprogram(NewSP);
+  
+   // Fix up the scope information attached to the line locations in the new
+   // function.
+   for (Instruction &I : instructions(NewFunc)) {
+     if (const DebugLoc &DL = I.getDebugLoc())
+       I.setDebugLoc(DILocation::get(Ctx, DL.getLine(), DL.getCol(), NewSP));
+  
+     // Loop info metadata may contain line locations. Fix them up.
+     auto updateLoopInfoLoc = [&Ctx, NewSP](Metadata *MD) -> Metadata * {
+       if (auto *Loc = dyn_cast_or_null<DILocation>(MD))
+         return DILocation::get(Ctx, Loc->getLine(), Loc->getColumn(), NewSP,
+                                nullptr);
+       return MD;
+     };
+     updateLoopMetadataDebugLocations(I, updateLoopInfoLoc);
+   }
+   if (!TheCall.getDebugLoc())
+     TheCall.setDebugLoc(DILocation::get(Ctx, 0, 0, OldSP));
+  
+   eraseDebugIntrinsicsWithNonLocalRefs(NewFunc);
+} 
 
 Function *CodeExtractor::extractCodeRegion() {
   if (!isEligible())
@@ -1171,7 +1298,7 @@ Function *CodeExtractor::extractCodeRegion() {
     BFI->setBlockFreq(codeReplacer, EntryFreq.getFrequency());
   }
 
-  emitCallAndSwitchStatement(newFunction, codeReplacer, inputs, outputs);
+  auto TheCall = emitCallAndSwitchStatement(newFunction, codeReplacer, inputs, outputs);
 
   moveCodeToFunction(newFunction);
 
@@ -1209,6 +1336,8 @@ Function *CodeExtractor::extractCodeRegion() {
           }
         }
     }
+
+  fixupDebugInfoPostExtraction(*oldFunction, *newFunction, *TheCall);
 
   DEBUG(if (verifyFunction(*newFunction)) 
         report_fatal_error("verifyFunction failed!"));

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -92,6 +92,11 @@ using namespace llvm::PatternMatch;
 extern cl::opt<bool> HLS;
 
 #define DEBUG_TYPE "local"
+
+static cl::opt<unsigned> PHINodeEntryNumThreshold(
+    "phi-node-entry-num-threshold", cl::Hidden, cl::init(128),
+    cl::desc("Control the predecessor number when fold empty block into "
+             "successor (default = 128)"));
 
 STATISTIC(NumRemoved, "Number of unreachable basic blocks removed");
 
@@ -976,10 +981,19 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
     }
   }
 
-  if (HLS && !BB->getSinglePredecessor() &&
-      !Succ->getSinglePredecessor() &&
-      !isa<PHINode>(BB->begin()))
-    return false;
+  if (HLS && !BB->getSinglePredecessor() && !Succ->getSinglePredecessor()) {
+    if (!isa<PHINode>(BB->begin()))
+      return false;
+
+    /// we should set threshold when merge BB and successor
+    /// do this can aviod generate huge phi nodes
+    /// Case: BugSpray/crs/1125423
+    unsigned BBNumPreds = std::distance(pred_begin(BB), pred_end(BB));
+    unsigned SuccNumPreds = std::distance(pred_begin(Succ), pred_end(Succ));
+    if (BBNumPreds + SuccNumPreds > PHINodeEntryNumThreshold)
+      return false;
+  }
+
  DEBUG(dbgs() << "Killing Trivial BB: \n" << *BB);
 
   std::vector<DominatorTree::UpdateType> Updates;

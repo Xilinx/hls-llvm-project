@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -340,6 +340,11 @@ void Parser::initializePragmaHandlers() {
       PP.AddPragmaHandler(XlxHLSDIRECTIVEHandler.get());
     }
 
+    if (!PP.hasPragmaHandler("SLXDIRECTIVE")) { 
+      XlxSLXDIRECTIVEHandler.reset(new PragmaXlxHandler("SLXDIRECTIVE", tok::annot_pragma_XlxSLX_directive)); 
+      PP.AddPragmaHandler(XlxSLXDIRECTIVEHandler.get());
+    }
+
     if (!PP.hasPragmaHandler("AP")) {
       XlxAPHandler.reset(new PragmaXlxHandler("AP", tok::annot_pragma_XlxHLS_old));
       PP.AddPragmaHandler(XlxAPHandler.get());
@@ -457,6 +462,12 @@ void Parser::resetPragmaHandlers() {
       PP.RemovePragmaHandler(XlxHLSDIRECTIVEHandler.get());
       XlxHLSDIRECTIVEHandler.reset();
     }
+
+    if (XlxSLXDIRECTIVEHandler) { 
+      PP.RemovePragmaHandler(XlxSLXDIRECTIVEHandler.get());
+      XlxSLXDIRECTIVEHandler.reset();
+    }
+
     if (XlxhlsHandler) {
       PP.RemovePragmaHandler(XlxhlsHandler.get());
       XlxhlsHandler.reset();
@@ -3193,6 +3204,7 @@ void PragmaXlxHandler::HandlePragma(Preprocessor &PP,
   Tok.startToken();
   Tok.setKind(StartKind);
   Tok.setLocation(FirstTok.getLocation());
+  Tok.setAnnotationValue(FirstTok.getIdentifierInfo()); 
 
   while (Tok.isNot(tok::eod)) {
     Pragma.push_back(Tok);

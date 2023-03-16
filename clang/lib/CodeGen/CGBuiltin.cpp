@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1077,6 +1077,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     case Builtin::BI__builtin_exp:
     case Builtin::BI__builtin_expf:
     case Builtin::BI__builtin_expl:
+    case Builtin::BI__builtin_exph:
       return RValue::get(emitUnaryBuiltin(*this, E, Intrinsic::exp));
 
     case Builtin::BIexp2:
@@ -1150,6 +1151,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     case Builtin::BI__builtin_log:
     case Builtin::BI__builtin_logf:
     case Builtin::BI__builtin_logl:
+    case Builtin::BI__builtin_logh:
       return RValue::get(emitUnaryBuiltin(*this, E, Intrinsic::log));
 
     case Builtin::BIlog10:
@@ -1219,10 +1221,12 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
 
     case Builtin::BI__builtin_recip:
     case Builtin::BI__builtin_recipf:
+    case Builtin::BI__builtin_reciph:
       return RValue::get(emitUnaryBuiltin(*this, E, Intrinsic::fpga_recip));
 
     case Builtin::BI__builtin_rsqrt:
     case Builtin::BI__builtin_rsqrtf:
+    case Builtin::BI__builtin_rsqrth:
       return RValue::get(emitUnaryBuiltin(*this, E, Intrinsic::fpga_rsqrt));
 
     case Builtin::BItrunc:

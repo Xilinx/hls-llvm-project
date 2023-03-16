@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -118,6 +118,7 @@
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
@@ -143,6 +144,8 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "scalar-evolution"
+
+extern cl::opt<bool> HLS;
 
 STATISTIC(NumArrayLenItCounts,
           "Number of trip counts computed with array length");
@@ -1324,6 +1327,7 @@ const SCEV *ScalarEvolution::getTruncateExpr(const SCEV *Op,
                                                  Op, Ty);
   UniqueSCEVs.InsertNode(S, IP);
   addToLoopUseLists(S);
+  registerUser(S, Op);
   return S;
 }
 
@@ -1619,6 +1623,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
                                                      Op, Ty);
     UniqueSCEVs.InsertNode(S, IP);
     addToLoopUseLists(S);
+    registerUser(S, Op);
     return S;
   }
 
@@ -1806,6 +1811,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
                                                    Op, Ty);
   UniqueSCEVs.InsertNode(S, IP);
   addToLoopUseLists(S);
+  registerUser(S, Op);
   return S;
 }
 
@@ -1848,6 +1854,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
                                                      Op, Ty);
     UniqueSCEVs.InsertNode(S, IP);
     addToLoopUseLists(S);
+    registerUser(S, Op);
     return S;
   }
 
@@ -2060,6 +2067,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
                                                    Op, Ty);
   UniqueSCEVs.InsertNode(S, IP);
   addToLoopUseLists(S);
+  registerUser(S, Op);
   return S;
 }
 
@@ -2709,6 +2717,7 @@ ScalarEvolution::getOrCreateAddExpr(SmallVectorImpl<const SCEV *> &Ops,
         SCEVAddExpr(ID.Intern(SCEVAllocator), O, Ops.size());
     UniqueSCEVs.InsertNode(S, IP);
     addToLoopUseLists(S);
+    registerUser(S, Ops);
   }
   S->setNoWrapFlags(Flags);
   return S;
@@ -2731,6 +2740,7 @@ ScalarEvolution::getOrCreateMulExpr(SmallVectorImpl<const SCEV *> &Ops,
                                         O, Ops.size());
     UniqueSCEVs.InsertNode(S, IP);
     addToLoopUseLists(S);
+    registerUser(S, Ops);
   }
   S->setNoWrapFlags(Flags);
   return S;
@@ -3188,6 +3198,7 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
                                              LHS, RHS);
   UniqueSCEVs.InsertNode(S, IP);
   addToLoopUseLists(S);
+  registerUser(S, {LHS, RHS});
   return S;
 }
 
@@ -3369,6 +3380,7 @@ ScalarEvolution::getAddRecExpr(SmallVectorImpl<const SCEV *> &Operands,
                                            O, Operands.size(), L);
     UniqueSCEVs.InsertNode(S, IP);
     addToLoopUseLists(S);
+    registerUser(S, Operands);
   }
   S->setNoWrapFlags(Flags);
   return S;
@@ -3525,6 +3537,7 @@ ScalarEvolution::getSMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
                                              O, Ops.size());
   UniqueSCEVs.InsertNode(S, IP);
   addToLoopUseLists(S);
+  registerUser(S, Ops);
   return S;
 }
 
@@ -3627,6 +3640,7 @@ ScalarEvolution::getUMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
                                              O, Ops.size());
   UniqueSCEVs.InsertNode(S, IP);
   addToLoopUseLists(S);
+  registerUser(S, Ops);
   return S;
 }
 
@@ -3818,6 +3832,22 @@ static bool SCEVLostPoisonFlags(const SCEV *S, const Value *V) {
   return false;
 }
 
+void ScalarEvolution::insertValueToMap(Value *V, const SCEV *S) {
+  // A recursive query may have already computed the SCEV. It should be
+  // equivalent, but may not necessarily be exactly the same, e.g. due to lazily
+  // inferred nowrap flags.
+  auto It = ValueExprMap.find_as(V);
+  if (It == ValueExprMap.end()) {
+    DEBUG({
+      dbgs() << "Insert ValueExprMap/ExprValueMap:[";
+      dbgs() << *S << ", ";
+      dbgs() << *V << "]\n";
+    });
+    ValueExprMap.insert({SCEVCallbackVH(V, this), S});
+    ExprValueMap[S].insert({V, nullptr});
+  }
+}
+
 /// Return an existing SCEV if it exists, otherwise analyze the expression and
 /// create a new one.
 const SCEV *ScalarEvolution::getSCEV(Value *V) {
@@ -3890,6 +3920,41 @@ const SCEV *ScalarEvolution::getNotSCEV(const SCEV *V) {
   const SCEV *AllOnes =
                    getConstant(cast<ConstantInt>(Constant::getAllOnesValue(Ty)));
   return getMinusSCEV(AllOnes, V);
+}
+
+/// Compute an expression equivalent to S - getPointerBase(S).
+const SCEV *ScalarEvolution::removePointerBase(const SCEV *P) {
+  assert(P->getType()->isPointerTy());
+
+  if (auto *AddRec = dyn_cast<SCEVAddRecExpr>(P)) {
+    // The base of an AddRec is the first operand.
+    SmallVector<const SCEV *, 2> Ops{AddRec->operands()};
+    Ops[0] = removePointerBase(Ops[0]);
+    // Don't try to transfer nowrap flags for now. We could in some cases
+    // (for example, if pointer operand of the AddRec is a SCEVUnknown).
+    return getAddRecExpr(Ops, AddRec->getLoop(), SCEV::FlagAnyWrap);
+  }
+  if (auto *Add = dyn_cast<SCEVAddExpr>(P)) {
+    // The base of an Add is the pointer operand.
+    SmallVector<const SCEV *, 2> Ops{Add->operands()};
+    const SCEV **PtrOp = nullptr;
+    for (const SCEV *&AddOp : Ops) {
+      if (AddOp->getType()->isPointerTy()) {
+        // If we find an Add with multiple pointer operands, treat it as a
+        // pointer base to be consistent with getPointerBase.  Eventually
+        // we should be able to assert this is impossible.
+        if (PtrOp)
+          return getZero(P->getType());
+        PtrOp = &AddOp;
+      }
+    }
+    *PtrOp = removePointerBase(*PtrOp);
+    // Don't try to transfer nowrap flags for now. We could in some cases
+    // (for example, if the pointer operand of the Add is a SCEVUnknown).
+    return getAddExpr(Ops);
+  }
+  // Any other expression must be a pointer base.
+  return getZero(P->getType());
 }
 
 const SCEV *ScalarEvolution::getMinusSCEV(const SCEV *LHS, const SCEV *RHS,
@@ -4063,22 +4128,25 @@ const SCEV *ScalarEvolution::getPointerBase(const SCEV *V) {
 /// Push users of the given Instruction onto the given Worklist.
 static void
 PushDefUseChildren(Instruction *I,
-                   SmallVectorImpl<Instruction *> &Worklist) {
+                   SmallVectorImpl<Instruction *> &Worklist,
+                   SmallPtrSetImpl<Instruction *> &Visited) {
   // Push the def-use children onto the Worklist stack.
-  for (User *U : I->users())
-    Worklist.push_back(cast<Instruction>(U));
+  for (User *U : I->users()) {
+    auto *UserInsn = cast<Instruction>(U);
+    if (Visited.insert(UserInsn).second)
+      Worklist.push_back(UserInsn);
+  }
 }
 
 void ScalarEvolution::forgetSymbolicName(Instruction *PN, const SCEV *SymName) {
   SmallVector<Instruction *, 16> Worklist;
-  PushDefUseChildren(PN, Worklist);
+  SmallVector<const SCEV *, 8> ToForget;
 
   SmallPtrSet<Instruction *, 8> Visited;
   Visited.insert(PN);
+  Worklist.push_back(PN);
   while (!Worklist.empty()) {
     Instruction *I = Worklist.pop_back_val();
-    if (!Visited.insert(I).second)
-      continue;
 
     auto It = ValueExprMap.find_as(static_cast<Value *>(I));
     if (It != ValueExprMap.end()) {
@@ -4096,16 +4164,15 @@ void ScalarEvolution::forgetSymbolicName(Instruction *PN, const SCEV *SymName) {
       // In the second case, createNodeForPHI will perform the necessary
       // updates on its own when it gets to that point. In the third, we do
       // want to forget the SCEVUnknown.
-      if (!isa<PHINode>(I) ||
-          !isa<SCEVUnknown>(Old) ||
-          (I != PN && Old == SymName)) {
+      if (!isa<PHINode>(I) || !isa<SCEVUnknown>(Old) || Old == SymName) {
         eraseValueFromMap(It->first);
-        forgetMemoizedResults(Old);
+        ToForget.push_back(Old);
       }
     }
 
-    PushDefUseChildren(I, Worklist);
+    PushDefUseChildren(I, Worklist, Visited);
   }
+  forgetMemoizedResults(ToForget);
 }
 
 namespace {
@@ -4846,8 +4913,7 @@ const SCEV *ScalarEvolution::createSimpleAffineAddRec(PHINode *PN,
 
   const SCEV *StartVal = getSCEV(StartValueV);
   const SCEV *PHISCEV = getAddRecExpr(StartVal, Accum, L, Flags);
-
-  ValueExprMap[SCEVCallbackVH(PN, this)] = PHISCEV;
+  insertValueToMap(PN, PHISCEV);
 
   // We can add Flags to the post-inc expression only if we
   // know that it is *undefined behavior* for BEValueV to
@@ -4897,7 +4963,7 @@ const SCEV *ScalarEvolution::createAddRecFromPHI(PHINode *PN) {
 
   // Handle PHI node value symbolically.
   const SCEV *SymbolicName = getUnknown(PN);
-  ValueExprMap.insert({SCEVCallbackVH(PN, this), SymbolicName});
+  insertValueToMap(PN, SymbolicName);
 
   // Using this symbolic name for the PHI, analyze the value coming around
   // the back-edge.
@@ -4969,7 +5035,7 @@ const SCEV *ScalarEvolution::createAddRecFromPHI(PHINode *PN) {
         // to be symbolic.  We now need to go back and purge all of the
         // entries for the scalars that use the symbolic expression.
         forgetSymbolicName(PN, SymbolicName);
-        ValueExprMap[SCEVCallbackVH(PN, this)] = PHISCEV;
+        insertValueToMap(PN, PHISCEV);
 
         // We can add Flags to the post-inc expression only if we
         // know that it is *undefined behavior* for BEValueV to
@@ -5001,7 +5067,7 @@ const SCEV *ScalarEvolution::createAddRecFromPHI(PHINode *PN) {
         // to be symbolic.  We now need to go back and purge all of the
         // entries for the scalars that use the symbolic expression.
         forgetSymbolicName(PN, SymbolicName);
-        ValueExprMap[SCEVCallbackVH(PN, this)] = Shifted;
+        insertValueToMap(PN, Shifted);
         return Shifted;
       }
     }
@@ -6295,6 +6361,24 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
     break;
 
   case Instruction::Call:
+    if (Value *RV = CallSite(U).getReturnedArgOperand())
+      return getSCEV(RV);
+    if (auto BitC = dyn_cast<BitConcatInst>(U)) {
+      IntegerType *RetTy = BitC->getType();
+      APInt Coefficient(RetTy->getBitWidth(), 1);  
+      auto BitCS = getZeroExtendExpr(getSCEV(BitC->getArgOperand(0)), RetTy);
+      for (unsigned i = 1; i < BitC->getNumArgOperands(); ++i) {
+        Value *V = BitC->getArgOperand(i);
+        auto VW = cast<IntegerType>(V->getType())->getBitWidth();
+        BitCS = getMulExpr(BitCS, getConstant(Coefficient.shl(VW)));
+        BitCS = getAddExpr(BitCS, getZeroExtendExpr(getSCEV(V), RetTy));
+      }
+
+      if (BitCS)
+        return BitCS;
+    }
+    break;
+
   case Instruction::Invoke:
     if (Value *RV = CallSite(U).getReturnedArgOperand())
       return getSCEV(RV);
@@ -6427,13 +6511,15 @@ bool ScalarEvolution::isBackedgeTakenCountMaxOrZero(const Loop *L) {
 }
 
 /// Push PHI nodes in the header of the given loop onto the given Worklist.
-static void
-PushLoopPHIs(const Loop *L, SmallVectorImpl<Instruction *> &Worklist) {
+static void PushLoopPHIs(const Loop *L,
+                         SmallVectorImpl<Instruction *> &Worklist,
+                         SmallPtrSetImpl<Instruction *> &Visited) {
   BasicBlock *Header = L->getHeader();
 
   // Push all Loop-header PHIs onto the Worklist stack.
   for (PHINode &PN : Header->phis())
-    Worklist.push_back(&PN);
+    if (Visited.insert(&PN).second)
+      Worklist.push_back(&PN);
 }
 
 const ScalarEvolution::BackedgeTakenInfo &
@@ -6489,9 +6575,9 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
   // it handles SCEVUnknown PHI nodes specially.
   if (Result.hasAnyInfo()) {
     SmallVector<Instruction *, 16> Worklist;
-    PushLoopPHIs(L, Worklist);
-
+    SmallVector<const SCEV *, 8> ToForget;
     SmallPtrSet<Instruction *, 8> Discovered;
+    PushLoopPHIs(L, Worklist, Discovered);
     while (!Worklist.empty()) {
       Instruction *I = Worklist.pop_back_val();
 
@@ -6508,7 +6594,7 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
         // own when it gets to that point.
         if (!isa<PHINode>(I) || !isa<SCEVUnknown>(Old)) {
           eraseValueFromMap(It->first);
-          forgetMemoizedResults(Old);
+          ToForget.push_back(Old);
         }
         if (PHINode *PN = dyn_cast<PHINode>(I))
           ConstantEvolutionLoopExitValue.erase(PN);
@@ -6540,6 +6626,7 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
             Worklist.push_back(I);
         }
     }
+    forgetMemoizedResults(ToForget,  /* SkipUnknownPhis */ true);
   }
 
   // Re-lookup the insert position, since the call to
@@ -6564,6 +6651,7 @@ void ScalarEvolution::forgetLoop(const Loop *L) {
   SmallVector<const Loop *, 16> LoopWorklist(1, L);
   SmallVector<Instruction *, 32> Worklist;
   SmallPtrSet<Instruction *, 16> Visited;
+  SmallVector<const SCEV *, 16> ToForget;
 
   // Iterate over all the loops and sub-loops to drop SCEV information.
   while (!LoopWorklist.empty()) {
@@ -6584,29 +6672,27 @@ void ScalarEvolution::forgetLoop(const Loop *L) {
 
     auto LoopUsersItr = LoopUsers.find(CurrL);
     if (LoopUsersItr != LoopUsers.end()) {
-      for (auto *S : LoopUsersItr->second)
-        forgetMemoizedResults(S);
+      ToForget.insert(ToForget.end(), LoopUsersItr->second.begin(),
+                LoopUsersItr->second.end());
       LoopUsers.erase(LoopUsersItr);
     }
 
     // Drop information about expressions based on loop-header PHIs.
-    PushLoopPHIs(CurrL, Worklist);
+    PushLoopPHIs(CurrL, Worklist, Visited);
 
     while (!Worklist.empty()) {
       Instruction *I = Worklist.pop_back_val();
-      if (!Visited.insert(I).second)
-        continue;
 
       ValueExprMapType::iterator It =
           ValueExprMap.find_as(static_cast<Value *>(I));
       if (It != ValueExprMap.end()) {
         eraseValueFromMap(It->first);
-        forgetMemoizedResults(It->second);
+        ToForget.push_back(It->second);
         if (PHINode *PN = dyn_cast<PHINode>(I))
           ConstantEvolutionLoopExitValue.erase(PN);
       }
 
-      PushDefUseChildren(I, Worklist);
+      PushDefUseChildren(I, Worklist, Visited);
     }
 
     LoopPropertiesCache.erase(CurrL);
@@ -6614,6 +6700,7 @@ void ScalarEvolution::forgetLoop(const Loop *L) {
     // ValuesAtScopes map.
     LoopWorklist.append(CurrL->begin(), CurrL->end());
   }
+  forgetMemoizedResults(ToForget);
 }
 
 void ScalarEvolution::forgetValue(Value *V) {
@@ -6622,25 +6709,24 @@ void ScalarEvolution::forgetValue(Value *V) {
 
   // Drop information about expressions based on loop-header PHIs.
   SmallVector<Instruction *, 16> Worklist;
-  Worklist.push_back(I);
-
   SmallPtrSet<Instruction *, 8> Visited;
+  SmallVector<const SCEV *, 8> ToForget;
+  Worklist.push_back(I);
+  Visited.insert(I);
   while (!Worklist.empty()) {
     I = Worklist.pop_back_val();
-    if (!Visited.insert(I).second)
-      continue;
-
     ValueExprMapType::iterator It =
       ValueExprMap.find_as(static_cast<Value *>(I));
     if (It != ValueExprMap.end()) {
       eraseValueFromMap(It->first);
-      forgetMemoizedResults(It->second);
+      ToForget.push_back(It->second);
       if (PHINode *PN = dyn_cast<PHINode>(I))
         ConstantEvolutionLoopExitValue.erase(PN);
     }
 
-    PushDefUseChildren(I, Worklist);
+    PushDefUseChildren(I, Worklist, Visited);
   }
+  forgetMemoizedResults(ToForget);
 }
 
 /// Get the exact loop backedge taken count considering all loop exits. A
@@ -9160,6 +9246,55 @@ bool ScalarEvolution::isImpliedCond(ICmpInst::Predicate Pred, const SCEV *LHS,
                                     ICmpInst::Predicate FoundPred,
                                     const SCEV *FoundLHS,
                                     const SCEV *FoundRHS) {
+
+  /// HLS begin
+  /// we do this enhancement for the change on instcombine on 
+  /// eliminating the sext/zext, this will make SCEV get correct
+  /// tripcount value, but will make loop unrotate fail to eliminate
+  /// the if guard.
+  /// CodeReview: http://hlsweb.xilinx.com/D8017
+  /// Failed Case: UnitSuite/Dataflow/interface_and_channel/BurstInfer/nested_variable_loop_bound
+
+  if (HLS) {
+    // Canonicalize the query to match the way instcombine will have
+    // canonicalized the comparison.
+    if (SimplifyICmpOperands(Pred, LHS, RHS))
+      if (LHS == RHS)
+        return CmpInst::isTrueWhenEqual(Pred);
+    if (SimplifyICmpOperands(FoundPred, FoundLHS, FoundRHS))
+      if (FoundLHS == FoundRHS)
+        return CmpInst::isFalseWhenEqual(FoundPred);
+
+    /// return true if sext(S1) == S2
+    auto isSignExtendedFrom = [this](const SCEV *S1, const SCEV *S2) -> bool {
+      if (!S1 || !S2)
+        return false;
+
+      if (const SCEVSignExtendExpr *Cast = dyn_cast<SCEVSignExtendExpr>(S2)) {
+        const SCEV *Op = Cast->getOperand();
+        return Op == S1;
+      } else if (isa<SCEVConstant>(S2)) {
+        if (getTypeSizeInBits(S1->getType()) < getTypeSizeInBits(S2->getType()))
+          return getSignExtendExpr(S1, S2->getType()) == S2;
+      }
+      return false;
+    };
+
+    /// icmp unsigned pred LHS, V <=> icmp unsigned Pred sext(LHS), sext(V)
+    if (Pred == FoundPred && !CmpInst::isSigned(Pred)) {
+      if (isSignExtendedFrom(LHS, FoundLHS) &&
+          isSignExtendedFrom(RHS, FoundRHS)) {
+        LHS = getSignExtendExpr(LHS, FoundLHS->getType());
+        RHS = getSignExtendExpr(RHS, FoundLHS->getType());
+      } else if (isSignExtendedFrom(FoundLHS, LHS) &&
+                 isSignExtendedFrom(FoundRHS, RHS)) {
+        FoundLHS = getSignExtendExpr(FoundLHS, LHS->getType());
+        FoundRHS = getSignExtendExpr(FoundRHS, LHS->getType());
+      }
+    }
+  }
+  /// HLS end
+
   // Balance the types.
   if (getTypeSizeInBits(LHS->getType()) <
       getTypeSizeInBits(FoundLHS->getType())) {
@@ -9836,6 +9971,15 @@ bool ScalarEvolution::doesIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
   return (std::move(MinValue) + MaxStrideMinusOne).ugt(MinRHS);
 }
 
+const SCEV *ScalarEvolution::getUDivCeilSCEV(const SCEV *N, const SCEV *D) {
+  // umin(N, 1) + floor((N - umin(N, 1)) / D)
+  // This is equivalent to "1 + floor((N - 1) / D)" for N != 0. The umin
+  // expression fixes the case of N=0.
+  const SCEV *MinNOne = getUMinExpr(N, getOne(N->getType()));
+  const SCEV *NMinusOne = getMinusSCEV(N, MinNOne);
+  return getAddExpr(MinNOne, getUDivExpr(NMinusOne, D));
+}
+
 const SCEV *ScalarEvolution::computeBECount(const SCEV *Delta, const SCEV *Step,
                                             bool Equality) {
   const SCEV *One = getOne(Step->getType());
@@ -9880,9 +10024,8 @@ const SCEV *ScalarEvolution::computeMaxBECountForLT(const SCEV *Start,
   APInt MaxEnd = IsSigned ? APIntOps::smin(getSignedRangeMax(End), Limit)
                           : APIntOps::umin(getUnsignedRangeMax(End), Limit);
 
-  MaxBECount = computeBECount(getConstant(MaxEnd - MinStart) /* Delta */,
-                              getConstant(StrideForMaxBECount) /* Step */,
-                              false /* Equality */);
+  MaxBECount = getUDivCeilSCEV(getConstant(MaxEnd - MinStart) /* Delta */,
+                               getConstant(StrideForMaxBECount) /* Step */);
 
   return MaxBECount;
 }
@@ -10096,8 +10239,8 @@ ScalarEvolution::howManyGreaterThans(const SCEV *LHS, const SCEV *RHS,
   if (isa<SCEVConstant>(BECount))
     MaxBECount = BECount;
   else
-    MaxBECount = computeBECount(getConstant(MaxStart - MinEnd),
-                                getConstant(MinStride), false);
+    MaxBECount = getUDivCeilSCEV(getConstant(MaxStart - MinEnd),
+                                 getConstant(MinStride));
 
   if (isa<SCEVCouldNotCompute>(MaxBECount))
     MaxBECount = BECount;
@@ -10763,6 +10906,7 @@ ScalarEvolution::ScalarEvolution(ScalarEvolution &&Arg)
       LoopDispositions(std::move(Arg.LoopDispositions)),
       LoopPropertiesCache(std::move(Arg.LoopPropertiesCache)),
       BlockDispositions(std::move(Arg.BlockDispositions)),
+      SCEVUsers(std::move(Arg.SCEVUsers)),
       UnsignedRanges(std::move(Arg.UnsignedRanges)),
       SignedRanges(std::move(Arg.SignedRanges)),
       UniqueSCEVs(std::move(Arg.UniqueSCEVs)),
@@ -11171,39 +11315,75 @@ bool ScalarEvolution::ExitLimit::hasOperand(const SCEV *S) const {
 }
 
 void
-ScalarEvolution::forgetMemoizedResults(const SCEV *S) {
-  ValuesAtScopes.erase(S);
-  LoopDispositions.erase(S);
-  BlockDispositions.erase(S);
-  UnsignedRanges.erase(S);
-  SignedRanges.erase(S);
-  ExprValueMap.erase(S);
-  HasRecMap.erase(S);
-  MinTrailingZerosCache.erase(S);
+ScalarEvolution::forgetMemoizedResults(ArrayRef<const SCEV *> SCEVs,
+                                       bool SkipUnknownPhis) {
+  SmallPtrSet<const SCEV *, 8> ToForget(SCEVs.begin(), SCEVs.end());
+  SmallVector<const SCEV *, 8> Worklist(ToForget.begin(), ToForget.end());
+
+  while (!Worklist.empty()) {
+    const SCEV *Curr = Worklist.pop_back_val();
+    auto Users = SCEVUsers.find(Curr);
+    if (Users != SCEVUsers.end())
+      for (auto *User : Users->second)
+        if (ToForget.insert(User).second)
+          Worklist.push_back(User);
+  }
+
+  for (auto *S : ToForget)
+    forgetMemoizedResultsImpl(S, SkipUnknownPhis);
 
   for (auto I = PredicatedSCEVRewrites.begin();
        I != PredicatedSCEVRewrites.end();) {
     std::pair<const SCEV *, const Loop *> Entry = I->first;
-    if (Entry.first == S)
+    if (ToForget.count(Entry.first))
       PredicatedSCEVRewrites.erase(I++);
     else
       ++I;
   }
 
-  auto RemoveSCEVFromBackedgeMap =
-      [S, this](DenseMap<const Loop *, BackedgeTakenInfo> &Map) {
+  auto RemoveSCEVFromBackedgeMap = [this, &ToForget](
+      DenseMap<const Loop *, BackedgeTakenInfo> &Map) {
         for (auto I = Map.begin(), E = Map.end(); I != E;) {
           BackedgeTakenInfo &BEInfo = I->second;
-          if (BEInfo.hasOperand(S, this)) {
-            BEInfo.clear();
+          if (any_of(ToForget,
+                     [this, &BEInfo](const SCEV *S) { return BEInfo.hasOperand(S, this); }))
             Map.erase(I++);
-          } else
+          else
             ++I;
         }
       };
 
   RemoveSCEVFromBackedgeMap(BackedgeTakenCounts);
   RemoveSCEVFromBackedgeMap(PredicatedBackedgeTakenCounts);
+}
+
+void ScalarEvolution::forgetMemoizedResultsImpl(const SCEV *S,
+                                                bool SkipUnknownPhis) {
+  ValuesAtScopes.erase(S);
+  LoopDispositions.erase(S);
+  BlockDispositions.erase(S);
+  UnsignedRanges.erase(S);
+  SignedRanges.erase(S);
+  HasRecMap.erase(S);
+  MinTrailingZerosCache.erase(S);
+
+  auto ExprIt = ExprValueMap.find(S);
+  if (ExprIt != ExprValueMap.end()) {
+    for (auto &ValueAndOffset : ExprIt->second) {
+      // For some invalidations, it's important that symbolic SCEVUnknown
+      // placeholders do not get removed.
+      if (SkipUnknownPhis && isa<SCEVUnknown>(S) &&
+          isa<PHINode>(ValueAndOffset.first))
+        continue;
+
+      if (ValueAndOffset.second == nullptr) {
+        auto ValueIt = ValueExprMap.find_as(ValueAndOffset.first);
+        if (ValueIt != ValueExprMap.end())
+          ValueExprMap.erase(ValueIt);
+      }
+    }
+    ExprValueMap.erase(ExprIt);
+  }
 }
 
 void ScalarEvolution::addToLoopUseLists(const SCEV *S) {
@@ -11296,6 +11476,54 @@ void ScalarEvolution::verify() const {
       std::abort();
     }
   }
+
+  // Collect all valid loops currently in LoopInfo.
+  SmallPtrSet<Loop *, 32> ValidLoops;
+  SmallVector<Loop *, 32> Worklist(LI.begin(), LI.end());
+  while (!Worklist.empty()) {
+    Loop *L = Worklist.pop_back_val();
+    if (ValidLoops.count(L))
+      continue;
+    ValidLoops.insert(L);
+    Worklist.append(L->begin(), L->end());
+  }
+
+  for (auto &KV : ValueExprMap) {
+    // Check for SCEV expressions referencing invalid/deleted loops.
+    if (auto *AR = dyn_cast<SCEVAddRecExpr>(KV.second)) {
+      assert(ValidLoops.count(AR->getLoop()) &&
+             "AddRec references invalid loop");
+    }
+
+    // Check that the value is also part of the reverse map.
+    auto It = ExprValueMap.find(KV.second);
+    if (It == ExprValueMap.end() || !(It->second.count({KV.first, nullptr}))) {
+      dbgs() << "Value " << *KV.first
+             << " is in ValueExprMap but not in ExprValueMap\n";
+      std::abort();
+    }
+  }
+
+  for (const auto &KV : ExprValueMap) {
+    for (const auto &ValueAndOffset : KV.second) {
+      if (ValueAndOffset.second != nullptr)
+        continue;
+
+      auto It = ValueExprMap.find_as(ValueAndOffset.first);
+      if (It == ValueExprMap.end()) {
+        dbgs() << "Value " << *ValueAndOffset.first
+               << " is in ExprValueMap but not in ValueExprMap\n";
+        std::abort();
+      }
+      if (It->second != KV.first) {
+        dbgs() << "Value " << *ValueAndOffset.first
+               << " mapped to " << *It->second
+               << " rather than " << *KV.first << "\n";
+        std::abort();
+      }
+    }
+  }
+
 }
 
 bool ScalarEvolution::invalidate(
@@ -11687,6 +11915,12 @@ void SCEVUnionPredicate::add(const SCEVPredicate *N) {
 PredicatedScalarEvolution::PredicatedScalarEvolution(ScalarEvolution &SE,
                                                      Loop &L)
     : SE(SE), L(L) {}
+
+void ScalarEvolution::registerUser(const SCEV *User,
+                                   ArrayRef<const SCEV *> Ops) {
+  for (auto *Op : Ops)
+    SCEVUsers[Op].insert(User);
+}
 
 const SCEV *PredicatedScalarEvolution::getSCEV(Value *V) {
   const SCEV *Expr = SE.getSCEV(V);

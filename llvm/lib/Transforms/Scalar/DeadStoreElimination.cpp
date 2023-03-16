@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -94,6 +94,11 @@ static cl::opt<bool>
 EnableShorteningAtTheBeginning("enable-dse-beginning-shortening",
   cl::init(false), cl::Hidden,
   cl::desc("Enable shortening at the beginning of memory intrinsics in DSE"));
+
+static cl::opt<bool>
+EnableShorteningAtTheEnd("enable-dse-end-shortening",
+  cl::init(false), cl::Hidden,
+  cl::desc("Enable shortening at the end of memory intrinsics in DSE"));
 
 //===----------------------------------------------------------------------===//
 // Helper functions
@@ -269,6 +274,9 @@ static bool isRemovable(Instruction *I) {
 /// Returns true if the end of this instruction can be safely shortened in
 /// length.
 static bool isShortenableAtTheEnd(Instruction *I) {
+  if (!EnableShorteningAtTheEnd)
+    return false;
+
   // Don't shorten stores for now
   if (isa<StoreInst>(I))
     return false;

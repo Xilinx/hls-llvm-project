@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -63,6 +63,7 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Support/XILINXFPGACoreInstFactory.h"
 #include <algorithm>
 #include <memory>
 using namespace llvm;
@@ -283,6 +284,14 @@ static cl::opt<std::string>
    PlatformDeviceName( "hls-platform-name", 
                   cl::desc("the path for platform device name"),
                   cl::value_desc("path for platform device name"));
+static cl::opt<std::string>
+   DeviceResourceInfo( "device-resource-info", 
+                  cl::desc("Device Resource Info"),
+                  cl::value_desc("Device Resource Info"));
+static cl::opt<std::string>
+   DeviceNameInfo( "device-name-info", 
+                  cl::desc("Device Name Info"),
+                  cl::value_desc("Device Name Info"));
 
 extern ModulePass *createDebugifyPass();
 extern ModulePass *createCheckDebugifyPass();
@@ -503,9 +512,22 @@ int main(int argc, char **argv) {
 
 //ZhaoKang:
 #if 1
-  if (PlatformDBFilePath != "" && PlatformDeviceName != "" ) { 
+  if (PlatformDBFilePath != "" && PlatformDeviceName != "") { 
+    if (DeviceResourceInfo != "") {
+      platform::SetPlatformDeviceResourceInfo(DeviceResourceInfo);
+    }
+    if (DeviceNameInfo != "") {
+      platform::SetPlatformDeviceNameInfo(DeviceNameInfo);
+    }
     platform::SetPlatformDbFile(PlatformDBFilePath);
     platform::PlatformBasic::getInstance()->load(PlatformDeviceName);
+
+    pf_newFE::SetPlatformDbFile(PlatformDBFilePath);
+    pf_newFE::CoreInstFactory::getInstance()->createCores(PlatformDeviceName);
+
+  } else if (PlatformDBFilePath != "" || PlatformDeviceName != "") {
+      errs() << "Must specify both '--hls-platform-db-name' and '--hls-platform-name' or neither\n";
+      return 1;
   }
 #endif
 

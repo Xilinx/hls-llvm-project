@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // A utility to support extracting code from one function into its own
@@ -33,6 +38,7 @@ class Loop;
 class Module;
 class Type;
 class Value;
+class CallInst;
 
   /// \brief Utility class for extracting code into a new function.
   ///
@@ -161,7 +167,7 @@ class Value;
         DenseMap<BasicBlock *, BlockFrequency> &ExitWeights,
         BranchProbabilityInfo *BPI);
 
-    void emitCallAndSwitchStatement(Function *newFunction,
+    CallInst *emitCallAndSwitchStatement(Function *newFunction,
                                     BasicBlock *newHeader,
                                     ValueSet &inputs,
                                     ValueSet &outputs);

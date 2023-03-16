@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -407,8 +407,9 @@ void AggExprEmitter::EmitArrayInit(Address DestPtr, llvm::ArrayType *AType,
   // down a level.
   llvm::Value *zero = llvm::ConstantInt::get(CGF.SizeTy, 0);
   llvm::Value *indices[] = { zero, zero };
+  llvm::Value *base = DestPtr.getPointer();
   llvm::Value *begin =
-    Builder.CreateInBoundsGEP(DestPtr.getPointer(), indices, "arrayinit.begin");
+    Builder.CreateInBoundsGEP(base, indices, "arrayinit.begin");
 
   CharUnits elementSize = CGF.getContext().getTypeSizeInChars(elementType);
   CharUnits elementAlign =
@@ -448,6 +449,8 @@ void AggExprEmitter::EmitArrayInit(Address DestPtr, llvm::ArrayType *AType,
   // elements have been initialized.
   llvm::Value *element = begin;
 
+  bool useIdx = CGF.getLangOpts().HLSExt;
+
   // Emit the explicit initializers.
   for (uint64_t i = 0; i != NumInitElements; ++i) {
     // Advance to the next element.
@@ -480,24 +483,45 @@ void AggExprEmitter::EmitArrayInit(Address DestPtr, llvm::ArrayType *AType,
     //   do { *array++ = filler; } while (array != end);
 
     // Advance to the start of the rest of the array.
-    if (NumInitElements) {
+    if (NumInitElements && !useIdx) {
       element = Builder.CreateInBoundsGEP(element, one, "arrayinit.start");
       if (endOfInit.isValid()) Builder.CreateStore(element, endOfInit);
     }
 
-    // Compute the end of the array.
-    llvm::Value *end = Builder.CreateInBoundsGEP(begin,
-                      llvm::ConstantInt::get(CGF.SizeTy, NumArrayElements),
-                                                 "arrayinit.end");
+    llvm::Value *end;
+    if (!useIdx) {
+      // Compute the end of the array.
+      end = Builder.CreateInBoundsGEP(begin,
+           llvm::ConstantInt::get(CGF.SizeTy, NumArrayElements),
+                                      "arrayinit.end");
+    }
 
     llvm::BasicBlock *entryBB = Builder.GetInsertBlock();
     llvm::BasicBlock *bodyBB = CGF.createBasicBlock("arrayinit.body");
 
     // Jump into the body.
     CGF.EmitBlock(bodyBB);
-    llvm::PHINode *currentElement =
-      Builder.CreatePHI(element->getType(), 2, "arrayinit.cur");
-    currentElement->addIncoming(element, entryBB);
+    llvm::PHINode *currentIndex;
+    llvm::Value *nextIndex;
+    llvm::PHINode *currentElement;
+    if (useIdx) {
+      currentIndex =
+        Builder.CreatePHI(CGF.SizeTy, 2, "arrayinit.curidx");
+      llvm::Value *idx = llvm::ConstantInt::get(CGF.SizeTy, NumInitElements);
+      currentIndex->addIncoming(idx, entryBB);
+
+      indices[1] = currentIndex;
+      element = Builder.CreateInBoundsGEP(base, indices, "arrayinit.cur");
+
+      if (endOfInit.isValid()) Builder.CreateStore(element, endOfInit);
+
+      nextIndex = Builder.CreateAdd(currentIndex, one, "arrayinit.nextidx");
+    } else {
+      currentElement =
+        Builder.CreatePHI(element->getType(), 2, "arrayinit.cur");
+      currentElement->addIncoming(element, entryBB);
+      element = currentElement;
+    }
 
     // Emit the actual filler expression.
     {
@@ -508,26 +532,35 @@ void AggExprEmitter::EmitArrayInit(Address DestPtr, llvm::ArrayType *AType,
       //   the construction of the next array element, if any
       CodeGenFunction::RunCleanupsScope CleanupsScope(CGF);
       LValue elementLV =
-        CGF.MakeAddrLValue(Address(currentElement, elementAlign), elementType);
+        CGF.MakeAddrLValue(Address(element, elementAlign), elementType);
       if (filler)
         EmitInitializationToLValue(filler, elementLV);
       else
         EmitNullInitializationToLValue(elementLV);
     }
 
-    // Move on to the next element.
-    llvm::Value *nextElement =
-      Builder.CreateInBoundsGEP(currentElement, one, "arrayinit.next");
+    llvm::Value *done;
+    if (useIdx) {
+      currentIndex->addIncoming(nextIndex, Builder.GetInsertBlock());
 
-    // Tell the EH cleanup that we finished with the last element.
-    if (endOfInit.isValid()) Builder.CreateStore(nextElement, endOfInit);
+      llvm::Value *endIndex = llvm::ConstantInt::get(CGF.SizeTy, NumArrayElements - 1);
+      done = Builder.CreateICmpEQ(currentIndex, endIndex,
+                                  "arrayinit.done");
+    } else {
+      // Move on to the next element.
+      llvm::Value *nextElement =
+        Builder.CreateInBoundsGEP(currentElement, one, "arrayinit.next");
 
-    // Leave the loop if we're done.
-    llvm::Value *done = Builder.CreateICmpEQ(nextElement, end,
-                                             "arrayinit.done");
+      // Tell the EH cleanup that we finished with the last element.
+      if (endOfInit.isValid()) Builder.CreateStore(nextElement, endOfInit);
+
+      // Leave the loop if we're done.
+      done = Builder.CreateICmpEQ(nextElement, end,
+                                  "arrayinit.done");
+      currentElement->addIncoming(nextElement, Builder.GetInsertBlock());
+    }
     llvm::BasicBlock *endBB = CGF.createBasicBlock("arrayinit.end");
     Builder.CreateCondBr(done, endBB, bodyBB);
-    currentElement->addIncoming(nextElement, Builder.GetInsertBlock());
 
     CGF.EmitBlock(endBB);
   }

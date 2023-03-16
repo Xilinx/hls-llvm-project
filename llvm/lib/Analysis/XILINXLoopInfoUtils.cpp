@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -19,14 +19,182 @@
 // under the License.
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/XILINXLoopInfoUtils.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 
 using namespace llvm;
+
+static bool isTrivialBlock( BasicBlock* bb) 
+{
+  for ( auto &inst : *bb) { 
+    if (isa<IntrinsicInst>(inst)) { 
+      Intrinsic::ID id = cast<IntrinsicInst>(inst).getIntrinsicID() ; 
+      if (id == Intrinsic::fpga_seq_load_begin  ||
+          id == Intrinsic::fpga_seq_load_end ||
+          id == Intrinsic::fpga_seq_store_begin || 
+          id == Intrinsic::fpga_seq_store_end) { 
+        continue; 
+      }
+    }
+    if (inst.mayWriteToMemory()) { 
+      return false; 
+    }
+  }
+  return true; 
+}
+
+bool llvm::isPerfectNestLoop(Loop* L, ScalarEvolution* SE , std::string  &info) 
+{
+  info = Twine("checking  loop nest for parent Loop<" + getLoopName(L).getValueOr("unknown name") + ">").str(); 
+
+  BasicBlock * latch = L->getLoopLatch();
+  if (!latch) {
+    info += Twine("Loop<" + getLoopName(L).getValueOr("unknown name") + "> contains multi latch").str(); 
+    return false; 
+  }
+  //1. only one sub loop
+  SmallVector<Loop*, 4> subLoops(L->begin(), L->end()); 
+  if (subLoops.size() != 1 ) { 
+    info += Twine("Loop<" + getLoopName(L).getValueOr("unknown name") + "> contains multi sub Loops").str(); 
+    return false ; 
+  }
+
+  Loop *subLoop  = subLoops[0]; 
+  BasicBlock * subLatch = subLoop->getLoopLatch(); 
+  if (!subLatch) {
+    info += Twine("sub Loop<" + getLoopName(subLoop).getValueOr("unknown name") + ">  in parent Loop <" + getLoopName(L).getValueOr("unknown name")+ ">. has multi Latch blocks").str(); 
+    return false; 
+  }
+
+  //2. here, we will not check doWhile/or While-loop structure,  because  there is loop-unrotation  pass at the end of reflow 
+
+#if 0
+  BasicBlock * exitBlock = L->getExitingBlock(); 
+  if (!exitBlock){ 
+    info += Twine("Loop<" + getLoopName(L).getValueOr("unkown name") + "> contains multi forward jump").str(); 
+    return false; 
+  }
+
+  for( BasicBlock* suc : successors(exitBlock)) { 
+    if (L->contains(suc) && suc != L->getHeader()) { 
+      info += Twine("Loop<" + getLoopName(L).getValueOr("unknown name")  + "> contains multi forward jump").str(); 
+      return false; 
+    }
+  }
+
+  BasicBlock *subExitBlock = subLoop->getExitingBlock(); 
+  if (!subExitBlock){ 
+    info += Twine("Loop<" + getLoopName(subLoop).getValueOr("unknown name")  + "> contains multi forward jump").str(); 
+    return false; 
+  }
+  for( BasicBlock* suc : successors(subExitBlock)) { 
+    if (subLoop->contains(suc) && suc != subLoop->getHeader()) { 
+      info += Twine("Loop<" + getLoopName(subLoop).getValueOr("unknown name")  + "> contains multi forward jump").str(); 
+      return false; 
+    }
+  }
+#endif 
+
+
+  //3. check loop step of inner loop and outer loop 
+  const SCEV* tripCount = SE->getBackedgeTakenCount(L);
+  const SCEV* subTripCount = SE->getBackedgeTakenCount(subLoop); 
+
+  if (isa<SCEVUnknown>(tripCount) || isa<SCEVUnknown>(subTripCount) || 
+      isa<SCEVCouldNotCompute>(tripCount)  || isa<SCEVCouldNotCompute>(subTripCount)) { 
+    info += Twine("loop <" + getLoopName(L).getValueOr("unknown name") +"> , loop <" + getLoopName(subLoop).getValueOr("unknown name") + "> 's tripcount is varying").str(); 
+    return false; 
+  }
+
+  if (ScalarEvolution::LoopInvariant != SE->getLoopDisposition(subTripCount, L)) { 
+    info += Twine("loop <" + getLoopName(L).getValueOr("unknown name") + ">, loop <" + getLoopName(subLoop).getValueOr("unknown name") + "> 's tripcount is varying").str(); 
+    return false; 
+  }
+
+  //4.check exiting block of innerLoop will branch to latch of outerloop 
+  BasicBlock *subExit = subLoop->getExitBlock(); 
+  if (subExit != latch || !latch->getSinglePredecessor()) { 
+    info += Twine("subLoop<" + getLoopName(subLoop).getValueOr("unknown name") + "> contains multi forward jump").str(); 
+    return false; 
+  }
+
+  if (!isTrivialBlock(latch)) { 
+    return false; 
+  }
+
+
+  //5. 
+  //  if the blocks between [header of outer , header of inner) can not sink into inner header, 
+  //  or, if the blocks between (latch of inner, latch of outer] can not hoist to latch of inner , 
+  //the loop nest is not perfect nest loop 
+  //check header 
+  //
+
+
+  BasicBlock *header = L->getHeader(); 
+  BasicBlock *subPredecessor = subLoop->getLoopPredecessor(); 
+  if (header != subPredecessor) { 
+    //check from header to subPredecessor , if there is some instructions can not sink into inner loop 
+    BasicBlock *pathBB = subPredecessor->getSinglePredecessor() ;
+    if (pathBB != header || !isTrivialBlock(pathBB)) { 
+      info += Twine("parent Loop<" + getLoopName(L).getValueOr("unknown name") +"> contain extract code before subLoop<" + getLoopName(subLoop).getValueOr("unknown name") + ">").str();
+      return false ; 
+    }
+  }
+
+
+
+  //6. check we can move the header of outerloop to inner loop 
+  //this include two conds: 
+  //a.  the block in the header of outerloop should be trivialBlock
+  //b.  the value produced in header of outerloop should not be used by phi node of inner node
+
+  if (!isTrivialBlock(header)) { 
+    info += Twine("parent Loop<" + getLoopName(L).getValueOr("unknown name") +"> contain extract code before subLoop<" + getLoopName(subLoop).getValueOr("unkown name") + ">").str();
+    return false; 
+  }
+  for( auto &inst: *header){ 
+    if (isa<PHINode>(inst)){ 
+      /*
+       * ouer_loop_header: 
+       * a = phi( a1, a2) 
+       * inner_loop_header: 
+       *    b = phi( a, b1) 
+       * the phi node in outer loop that is used by innner loop
+       */
+      continue; 
+    }
+    for( auto user: inst.users()) { 
+      if (isa<PHINode>(user) && subLoop->contains(cast<PHINode>(user)->getParent()) ) { 
+        info = Twine("parent Loop<" + getLoopName(L).getValueOr("unknown name") +"> contain extract code before subLoop<" + getLoopName(subLoop).getValueOr("unknown name") + 
+            ">, so, they are not perfect nesting").str();
+        return false; 
+      }
+    }
+  }
+
+  info += Twine(", get perfect nesting Loop, parent Loop<" + getLoopName(L).getValueOr("unknown name") + "> nesting sub Loop<"+ getLoopName(subLoop).getValueOr("unknown name") + ">").str() ; 
+
+  return true; 
+}
 
 bool llvm::isForLoop(Loop *L) {
   BasicBlock *Latch = L->getLoopLatch();
   return Latch && !L->isLoopExiting(Latch) && L->isLoopExiting(L->getHeader());
+}
+
+bool llvm::isRotatedLoop(const Loop *L) {
+  return L->getExitingBlock() == L->getLoopLatch();
+}
+
+PHINode *llvm::getIndVarOrAuxiliaryIndVar(const Loop *L, ScalarEvolution &SE) {
+  SetVector<PHINode *> IndVars;
+  L->getAllInductionVariables(SE, IndVars);
+  if (IndVars.empty())
+    return nullptr;
+  return IndVars.front();
 }
 
 // The loop index must be an induction variable with constant step and loop
@@ -132,8 +300,6 @@ bool llvm::getLoopIndexInfo(Loop *L, bool ExitFromHeader,
         continue;
       break;
     case CmpInst::ICMP_NE:
-      if (Step != 1 && Step != -1)
-        continue;
       break;
     default:
       continue;
@@ -222,7 +388,7 @@ bool llvm::isPipelineOff(const Loop *L) {
 /// \returns II when it's not zero.
 Optional<ConstantInt *> llvm::getPipelineII(const Loop *L) {
   if (MDNode *LMD = getLoopMetadata(L, "llvm.loop.pipeline.enable")) {
-    assert((LMD->getNumOperands() == 4) &&
+    assert((LMD->getNumOperands() >= 4) &&
            "Expect 4 operands in Loop Pipeline hint!");
     ConstantInt *II = mdconst::extract<ConstantInt>(LMD->getOperand(1));
     if (II->getZExtValue() == 0)
@@ -242,7 +408,7 @@ int64_t llvm::getPipelineIIInt64(const Loop *L) {
 
 Optional<PipelineStyle> llvm::getPipelineStyle(const Loop *L) {
   if (MDNode *LMD = getLoopMetadata(L, "llvm.loop.pipeline.enable")) {
-    assert((LMD->getNumOperands() == 4) &&
+    assert((LMD->getNumOperands() >= 4) &&
            "Expect 4 operands in Loop Pipeline hint!");
     ConstantInt *Style = mdconst::extract<ConstantInt>(LMD->getOperand(3));
     int64_t StyleCode = Style->getSExtValue();
@@ -287,13 +453,13 @@ bool llvm::isUnrollOff(const Loop *L) {
 
 Optional<ConstantInt *> llvm::getUnrollFactor(const Loop *L) {
   if (MDNode *LMD = getLoopMetadata(L, "llvm.loop.unroll.count")) {
-    assert((LMD->getNumOperands() == 2) &&
+    assert((LMD->getNumOperands() >= 2) &&
            "Expect 2 operands in Loop Unroll hint!");
     return mdconst::extract<ConstantInt>(LMD->getOperand(1));
   }
 
   if (MDNode *LMD = getLoopMetadata(L, "llvm.loop.unroll.withoutcheck")) {
-    assert((LMD->getNumOperands() == 2) &&
+    assert((LMD->getNumOperands() >= 2) &&
            "Expect 2 operands in Loop Unroll hint!");
     return mdconst::extract<ConstantInt>(LMD->getOperand(1));
   }
@@ -347,7 +513,9 @@ bool llvm::mayExposeInDataFlowRegion(ScalarEvolution &SE, const Loop *L) {
       return false;
 
     // Compute the PL's loop trip count
-    const SCEV *PLTC = SE.getAddExpr(PBTC, SE.getOne(PBTC->getType()));
+    const SCEV *PLTC =
+        isRotatedLoop(L) ?
+            SE.getAddExpr(PBTC, SE.getOne(PBTC->getType())) : PBTC;
     if (!isDataFlow(PL) && !(PLTC->isOne()) && !mayFullyUnroll(PL, PLTC))
       return false;
   }
@@ -390,4 +558,113 @@ Optional<const std::string> llvm::getLoopName(const Loop *L) {
       }
   }
   return None;
+}
+
+StringRef llvm::getLoopPragmaSource(StringRef pragma, const Loop *L) {
+  MDNode * LoopID = L->getLoopID();
+  auto *MD = GetUnrollMetadata(LoopID, pragma);
+  return getPragmaSourceFromMDNode(MD);
+}
+
+DebugLoc llvm::getLoopPragmaLoc( StringRef pragma, const Loop *L ) 
+{
+  MDNode * LoopID = L->getLoopID();
+  for (const MDOperand &Op : LoopID->operands()) { 
+    MDNode *MD = dyn_cast<MDNode>(Op);
+    if (!MD) 
+      continue;
+    Metadata *S = MD->getOperand(0);
+    if (!isa<MDString>(S)) { 
+      continue;
+    }
+    if (cast<MDString>(S)->getString().equals( pragma)) { 
+       Metadata *mp = MD->getOperand(MD->getNumOperands() - 1); 
+       if (mp && isa<DILocation>(mp)) { 
+         return DebugLoc(cast<DILocation>(mp));
+       }
+       else 
+         return DebugLoc();
+    }
+  }
+  return DebugLoc();
+}
+
+DebugLoc llvm::getLoopFlattenPragmaLoc( const Loop *L ){
+  return getLoopPragmaLoc( "llvm.loop.flatten.enable", L ); 
+}
+
+DebugLoc llvm::getLoopTripCountPragmaLoc( const Loop* L) { 
+  return getLoopPragmaLoc( "llvm.loop.tripcount", L ); 
+}
+
+DebugLoc llvm::getLoopPipelinePragmaLoc( const Loop *L ) { 
+  return getLoopPragmaLoc( "llvm.loop.pipeline.enable" , L );
+}
+
+DebugLoc llvm::getLoopUnrollPragmaLoc( const Loop *L ) { 
+  DebugLoc loc ; 
+  if ( loc = getLoopPragmaLoc( "llvm.loop.unroll.full", L ) ) { 
+    return loc; 
+  }
+  else if ( loc = getLoopPragmaLoc( "llvm.loop.unroll.disable", L)) { 
+    return loc; 
+  }
+  else if ( loc = getLoopPragmaLoc( "llvm.loop.unroll.enable", L)) { 
+    return loc; 
+  }
+  else if ( loc = getLoopPragmaLoc( "llvm.loop.unroll.count", L)) { 
+    return loc; 
+  }
+  else if ( loc = getLoopPragmaLoc( "llvm.loop.unroll.withoutcheck", L)) { 
+    return loc; 
+  }
+  return loc; 
+}
+
+DebugLoc llvm::getLoopDataflowPragmaLoc( const Loop *L ) { 
+  return getLoopPragmaLoc("llvm.loop.dataflow.enable", L);
+}
+
+/// the rule for the returning exiting block is that:
+/// 1. latch is the prior to header
+/// 2. constant tripcount exiting is high priority
+BasicBlock *llvm::getExitingBlock(Loop *L, ScalarEvolution *SE) {
+  BasicBlock *Latch = L->getLoopLatch();
+  bool LatchIsExiting = Latch && L->isLoopExiting(Latch);
+  unsigned LatchTripCount =
+      LatchIsExiting ? SE->getSmallConstantTripCount(L, Latch) : 0;
+
+  BasicBlock *Header = L->getHeader();
+  bool HeaderIsExiting = Header && L->isLoopExiting(Header);
+  unsigned HeaderTripCount =
+      HeaderIsExiting ? SE->getSmallConstantTripCount(L, Header) : 0;
+
+  if (LatchIsExiting && LatchTripCount != 0)
+    return Latch;
+
+  if (HeaderIsExiting && HeaderTripCount != 0)
+    return Header;
+
+  if (LatchIsExiting)
+    return Latch;
+
+  if (HeaderIsExiting)
+    return Header;
+
+  return L->getExitingBlock();
+}
+
+// Find trip count and trip multiple if count is not available
+void llvm::ReflowCalculateTripCountAndMultiple(Loop *L, ScalarEvolution *SE,
+                                               unsigned &TripCount,
+                                               unsigned &TripMultiple) {
+  // If there are multiple exiting blocks but one of them is the latch, use the
+  // latch for the trip count estimation. Otherwise insist on a single exiting
+  // block for the trip count estimation.
+  BasicBlock *ExitingBlock = getExitingBlock(L, SE);
+
+  if (ExitingBlock) {
+    TripCount = SE->getSmallConstantTripCount(L, ExitingBlock);
+    TripMultiple = SE->getSmallConstantTripMultiple(L, ExitingBlock);
+  }
 }

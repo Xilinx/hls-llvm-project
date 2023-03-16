@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -105,7 +105,7 @@ static cl::opt<int>
                                  "(default unlimited = -1)"));
 
 static cl::opt<int> MaxNumberOfBBSInPath(
-    "gvn-hoist-max-bbs", cl::Hidden, cl::init(16),
+    "gvn-hoist-max-bbs", cl::Hidden, cl::init(256),
     cl::desc("Max number of basic blocks on the path between "
              "hoisting locations (default = 4, unlimited = -1)"));
 
@@ -791,6 +791,10 @@ private:
       // which currently have dead terminators that are control
       // dependence sources of a block which is in NewLiveBlocks.
       IDFs.setDefiningBlocks(VNBlocks);
+      // HLS BEGIN
+      /// we should clear the result of last iteration
+      IDFBlocks.clear();
+      // HLS END
       IDFs.calculate(IDFBlocks);
 
       // Make a map of BB vs instructions to be hoisted.
@@ -1100,6 +1104,12 @@ private:
         if (!isGuaranteedToTransferExecutionToSuccessor(&I1)) {
           HoistBarrier.insert(BB);
           break;
+        }
+        if (auto *Intr = dyn_cast<IntrinsicInst>(&I1)) {
+          if (isa<DbgInfoIntrinsic>(Intr) ||
+              Intr->getIntrinsicID() == Intrinsic::assume ||
+              Intr->getIntrinsicID() == Intrinsic::sideeffect)
+            continue;
         }
         // Only hoist the first instructions in BB up to MaxDepthInBB. Hoisting
         // deeper may increase the register pressure and compilation time.

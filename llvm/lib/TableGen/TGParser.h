@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This class represents the Parser for tablegen files.
@@ -68,8 +73,6 @@ class TGParser {
   // Record tracker
   RecordKeeper &Records;
 
-  unsigned AnonCounter;
-
   // A "named boolean" indicating how to parse identifiers.  Usually
   // identifiers map to some existing object but in special cases
   // (e.g. parsing def names) no such object exists yet because we are
@@ -84,7 +87,7 @@ class TGParser {
 
 public:
   TGParser(SourceMgr &SrcMgr, RecordKeeper &records)
-      : Lex(SrcMgr), CurMultiClass(nullptr), Records(records), AnonCounter(0) {}
+      : Lex(SrcMgr), CurMultiClass(nullptr), Records(records) {}
 
   /// ParseFile - Main entrypoint for parsing a tblgen file.  These parser
   /// routines return true on error, or false on success.
@@ -109,8 +112,6 @@ private:  // Semantic analysis methods.
   bool AddSubClass(Record *Rec, SubClassReference &SubClass);
   bool AddSubMultiClass(MultiClass *CurMC,
                         SubMultiClassReference &SubMultiClass);
-
-  Init *GetNewAnonymousName();
 
   // IterRecord: Map an iterator name to a value.
   struct IterRecord {

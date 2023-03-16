@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -28,7 +28,7 @@
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/XILINXFPGAIntrinsicInst.h"
-#include "llvm/Support/XILINXAggregateUtil.h"
+#include "llvm/IR/XILINXAggregateUtil.h"
 
 namespace llvm {
 
@@ -37,18 +37,17 @@ class InterfaceMD;
 
 class HLSIRBuilder : public IRBuilder<> {
 
+  Value *GenerateMask(Value *Off, IntegerType *PartTy);
   Value *GenerateMask(Value *Hi, Value *Lo);
 
   unsigned getVectorTypeNumElts(VectorType *VT, unsigned EltSizeInBits) const;
 
   unsigned getConstantVectorNumElts(Value *V, unsigned EltSizeInBits) const;
 
-  Value *CreatePartSelectCall(Value *V, Value *Lo, Value *Hi,
-                              IntegerType *RetTy);
-  Value *CreatePartSetCall(Value *V, Value *R, Value *Lo, Value *Hi,
-                           IntegerType *RetTy);
-  Value *CreateLegacyPartSelectCall(Value *V, Value *Lo, Value *Hi);
-  Value *CreateLegacyPartSetCall(Value *V, Value *R, Value *Lo, Value *Hi);
+  Value *CreatePartSelectCall(Value *Src, Value *Offset, IntegerType *RetTy);
+  Value *CreatePartSetCall(Value *Src, Value *Rep, Value *Offset);
+  Value *CreateLegacyPartSelectCall(Value *Src, Value *Lo, Value *Hi);
+  Value *CreateLegacyPartSetCall(Value *Src, Value *Rep, Value *Lo, Value *Hi);
 
 protected:
   const DataLayout &DL;
@@ -77,6 +76,9 @@ public:
   using IRBuilder::CreateSDiv;
   using IRBuilder::CreateUDiv;
   using IRBuilder::CreateURem;
+
+  Value *GenerateSMod(Value *LHS, Value *RHS, const Twine &Name = "");
+  Value *CreateSMod(Value *LHS, Value *RHS, const Twine &Name = "");
 
   //===--------------------------------------------------------------------===//
   const DataLayout &getDataLayout() const { return DL; }
@@ -112,30 +114,28 @@ public:
   // Bit manipulate operators, also cast the arguments to bits first
 
   /// \brief Generate the logic to perform fpga.part.select
-  Value *GeneratePartSelect(Value *V, Value *Lo, Value *Hi, IntegerType *RetTy);
+  Value *GeneratePartSelect(Value *V, Value *Off, IntegerType *RetTy);
 
   /// \brief Create Call to fpga.part.select
-  Value *CreatePartSelect(Value *V, Value *Lo, Value *Hi, IntegerType *RetTy);
-  Value *CreatePartSelect(Value *V, uint32_t Lo, uint32_t Hi);
+  Value *CreatePartSelect(Value *Src, Value *Off, IntegerType *RetTy);
+  Value *CreatePartSelect(Value *Src, uint32_t Lo, uint32_t BW);
 
   /// \brief Create Call to fpga.legacy.part.select
-  Value *CreateLegacyPartSelect(Value *V, Value *Lo, Value *Hi);
+  Value *CreateLegacyPartSelect(Value *Src, Value *Lo, Value *Hi);
 
   /// \brief Generate the logic to perform fpga.part.set
-  Value *GeneratePartSet(Value *Dst, Value *Src, Value *Lo, Value *Hi);
+  Value *GeneratePartSet(Value *Src, Value *Rep, Value *Off);
 
   Value *CreateBitSelect(Value *V, unsigned Bit);
   Value *CreateByteenableUpdate(Value *OldValue, Value *NewValue,
                                 Value *Byteenable, unsigned Align);
 
   /// \brief Create Call to fpga.part.set
-  Value *CreatePartSet(Value *Dst, Value *Src, Value *Lo, Value *Hi);
-  Value *CreatePartSet(Value *Dst, Value *Src, uint32_t Lo, uint32_t Hi);
+  Value *CreatePartSet(Value *Src, Value *Rep, Value *Lo);
+  Value *CreatePartSet(Value *Src, Value *Rep, uint32_t Lo);
 
   /// \brief Create Call to fpga.legacy.part.set
-  Value *CreateLegacyPartSet(Value *V, Value *R, Value *Lo, Value *Hi);
-
-  /// \brief Create Call to fpga.bit.concat
+  Value *CreateLegacyPartSet(Value *Src, Value *Rep, Value *Lo, Value *Hi);
 
   /// \brief Generate the logic to perform fpga.bit.concat
   Value *GenerateBitConcat(ArrayRef<Value *> Args, IntegerType *RetTy);
@@ -173,6 +173,7 @@ public:
   //===--------------------------------------------------------------------===//
   // FIFO related
   Value *CreateFIFOStatus(Intrinsic::ID ID, Value *Fifo);
+  Value *CreateFIFOLength(Intrinsic::ID ID, Value *Fifo);
   Value *CreateFIFOPop(Intrinsic::ID ID, Value *Fifo);
   Value *CreateFIFOPush(Intrinsic::ID ID, Value *V, Value *Fifo);
   // FIFO instinsics
@@ -182,6 +183,17 @@ public:
   Value *CreateFIFOPush(Value *V, Value *Fifo);
   Value *CreateFIFONbPop(Value *Fifo);
   Value *CreateFIFONbPush(Value *V, Value *Fifo);
+
+  //===--------------------------------------------------------------------===//
+  // PIPO related
+  Value *CreatePIPOInst(Intrinsic::ID ID, Value *Pipo);
+  // PIPO intrinsics
+  Value *CreatePIPONotEmpty(Value *Pipo);
+  Value *CreatePIPONotFull(Value *Pipo);
+  Value *CreatePIPOPopAcquire(Value *Pipo);
+  Value *CreatePIPOPopRelease(Value *Pipo);
+  Value *CreatePIPOPushAcquire(Value *Pipo);
+  Value *CreatePIPOPushRelease(Value *Pipo);
 
   //===--------------------------------------------------------------------===//
   /// Memory related
@@ -253,21 +265,25 @@ public:
   CreateArrayPartitionInst(Value *V,
                            ArrayXFormInst<ArrayPartitionInst>::XFormMode Mode,
                            int32_t Dim, int32_t Factor = 0, bool Dynamic = false,
-                           int64_t BitSize = -1);
+                           int64_t BitSize = -1, StringRef Source = "user");
   Value *
   CreateArrayReshapeInst(Value *V,
                          ArrayXFormInst<ArrayReshapeInst>::XFormMode Mode,
                          int32_t Dim, int32_t Factor = 0,
-                         int64_t BitSize = -1);
+                         int64_t BitSize = -1, StringRef Source = "user");
   Value *CreateDependenceInst(
       Value *V, bool isEnforced, DependenceInst::DepType Ty,
       DependenceInst::Direction Dir = DependenceInst::Direction::NODIR,
       int32_t Dist = 0,
+      bool IsUserPragma = false,
       int64_t BitSize = -1);
   Value *CreateAggregateInst(Value *V, int64_t BitSize = -1);
   Value *CreateDisaggregateInst(Value *V, int64_t BitSize = -1);
   Value *CreateXlxFunctionAllocationInst(Function *F, StringRef Str,
-                                         int32_t Limit);
+                                         int32_t Limit, StringRef Source = "");
+  Value *CreateStreamLabelInst(Value *V, int32_t Dim = 0, int64_t BitSize = -1);
+  Value *CreateShiftRegLabelInst(Value *V, int32_t Dim = 0, int64_t BitSize = -1);
+  Value *CreateStreamOfBlocksLabelInst(Value *V, int32_t Dim = 0, int64_t BitSize = -1);
   Value *CreateStreamPragmaInst(Value *V, int32_t Depth, int64_t BitSize = -1);
   Value *CreatePipoPragmaInst(Value *V, int32_t Depth, int32_t Type, int64_t BitSize = -1);
   Value *CreateSAXIPragmaInst(Value *V, StringRef Bundle, uint64_t Offset,
@@ -280,7 +296,7 @@ public:
                               int64_t NumWriteOutstanding,
                               int64_t MaxReadBurstLen, int64_t MaxWriteBurstLen,
                               int64_t Latency, int64_t MaxWidenBitwidth,
-                              int64_t BitSize = -1);
+                              StringRef ChannelID, int64_t BitSize = -1, StringRef Source = "");
   Value *CreateAXISPragmaInst(Value *V, bool HasRegister, int64_t RegisterMode,
                               int64_t Depth, StringRef SignalName, StringRef BundleName,
                               int64_t BitSize = -1);

@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -34,6 +34,11 @@ inline std::string dumpLineInfo(SourceLocation Loc, SourceManager *SM) {
     return "";
 
   std::string Filename = PLoc.getFilename();
+  llvm::SmallString<256> x; 
+  llvm::raw_svector_ostream  os( x ); 
+  os.write_escaped(Filename); 
+  Filename = os.str(); 
+
   std::string LineInfo =
       "# " + std::to_string(PLoc.getLine()) + " \"" + Filename + "\"" + "\n";
   return LineInfo;

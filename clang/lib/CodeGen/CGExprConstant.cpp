@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -61,6 +61,11 @@ public:
                                      const APValue &Value, QualType ValTy);
 
 private:
+  llvm::Constant *BuildBaseStruct(ConstantEmitter &Emitter, const APValue &Val,
+                                  const CXXRecordDecl *Base,
+                                  const CXXRecordDecl *VTableClass,
+                                  CharUnits BaseOffset);
+
   ConstStructBuilder(ConstantEmitter &emitter)
     : CGM(emitter.CGM), Emitter(emitter), Packed(false), 
     NextFieldOffsetInChars(CharUnits::Zero()),
@@ -84,7 +89,8 @@ private:
   bool Build(ConstExprEmitter *Emitter, llvm::ConstantStruct *Base,
              InitListExpr *Updater);
   bool Build(const APValue &Val, const RecordDecl *RD, bool IsPrimaryBase,
-             const CXXRecordDecl *VTableClass, CharUnits BaseOffset);
+             const CXXRecordDecl *VTableClass, CharUnits Offset,
+             CharUnits BaseOffset = CharUnits::Zero());
   llvm::Constant *Finalize(QualType Ty);
 
   CharUnits getAlignment(const llvm::Constant *C) const {
@@ -441,16 +447,21 @@ struct BaseInfo {
 bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
                                bool IsPrimaryBase,
                                const CXXRecordDecl *VTableClass,
-                               CharUnits Offset) {
+                               CharUnits Offset,
+                               CharUnits BaseOffset) {
   const ASTRecordLayout &Layout = CGM.getContext().getASTRecordLayout(RD);
 
   if (const CXXRecordDecl *CD = dyn_cast<CXXRecordDecl>(RD)) {
     // Add a vtable pointer, if we need one and it hasn't already been added.
     if (CD->isDynamicClass() && !IsPrimaryBase) {
-      llvm::Constant *VTableAddressPoint =
-          CGM.getCXXABI().getVTableAddressPointForConstExpr(
-              BaseSubobject(CD, Offset), VTableClass);
-      AppendBytes(Offset, VTableAddressPoint);
+      const CXXRecordDecl *Primary = Layout.getPrimaryBase();
+      /// only if primary base is not dynamic class, emit the vtable
+      if (!CGM.getLangOpts().HLSExt || !Primary || !Primary->isDynamicClass()) {
+        llvm::Constant *VTableAddressPoint =
+            CGM.getCXXABI().getVTableAddressPointForConstExpr(
+                BaseSubobject(CD, BaseOffset), VTableClass);
+        AppendBytes(Offset, VTableAddressPoint);
+      }
     }
 
     // Accumulate and sort bases, in order to visit them in address order, which
@@ -470,9 +481,19 @@ bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
     for (unsigned I = 0, N = Bases.size(); I != N; ++I) {
       BaseInfo &Base = Bases[I];
 
-      bool IsPrimaryBase = Layout.getPrimaryBase() == Base.Decl;
-      Build(Val.getStructBase(Base.Index), Base.Decl, IsPrimaryBase,
-            VTableClass, Offset + Base.Offset);
+      if (!CGM.getLangOpts().HLSExt) {
+        bool IsPrimaryBase = Layout.getPrimaryBase() == Base.Decl;
+        Build(Val.getStructBase(Base.Index), Base.Decl, IsPrimaryBase,
+              VTableClass, Offset + Base.Offset, Offset + Base.Offset);
+      } else {
+        llvm::Constant *BaseInit =
+            BuildBaseStruct(Emitter, Val.getStructBase(Base.Index), Base.Decl,
+                            VTableClass, BaseOffset + Base.Offset);
+        if (!BaseInit)
+          return false;
+
+        AppendBytes(Base.Offset, BaseInit);
+      }
     }
   }
 
@@ -602,6 +623,19 @@ llvm::Constant *ConstStructBuilder::BuildStruct(ConstantEmitter &Emitter,
     return nullptr;
 
   return Builder.Finalize(ValTy);
+}
+
+llvm::Constant *ConstStructBuilder::BuildBaseStruct(ConstantEmitter &Emitter,
+                                                const APValue &Val,
+                                                const CXXRecordDecl *Base,
+                                                const CXXRecordDecl *VTableClass,
+                                                CharUnits BaseOffset) {
+  ConstStructBuilder Builder(Emitter);
+
+  if (!Builder.Build(Val, Base, false, VTableClass, CharUnits::Zero(), BaseOffset))
+    return nullptr;
+
+  return Builder.Finalize(Base->getTypeForDecl()->getCanonicalTypeInternal());
 }
 
 

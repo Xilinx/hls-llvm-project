@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -473,7 +473,9 @@ bool Preprocessor::isNextPPTokenLParen() {
 bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
                                                  const MacroDefinition &M) {
   MacroInfo *MI = M.getMacroInfo();
-
+  if (ShouldExpandMacro && !ShouldExpandMacro(Identifier.getIdentifierInfo()->getName()))
+    return true;
+    
   // If this is a macro expansion in the "#if !defined(x)" line for the file,
   // then the macro could expand to different things in other contexts, we need
   // to disable the optimization in this case.

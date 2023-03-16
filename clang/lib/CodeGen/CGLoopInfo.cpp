@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -15,6 +15,7 @@
 #include "CGLoopInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "clang/Sema/LoopHint.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -26,9 +27,18 @@
 using namespace clang::CodeGen;
 using namespace llvm;
 
-static int EvaluateInteger(clang::Expr *E, clang::ASTContext &Ctx, int Default = -1) {
+extern StringRef getPragmaContext(const clang::Attr* A) ;
+static int EvaluateInteger(clang::Expr *E, clang::ASTContext &Ctx, int Default = -1, CodeGenFunction *CGF = nullptr) {
   if (!E)
     return Default;
+
+  auto Res = E->isIntegerConstantExpr(Ctx);
+  if (!Res) {
+    if (CGF) {
+      CGF->CGM.getDiags().Report(E->getExprLoc(), clang::diag::warn_xlx_expr_not_ice) << CGF->getLangOpts().CPlusPlus;
+    }
+    return Default;
+  }
 
   llvm::APSInt Value = E->EvaluateKnownConstInt(Ctx);
   return Value.getSExtValue();
@@ -83,17 +93,23 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
 
   // Setting interleave.count
   if (Attrs.UnrollCount > 0) {
+    assert(Attrs.UnrollPragmaLoc && "invalid unroll pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.unroll.count"),
                         ConstantAsMetadata::get(ConstantInt::get(
-                            Type::getInt32Ty(Ctx), Attrs.UnrollCount))};
+                            Type::getInt32Ty(Ctx), Attrs.UnrollCount)),
+                        MDString::get(Ctx, Attrs.UnrollPragmaContext),
+                        Attrs.UnrollPragmaLoc.getAsMDNode()};
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
   // UnrollNoCheckCount = 0 means full unroll
   if (Attrs.UnrollWithoutCheck != -1) {
+    assert(Attrs.UnrollPragmaLoc && "invalid unroll pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.unroll.withoutcheck"),
                         ConstantAsMetadata::get(ConstantInt::get(
-                            Type::getInt32Ty(Ctx), Attrs.UnrollWithoutCheck))};
+                            Type::getInt32Ty(Ctx), Attrs.UnrollWithoutCheck)),
+                        MDString::get(Ctx, Attrs.UnrollPragmaContext), 
+                        Attrs.UnrollPragmaLoc.getAsMDNode()};
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
@@ -108,6 +124,7 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
 
   // Setting unroll.full or unroll.disable
   if (Attrs.UnrollEnable != LoopAttributes::Unspecified) {
+    assert(Attrs.UnrollPragmaLoc && "invalid unroll pragma location");
     std::string Name;
     if (Attrs.UnrollEnable == LoopAttributes::Enable)
       Name = "llvm.loop.unroll.enable";
@@ -115,11 +132,12 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
       Name = "llvm.loop.unroll.full";
     else
       Name = "llvm.loop.unroll.disable";
-    Metadata *Vals[] = {MDString::get(Ctx, Name)};
+    Metadata *Vals[] = {MDString::get(Ctx, Name), MDString::get(Ctx, Attrs.UnrollPragmaContext), Attrs.UnrollPragmaLoc.getAsMDNode()};
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
   if (Attrs.PipelineII) {
+    assert(Attrs.PipelinePragmaLoc && "invalid pipeline pragma location");
     Metadata *Vals[] = {
         MDString::get(Ctx, "llvm.loop.pipeline.enable"),
         ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Ctx),
@@ -127,7 +145,9 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
         ConstantAsMetadata::get(
             ConstantInt::get(Type::getInt1Ty(Ctx), Attrs.Rewind)),
         ConstantAsMetadata::get(
-            ConstantInt::get(Type::getInt8Ty(Ctx), Attrs.PipelineStyle))};
+            ConstantInt::get(Type::getInt8Ty(Ctx), Attrs.PipelineStyle)), 
+        MDString::get(Ctx, Attrs.PipelinePragmaContext),
+        Attrs.PipelinePragmaLoc.getAsMDNode()};
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
@@ -146,10 +166,13 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
   }
 
   if (Attrs.FlattenEnable != LoopAttributes::Unspecified) {
+    assert(Attrs.FlattenPragmaLoc && "invalid flatten pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.flatten.enable"),
                         ConstantAsMetadata::get(ConstantInt::get(
                             Type::getInt1Ty(Ctx),
-                            (Attrs.FlattenEnable == LoopAttributes::Enable)))};
+                            (Attrs.FlattenEnable == LoopAttributes::Enable))),
+                        MDString::get(Ctx, Attrs.FlattenPragmaContext),
+                        Attrs.FlattenPragmaLoc.getAsMDNode()};
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
@@ -163,6 +186,7 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
   }
 
   if (Attrs.TripCount.size() == 3) {
+    assert(Attrs.TripCountPragmaLoc && "invalid tripcount pragma location");
     Metadata *Vals[] = {
         MDString::get(Ctx, "llvm.loop.tripcount"),
         ConstantAsMetadata::get(
@@ -171,14 +195,19 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
             ConstantInt::get(Type::getInt32Ty(Ctx), Attrs.TripCount[1])),
         ConstantAsMetadata::get(
             ConstantInt::get(Type::getInt32Ty(Ctx), Attrs.TripCount[2])),
+        MDString::get(Ctx, Attrs.TripCountPragmaContext),
+        Attrs.TripCountPragmaLoc.getAsMDNode()
     };
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
   if (Attrs.IsDataflow) {
+    assert(Attrs.DataflowPragmaLoc && "invalid dataflow pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.dataflow.enable"),
                         ConstantAsMetadata::get(ConstantInt::get(
-                            Type::getInt1Ty(Ctx), Attrs.DisableDFPropagation))};
+                            Type::getInt1Ty(Ctx), Attrs.DisableDFPropagation)),
+                        MDString::get(Ctx, Attrs.DataflowPragmaContext),
+                        Attrs.DataflowPragmaLoc.getAsMDNode()};
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
@@ -314,6 +343,8 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
           State = LoopHintAttr::Numeric;
         }
       }
+      setUnrollDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setUnrollPragmaContext(getPragmaContext(Attr)); 
     } 
     else if (XlxUnrollHint) { 
       ValueInt = EvaluateInteger(XlxUnrollHint->getFactor(), Ctx,
@@ -327,35 +358,35 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
           State = LoopHintAttr::Numeric;
         }
       } else {
-        if (ValueInt != 1) {
+        if (ValueInt == 0) {
+          State = LoopHintAttr::Full;
+        } else if (ValueInt != 1) {
           Option = LoopHintAttr::UnrollWithoutCheck;
           State = LoopHintAttr::Numeric;
         }
       }
+      setUnrollDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setUnrollPragmaContext(getPragmaContext(Attr)); 
     }
     else if (XlxPipeline) { 
-      PipelineInt = -1;
+      PipelineInt = EvaluateInteger(XlxPipeline->getII(), Ctx, /*Default*/ -1, CGF);
       PipelineStyleInt = XlxPipeline->getStyle();
-      auto *ValueExpr = XlxPipeline->getII();
-      if (ValueExpr) {
-        llvm::APSInt ValueAPS = ValueExpr->EvaluateKnownConstInt(Ctx);
-        PipelineInt = ValueAPS.getSExtValue();
-      }
       Option = LoopHintAttr::Pipeline;
       State = LoopHintAttr::Numeric;
+      setPipelineDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setPipelinePragmaContext(getPragmaContext(Attr)); 
     } else if (XCLPipeline) {
-      PipelineInt = -1;
-      auto *ValueExpr = XCLPipeline->getII();
-      if (ValueExpr) {
-        llvm::APSInt ValueAPS = ValueExpr->EvaluateKnownConstInt(Ctx);
-        PipelineInt = ValueAPS.getSExtValue();
-      }
+      PipelineInt = EvaluateInteger(XCLPipeline->getII(), Ctx, /*Default*/ -1, CGF);
       Option = LoopHintAttr::Pipeline;
       State = LoopHintAttr::Numeric;
+      setPipelineDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setPipelinePragmaContext(getPragmaContext(Attr)); 
     } else if (XCLFlatten) {
       Option = LoopHintAttr::Flatten;
       State = XCLFlatten->getEnable() ? LoopHintAttr::Enable
                                       : LoopHintAttr::Disable;
+      setFlattenDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setFlattenPragmaContext(getPragmaContext(Attr)); 
     } else if (XCLTripCount) {
       int Min = EvaluateInteger(XCLTripCount->getMin(), Ctx, /*Default*/ 0);
       int Max = EvaluateInteger(XCLTripCount->getMax(), Ctx, /*Default*/ -1);
@@ -365,6 +396,8 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       TripInt = {Min, Max, Avg};
       Option = LoopHintAttr::TripCount;
       State = LoopHintAttr::Numeric;
+      setTripCountDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setTripCountPragmaContext(getPragmaContext(Attr)); 
     } else if (XlxTripCount) {
       int Min = EvaluateInteger(XlxTripCount->getMin(), Ctx, /*Default*/ 0);
       int Max = EvaluateInteger(XlxTripCount->getMax(), Ctx, /*Default*/ -1);
@@ -374,6 +407,8 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       TripInt = {Min, Max, Avg};
       Option = LoopHintAttr::TripCount;
       State = LoopHintAttr::Numeric;
+      setTripCountDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setTripCountPragmaContext(getPragmaContext(Attr)); 
     } else if (XCLLatency) {
       int Min = EvaluateInteger(XCLLatency->getMin(), Ctx, /*Default*/ 0);
       int Max = EvaluateInteger(XCLLatency->getMax(), Ctx, /*Default*/ 65535);
@@ -384,15 +419,15 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       DisableDFPropagation = XCLDataflow->getPropagation();
       Option = LoopHintAttr::DataFlow;
       State = LoopHintAttr::Enable;
+      setDataflowDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setDataflowPragmaContext(getPragmaContext(Attr)); 
     } else if (LH) {
-      auto *ValueExpr = LH->getValue();
-      if (ValueExpr) {
-        llvm::APSInt ValueAPS = ValueExpr->EvaluateKnownConstInt(Ctx);
-        ValueInt = ValueAPS.getSExtValue();
-      }
+      ValueInt = EvaluateInteger(LH->getValue(), Ctx, 1);
 
       Option = LH->getOption();
       State = LH->getState();
+      setUnrollDebugLoc(CGF->PragmaSourceLocToDebugLoc(LH->getLocation()));
+      setUnrollPragmaContext(getPragmaContext(Attr)); 
     }
 
     switch (State) {

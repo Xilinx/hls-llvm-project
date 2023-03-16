@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2021 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -66,10 +66,15 @@ template <> struct MappingTraits<PragmaHandle> {
 
 template <> struct MappingTraits<DirectiveHandle> {
   static void mapping(IO &IO, DirectiveHandle &KeyValue) {
-    IO.mapRequired("functionName", KeyValue.FunctionName);
-    IO.mapRequired("label", KeyValue.Label);
-    IO.mapRequired("functionLabel", KeyValue.FunctionLabel);
+    IO.mapOptional("functionName", KeyValue.FunctionName);
+    IO.mapOptional("label", KeyValue.Label);
+    IO.mapOptional("functionLabel", KeyValue.FunctionLabel);
+    IO.mapOptional("location", KeyValue.Location);
     IO.mapRequired("pragma", KeyValue.PragmaItem);
+    IO.mapOptional("id", KeyValue.Id);
+    IO.mapOptional("sourceFile", KeyValue.SourceFile);
+    IO.mapOptional("sourceLine", KeyValue.SourceLine);
+    IO.mapOptional("slx", KeyValue.FromSLX);
   }
 };
 
@@ -249,10 +254,16 @@ void Directive2pragmaCheck::registerMatchers(MatchFinder *Finder) {
 
   for (unsigned i = 0; i < SrcDirective[0].DirectiveList.size(); i++) {
     auto it = &SrcDirective[0].DirectiveList[i];
-    if (it->FunctionName.empty()) // report erro in location of tcl file
+    if (it->FunctionName.empty() && it->Location.empty()) // report erro in location of tcl file
       continue;
-	// initial DirectiveInfo class
-	PragmaInfo[it] = new DirectiveInfo();
+
+	  // initial DirectiveInfo class
+	  PragmaInfo[it] = new DirectiveInfo();
+
+    if (!it->Location.empty()){ 
+      PragmaInfo[it]->Location = it->Location; 
+      continue; 
+    }
 
     if (it->Label.empty() && visit.find(it->FunctionName) == visit.end()) {
       std::string notemp = removeTemplate(it->FunctionName);
@@ -338,6 +349,9 @@ void Directive2pragmaCheck::registerMatchers(MatchFinder *Finder) {
       }
     }
   }
+  Finder->addMatcher(
+      labelStmt(hasDeclaration(labelDecl(hasName("FAKELABEL")))).bind("LXXX"),
+      this);
 }
 
 static bool isSameRecord(const CXXRecordDecl *RecDecl, std::string &Name) {
@@ -626,7 +640,6 @@ static void extraJob(Directive2pragmaCheck *Check, const FunctionDecl *FD,
 
 void Directive2pragmaCheck::check(const MatchFinder::MatchResult &Result) {
   assert(SrcDirective.size() == 1);
-
   const FunctionDecl *MatchedFunction;
   const LabelDecl *MatchedLabel;
   const LabelStmt *MatchedLabelStmt;
@@ -646,6 +659,8 @@ void Directive2pragmaCheck::check(const MatchFinder::MatchResult &Result) {
   } else {
     AssignStmt = Result.Nodes.getNodeAs<BinaryOperator>("assignment");
   }
+
+
 
   if (MatchedFunction) {
     for (unsigned i = 0; i < SrcDirective[0].DirectiveList.size(); i++) {
@@ -787,11 +802,50 @@ void Directive2pragmaCheck::check(const MatchFinder::MatchResult &Result) {
     return;
   }
 
+
   assert(0 && "clang-tidy directive2pragma checker broken\n");
   return;
 }
 
 void Directive2pragmaCheck::onEndOfTranslationUnit() {
+
+  for( auto &kv : PragmaInfo) { 
+    DirectiveHandle *handle = kv.first; 
+    DirectiveInfo *info = kv.second; 
+    if (info->Location.empty())
+      continue; 
+
+    StringRef Locs(info->Location); 
+    int col = 0; 
+    std::pair<StringRef, StringRef> ss = Locs.rsplit(':'); 
+    StringRef col_str = ss.second; 
+    if (col_str.getAsInteger(10, col)) {
+      //TODO report error
+    }
+    int line = 0; 
+
+    ss = ss.first.rsplit(':'); 
+    StringRef line_str = ss.second; 
+    if (line_str.getAsInteger(10, line)) { 
+      //TODO, report error 
+    }
+    StringRef locFile = ss.first; 
+
+    SourceManager *SM = getContext()->getSourceManager();
+    SmallString<1024> realpath; 
+    SmallString<256> canonicalName(locFile) ; 
+    make_canonical(canonicalName); 
+    //llvm::errs() << "set_directive::location lookup sourceFileName: " << canonicalName << "\n"; 
+    if (!llvm::sys::fs::real_path( canonicalName.str(), realpath, true)) { 
+      //StringRef realName(realpath.begin(), realpath.size()); 
+
+      SourceLocation loc = SM->getSourceLocInMainFile( canonicalName.str(),  line, col); 
+      if (loc.isValid()) { 
+        SetPragma(handle, loc, SM, getContext()->getASTContext(), info->Location, true); 
+      }
+    }
+  }
+
 
   insertPragmaWithVar();
 
@@ -905,13 +959,15 @@ void Directive2pragmaCheck::setDiagMsg(DirectiveHandle *Pragma,
   return;
 }
 
+
 void Directive2pragmaCheck::SetPragma(struct DirectiveHandle *Directived,
                                       SourceLocation Loc, SourceManager *SM,
                                       ASTContext *Context, StringRef Name,
                                       bool before) {
 
   // generatePragma
-  std::string generatePragma = dumpPragma(Directived);
+  std::string generatePragma = dumpSetDirectiveLineNo(Directived); 
+  generatePragma += dumpPragma(Directived);
 
   // insert pragma under Function StartLoc
   auto BodyStart = Loc;
@@ -923,6 +979,7 @@ void Directive2pragmaCheck::SetPragma(struct DirectiveHandle *Directived,
   diag(Loc, "add %0 into %1 ")
       << generatePragma << Name
       << FixItHint::CreateInsertion(BodyStart, generatePragma);
+
 
   InsertedPragma[Directived] = generatePragma;
   return;
@@ -958,7 +1015,8 @@ void Directive2pragmaCheck::SetPragmawithResource(
   pragma need to be inserted before assignment
   */
   SourceLocation Loc = VarInfo->AssignStmt->getLocStart();
-  std::string generatePragma = dumpPragma(Directived);
+  std::string generatePragma = dumpSetDirectiveLineNo(Directived); 
+  generatePragma += dumpPragma(Directived);
   generatePragma += dumpLineInfo(Loc, DInfo->SM);
 
   diag(Loc, "add %0 into %1 ")
@@ -1197,10 +1255,32 @@ Stmt *Directive2pragmaCheck::needInsertIntoBrace(
   return nullptr;
 }
 
+std::string 
+Directive2pragmaCheck::dumpSetDirectiveLineNo(struct DirectiveHandle *Directived) 
+{
+  static int directiveId = 0;
+  int line = ++directiveId;
+  std::string file = "directive";
+  if (!Directived->SourceFile.empty() && !Directived->SourceLine.empty()) {
+    line = std::stoi(Directived->SourceLine);
+    file = Directived->SourceFile;
+  } else if (!Directived->Id.empty()) {
+    line = std::stoi(Directived->Id);
+  }
+  std::string res = "\n#line ";
+  res += std::to_string(line);
+  res += " \"" + file + "\"";
+  // do not append newline as it will be added by dumpPragma
+  return res;
+}
+
 std::string
 Directive2pragmaCheck::dumpPragma(struct DirectiveHandle *Directived) {
   // HACK: Use 'HLSDIRECTIVE' instead of 'HLS' so that PramgaXlxParser knows this came from a directive
   std::string PragmaStr = "\n#pragma HLSDIRECTIVE ";
+  if (Directived->FromSLX) { 
+    PragmaStr = "\n#pragma SLXDIRECTIVE "; 
+  }
   PragmaStr += Directived->PragmaItem.Name;
 
   for (auto Opt : Directived->PragmaItem.OptionList) {
@@ -1266,7 +1346,7 @@ bool Directive2pragmaCheck::tryReadDirectiveFile() {
 
   // fill ListCore from solution.funcunit file
   auto funcstr = FileName.getValue();
-  auto pos = 0;
+  auto pos = 0u;
 
   if ((pos = funcstr.find(".json")) != std::string::npos) {
     if (!tryReadFile(funcstr.erase(pos) + ".funcunit", Text)) {
@@ -1279,7 +1359,7 @@ bool Directive2pragmaCheck::tryReadDirectiveFile() {
 
 std::error_code Directive2pragmaCheck::parseDirective(StringRef DirectiveBuff) {
   llvm::yaml::Input Input(DirectiveBuff);
-  struct SrcHandle SrcBuff;
+  struct SrcHandle SrcBuff; 
   Input >> SrcBuff;
   SrcDirective = std::move(SrcBuff.SrcDirectiveList);
 

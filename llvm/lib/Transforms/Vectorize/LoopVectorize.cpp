@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This is the LLVM loop vectorizer. This pass modifies 'vectorizable' loops
@@ -7549,6 +7554,7 @@ static void AddRuntimeUnrollDisableMetaData(Loop *L) {
     SmallVector<Metadata *, 1> DisableOperands;
     DisableOperands.push_back(
         MDString::get(Context, "llvm.loop.unroll.runtime.disable"));
+    DisableOperands.push_back(MDString::get(Context, "infer-from-design"));
     MDNode *DisableNode = MDNode::get(Context, DisableOperands);
     MDs.push_back(DisableNode);
     MDNode *NewLoopID = MDNode::get(Context, MDs);

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -45,6 +45,8 @@
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 using namespace llvm;
+
+extern cl::opt<bool> HLS;
 
 #define DEBUG_TYPE "loop-unroll"
 
@@ -754,7 +756,7 @@ LoopUnrollResult llvm::UnrollLoop(
              "NeedCondition cannot be modified by both complete "
              "unrolling and runtime unrolling");
       NeedConditional = (PreserveCondBr && j && !(PreserveOnlyFirst && i != 0));
-    } else if (j != BreakoutTrip && (TripMultiple == 0 || j % TripMultiple != 0)) {
+    } else if (j != BreakoutTrip && (!HLS || j != 0) && (TripMultiple == 0 || j % TripMultiple != 0)) {
       // If we know the trip count or a multiple of it, we can safely use an
       // unconditional branch for some iterations.
       NeedConditional = false;

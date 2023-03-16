@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1270,6 +1270,8 @@ LValue CodeGenFunction::EmitLValue(const Expr *E) {
     return EmitArraySubscriptExpr(cast<ArraySubscriptExpr>(E));
   case Expr::OMPArraySectionExprClass:
     return EmitOMPArraySectionExpr(cast<OMPArraySectionExpr>(E));
+  case Expr::HLSWholeArrayExprClass:
+    return EmitHLSWholeArrayExpr(cast<HLSWholeArrayExpr>(E));
   case Expr::ExtVectorElementExprClass:
     return EmitExtVectorElementExpr(cast<ExtVectorElementExpr>(E));
   case Expr::MemberExprClass:
@@ -3260,6 +3262,97 @@ static Address emitArraySubscriptGEP(CodeGenFunction &CGF, Address addr,
   return Address(eltPtr, eltAlign);
 }
 
+static Address emitHLSWholeArrayBase(CodeGenFunction &CGF, const Expr *Base,
+                                       LValueBaseInfo &BaseInfo,
+                                       TBAAAccessInfo &TBAAInfo,
+                                       QualType BaseTy, QualType ElTy) {
+  LValue BaseLVal;
+  if (auto *ASE = dyn_cast<HLSWholeArrayExpr>(Base->IgnoreParenImpCasts())) {
+    BaseLVal = CGF.EmitHLSWholeArrayExpr(ASE);
+    if (BaseTy->isArrayType()) {
+      Address Addr = BaseLVal.getAddress();
+      BaseInfo = BaseLVal.getBaseInfo();
+
+      // If the array type was an incomplete type, we need to make sure
+      // the decay ends up being the right type.
+      llvm::Type *NewTy = CGF.ConvertType(BaseTy);
+      Addr = CGF.Builder.CreateElementBitCast(Addr, NewTy);
+
+      // Note that VLA pointers are always decayed, so we don't need to do
+      // anything here.
+      if (!BaseTy->isVariableArrayType()) {
+        assert(isa<llvm::ArrayType>(Addr.getElementType()) &&
+               "Expected pointer to array");
+        Addr = CGF.Builder.CreateStructGEP(Addr, 0, CharUnits::Zero(),
+                                           "arraydecay");
+      }
+
+      return CGF.Builder.CreateElementBitCast(Addr,
+                                              CGF.ConvertTypeForMem(ElTy));
+    }
+    LValueBaseInfo TypeBaseInfo;
+    TBAAAccessInfo TypeTBAAInfo;
+    CharUnits Align = CGF.getNaturalTypeAlignment(ElTy, &TypeBaseInfo,
+                                                  &TypeTBAAInfo);
+    BaseInfo.mergeForCast(TypeBaseInfo);
+    TBAAInfo = CGF.CGM.mergeTBAAInfoForCast(TBAAInfo, TypeTBAAInfo);
+    return Address(CGF.Builder.CreateLoad(BaseLVal.getAddress()), Align);
+  }
+  return CGF.EmitPointerWithAlignment(Base, &BaseInfo, &TBAAInfo);
+}
+
+
+LValue CodeGenFunction::EmitHLSWholeArrayExpr(const HLSWholeArrayExpr* E) {
+ 
+  QualType BaseTy = HLSWholeArrayExpr::getBaseOriginalType(E->getBase()); 
+  QualType ResultExprTy = E->getType();
+  Address EltPtr = Address::invalid();
+  LValueBaseInfo BaseInfo;
+  TBAAAccessInfo TBAAInfo;
+  auto EmitIdx = [this]() -> llvm::Value * {
+    auto F = CGM.getIntrinsic(llvm::Intrinsic::fpga_any);
+    auto Call = Builder.CreateCall(F, None, "fpgaidx");
+    return Call;
+  };
+
+  if(auto *VLA = getContext().getAsVariableArrayType(ResultExprTy)) {
+  
+   llvm_unreachable("HLSWholeArrayExpr unsupport VariableArrayType!"); 
+  } else if (const Expr *Array = isSimpleArrayDecayOperand(E->getBase())) {
+    // If this is A[i] where A is an array, the frontend will have decayed the
+    // base to be a ArrayToPointerDecay implicit cast.  While correct, it is
+    // inefficient at -O0 to emit a "gep A, 0, 0" when codegen'ing it, then a
+    // "gep x, i" here.  Emit one "gep A, 0, i".
+    assert(Array->getType()->isArrayType() &&
+           "Array to pointer decay must have array source type!");
+    LValue ArrayLV;
+    // For simple multidimensional array indexing, set the 'accessed' flag for
+    // better bounds-checking of the base expression.
+    if (const auto *ASE = dyn_cast<ArraySubscriptExpr>(Array))
+      ArrayLV = EmitArraySubscriptExpr(ASE, /*Accessed*/ true);
+    else
+      ArrayLV = EmitLValue(Array);
+
+    // Propagate the alignment from the array itself to the result.
+    auto *Idx = EmitIdx();
+    EltPtr = emitArraySubscriptGEP(
+        *this, ArrayLV.getAddress(), {CGM.getSize(CharUnits::Zero()), Idx},
+        ResultExprTy, !getLangOpts().isSignedOverflowDefined(),
+        false, E->getExprLoc());
+    BaseInfo = ArrayLV.getBaseInfo();
+    TBAAInfo = CGM.getTBAAInfoForSubobject(ArrayLV, ResultExprTy);
+  } else {
+    Address Base = emitHLSWholeArrayBase(*this, E->getBase(), BaseInfo, TBAAInfo,
+                                          BaseTy, ResultExprTy);
+    auto *Idx = EmitIdx();
+    EltPtr = emitArraySubscriptGEP(*this, Base, Idx, ResultExprTy,
+                                   !getLangOpts().isSignedOverflowDefined(),
+                                   false, E->getExprLoc());
+  }
+
+  return MakeAddrLValue(EltPtr, ResultExprTy, BaseInfo, TBAAInfo);    
+}
+
 LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E,
                                                bool Accessed) {
   // The index must always be an integer, which is not an aggregate.  Emit it
@@ -3315,7 +3408,6 @@ LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E,
     return MakeAddrLValue(Addr, EltType, LV.getBaseInfo(),
                           CGM.getTBAAInfoForSubobject(LV, EltType));
   }
-
   LValueBaseInfo EltBaseInfo;
   TBAAAccessInfo EltTBAAInfo;
   Address Addr = Address::invalid();
@@ -3389,7 +3481,6 @@ LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E,
     else
       ArrayLV = EmitLValue(Array);
     auto *Idx = EmitIdxAfterBase(/*Promote*/true);
-
     // Propagate the alignment from the array itself to the result.
     Addr = emitArraySubscriptGEP(
         *this, ArrayLV.getAddress(), {CGM.getSize(CharUnits::Zero()), Idx},

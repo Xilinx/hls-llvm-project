@@ -57,6 +57,7 @@ add_llvm_library(LLVMCore
   Verifier.cpp
   XILINXFPGAIntrinsicInst.cpp
   XILINXHLSIRBuilder.cpp
+  XILINXAggregateUtil.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/IR

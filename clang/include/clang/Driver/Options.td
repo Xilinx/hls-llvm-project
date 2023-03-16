@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -668,6 +668,21 @@ def hls_platform_db_name : Joined<["-"], "hls-platform-db-name=">,
   Group<f_Group>,
   Flags<[CC1Option]>,
   HelpText<"pass platform db name to hls compilation.">;
+
+def hls_support_slx :  Joined<["-"], "hls-support-slx">, 
+  Group<f_Group>, 
+  Flags<[CC1Option]>, 
+  HelpText<"Support pragma from SLX dreictive"> ; 
+
+def device_resource_info : Joined<["-"], "device-resource-info=">,
+  Group<f_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"pass device resource information to hls compilation.">;
+
+def device_name_info : Joined<["-"], "device-name-info=">,
+  Group<f_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"pass device name information to hls compilation.">;
 
 def fgnu_inline_asm : Flag<["-"], "fgnu-inline-asm">, Group<f_Group>, Flags<[DriverOption]>;
 def fno_gnu_inline_asm : Flag<["-"], "fno-gnu-inline-asm">, Group<f_Group>,

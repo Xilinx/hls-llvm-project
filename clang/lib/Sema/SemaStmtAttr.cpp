@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -348,9 +348,12 @@ static Attr *handleOpenCLUnrollHint(Sema &S, Stmt *St, const AttributeList &A,
 
 static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const AttributeList &A,
                                   SourceRange Range) {
+
   if (S.getLangOpts().HLSExt) {
-    if (auto *a = S.ProcessXlxStmtAttributes(St, A, Range))
+    if (auto *a = S.ProcessXlxStmtAttributes(St, A, Range)){ 
+      a->setPragmaContext(A.getPragmaContext()); 
       return a;
+    }
   }
 
   switch (A.getKind()) {

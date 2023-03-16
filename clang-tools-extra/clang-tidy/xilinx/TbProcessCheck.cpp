@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2021 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -31,11 +31,48 @@ namespace clang {
 namespace tidy {
 namespace xilinx {
 
-static bool isTemplateDecl(const FunctionDecl *Caller) {
-  if (Caller->getTemplatedKind() == FunctionDecl::TK_FunctionTemplate)
-    return true;
+using clang::ast_matchers::MatchFinder;
+using llvm::errs;
 
-  return false;
+void HandleTop::run(const MatchFinder::MatchResult &res)
+{
+  this->top = res.Nodes.getNodeAs<FunctionDecl>("top");
+}
+
+void HandleTopDef::run(const MatchFinder::MatchResult &res)
+{
+  this->topdef = res.Nodes.getNodeAs<FunctionDecl>("topdef");
+  this->check->generateWrapFunction(this->topdef, res);
+  this->check->dumpTclFile();
+}
+
+void HandleCall::run(const MatchFinder::MatchResult &res)
+{
+  this->call = res.Nodes.getNodeAs<Expr>("call");
+  const FunctionDecl *top = this->check->hTop.top;
+  if (top == nullptr) {
+    top = this->check->hTopDef.topdef;
+  }
+  this->check->buildSWWrapFunction(top, res.Context);
+  this->check->insertMainGuard(top, top, res);
+  this->check->insertGuardForKeepTopName(this->call, res);
+}
+
+void HandleMain::run(const MatchFinder::MatchResult &res)
+{
+  auto *main = res.Nodes.getNodeAs<FunctionDecl>("main");
+
+  std::string s("\n#ifndef HLS_FASTSIM\n");
+  auto loc = main->getLocStart();
+  s += dumpLineInfo(loc, res.SourceManager);
+  this->check->diag(loc, "guard main function")
+    << FixItHint::CreateInsertion(loc, s);
+
+  s = "\n#endif\n";
+  loc = this->check->findLocationAfterBody(res, main->getBodyRBrace());
+  s += dumpLineInfo(main->getBodyRBrace(), res.SourceManager);
+  this->check->diag(main->getBodyRBrace(), "guard main function")
+    << FixItHint::CreateInsertion(loc, s);
 }
 
 TbProcessCheck::TbProcessCheck(StringRef Name, ClangTidyContext *Context)
@@ -43,6 +80,7 @@ TbProcessCheck::TbProcessCheck(StringRef Name, ClangTidyContext *Context)
       TopFunctionName(Options.get("TopFunctionName", "dut")),
       KeepTopName(Options.get("KeepTopName", 0)),
       NewFlow(Options.get("NewFlow", 0)), BCSim(Options.get("BCSim", 0)),
+      hTop(this), hTopDef(this), hCall(this), hMain(this),
       BuildDir(Context->getCurrentBuildDirectory()) {}
 
 void TbProcessCheck::storeOptions(ClangTidyOptions::OptionMap &Options) {
@@ -56,48 +94,33 @@ void TbProcessCheck::storeOptions(ClangTidyOptions::OptionMap &Options) {
 void TbProcessCheck::registerMatchers(MatchFinder *Finder) {
 
   if (KeepTopName) {
-    // FIXME: do not match CXXMethodDecl as top function
-    auto Top =
-        functionDecl(allOf(hasName(TopFunctionName), unless(cxxMethodDecl())))
-            .bind("top");
-    Finder->addMatcher(
-        functionDecl(allOf(hasName(TopFunctionName), isDefinition(),
-                           unless(cxxMethodDecl())))
-            .bind("topdef"),
-        this);
+    std::string name("::");
+    name.append(TopFunctionName);
+
+    auto Top = functionDecl(hasName(name), unless(isDefinition()))
+               .bind("top");
+
+    auto TopDef = functionDecl(hasName(name), isDefinition())
+                  .bind("topdef");
+
     // support format: top()/a=top()/b=top
-    Finder->addMatcher(
-        expr(anyOf(callExpr(callee(Top)),
-                   binaryOperator(
-                       hasRHS(ignoringImpCasts(declRefExpr(to(Top)))))),
-             hasAncestor(functionDecl(isDefinition()).bind("caller")))
-            .bind("expr"),
-        this);
+    auto Call = expr(anyOf(callExpr(callee(Top)),
+                           callExpr(callee(TopDef)),
+                           binaryOperator(hasRHS(
+                             ignoringImpCasts(declRefExpr(to(Top))))),
+                           binaryOperator(hasRHS(
+                             ignoringImpCasts(declRefExpr(to(TopDef)))))))
+                .bind("call");
+
+    auto Main = functionDecl(hasName("::main"), isDefinition())
+                .bind("main");
+
+    Finder->addMatcher(Top, &hTop);
+    Finder->addMatcher(TopDef, &hTopDef);
+    Finder->addMatcher(Call, &hCall);
+    Finder->addMatcher(Main, &hMain);
   } else if (NewFlow && !BCSim) {
   } else {
-  }
-}
-
-void TbProcessCheck::check(const MatchFinder::MatchResult &Result) {
-  if (KeepTopName) {
-    const auto *MatchedTopDef = Result.Nodes.getNodeAs<FunctionDecl>("topdef");
-    if (MatchedTopDef) {
-      generateWrapFunction(MatchedTopDef, Result);
-      dumpTclFile();
-    }
-
-    const auto *MatchedTop = Result.Nodes.getNodeAs<FunctionDecl>("top");
-    const auto *MatchedDecl = Result.Nodes.getNodeAs<FunctionDecl>("caller");
-    const auto *MatchedExpr = Result.Nodes.getNodeAs<Expr>("expr");
-    // insert SW wrapfunction first
-    if (MatchedTop)
-      buildSWWrapFunction(MatchedTop, Result.Context);
-    if (MatchedExpr)
-      insertGuardForKeepTopName(MatchedExpr, Result);
-    if (MatchedDecl) {
-      if (isTemplateDecl(MatchedDecl)) return;
-      insertMainGuard(MatchedDecl, MatchedTop, Result);
-    }
   }
 }
 
@@ -344,20 +367,15 @@ void TbProcessCheck::insertMainGuard(
     if (Tempdecl)
       decl = Tempdecl;
   }
-  std::string MainStart = "#ifndef HLS_FASTSIM\n";
+  std::string MainStart = "\n#ifndef HLS_FASTSIM\n";
   auto SWWrap = Wrap.Sw;
 
   std::string ReplacedProtoType = SWWrap.dumpSignature();
   MainStart += ReplacedProtoType + ";\n";
+  MainStart += "#endif\n";
   MainStart += dumpLineInfo(decl->getLocStart(), Result.SourceManager);
   diag(decl->getLocStart(), "insert warp function declaration")
       << FixItHint::CreateInsertion(decl->getLocStart(), MainStart);
-
-  auto LocEnd = findLocationAfterBody(Result, Caller->getBodyRBrace());
-  std::string MainEnd = "\n#endif\n";
-  MainEnd += dumpLineInfo(Caller->getBodyRBrace(), Result.SourceManager);
-  diag(Caller->getBodyRBrace(), "insert main function guard macro")
-      << FixItHint::CreateInsertion(LocEnd, MainEnd);
 }
 
 std::string wrapfunction::dumpAll() {

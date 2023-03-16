@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines the Attr interface and subclasses.
@@ -45,6 +50,7 @@ private:
   SourceRange Range;
   unsigned AttrKind : 16;
 
+
 protected:
   /// An index into the spelling list of an
   /// attribute defined in Attr.td file.
@@ -56,6 +62,8 @@ protected:
   // instance of the attribute.
   unsigned IsLateParsed : 1;
   unsigned InheritEvenIfAlreadyPresent : 1;
+
+  IdentifierInfo* pragmaContext; 
 
   void *operator new(size_t bytes) noexcept {
     llvm_unreachable("Attrs cannot be allocated with regular 'new'.");
@@ -79,7 +87,7 @@ protected:
        bool IsLateParsed)
     : Range(R), AttrKind(AK), SpellingListIndex(SpellingListIndex),
       Inherited(false), IsPackExpansion(false), Implicit(false),
-      IsLateParsed(IsLateParsed), InheritEvenIfAlreadyPresent(false) {}
+      IsLateParsed(IsLateParsed), InheritEvenIfAlreadyPresent(false), pragmaContext(nullptr) {}
 
 public:
 
@@ -106,6 +114,15 @@ public:
 
   // Clone this attribute.
   Attr *clone(ASTContext &C) const;
+
+  IdentifierInfo *getPragmaContext() const { 
+    return pragmaContext; 
+  }
+
+  void setPragmaContext(IdentifierInfo *pragmaContext) { 
+    this->pragmaContext = pragmaContext; 
+  }
+
 
   bool isLateParsed() const { return IsLateParsed; }
 

@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -18,9 +18,9 @@
 // specific language governing permissions and limitations
 // under the License.
 //===----------------------------------------------------------------------===//
-
 #include "llvm/Transforms/Utils/XILINXLoopUtils.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 
 using namespace llvm;
 
@@ -72,45 +72,69 @@ void llvm::addLoopMetadata(Loop *L, StringRef Attr,
   L->setLoopID(NewLoopID);
 }
 
-void llvm::addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg) {
+void llvm::addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg, StringRef Source) {
   Type *Int32Ty = Type::getInt32Ty(GetContext(L));
-  addLoopMetadata(L, "llvm.loop.tripcount",
-                  {ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Min)),
-                   ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Max)),
-                   ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Avg))});
+  SmallVector<Metadata *, 4> MD(
+      {ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Min)),
+       ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Max)),
+       ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Avg))});
+  if (Source != "") {
+    MD.push_back(MDString::get(GetContext(L), Source));
+  }
+  addLoopMetadata(L, "llvm.loop.tripcount", MD);
 }
 
-void llvm::addDataFlow(Loop *L) {
-  addLoopMetadata(L, "llvm.loop.dataflow.enable");
+void llvm::addDataFlow(Loop *L, StringRef Source) {
+  SmallVector<Metadata *, 1> MD;
+  if (Source != "") {
+    MD.push_back(MDString::get(GetContext(L), Source));
+  }
+  addLoopMetadata(L, "llvm.loop.dataflow.enable", MD);
 }
 
 /// II = -1 : default "II" value
 /// II = 0  : force no pipeline. Query with isPipelineOff instead.
 /// II > 0  : customized "II" value
 void llvm::addPipeline(Loop *L, int32_t II, bool IsRewind,
-                       PipelineStyle Style) {
+                       PipelineStyle Style, StringRef Source, DILocation *Loc) {
   LLVMContext &Context = GetContext(L);
-  addLoopMetadata(L, "llvm.loop.pipeline.enable",
-                  {ConstantAsMetadata::get(
+  SmallVector<Metadata*, 4> MDs{ConstantAsMetadata::get(
                        ConstantInt::getSigned(Type::getInt32Ty(Context), II)),
                    ConstantAsMetadata::get(
                        ConstantInt::get(Type::getInt1Ty(Context), IsRewind)),
                    ConstantAsMetadata::get(ConstantInt::get(
-                       Type::getInt8Ty(Context), static_cast<int>(Style)))});
+                       Type::getInt8Ty(Context), static_cast<int>(Style)))};
+  if (Source != "") {
+    MDs.push_back(MDString::get(GetContext(L), Source));
+  }
+  if (Loc)
+    MDs.push_back(Loc);
+  addLoopMetadata(L, "llvm.loop.pipeline.enable", MDs);
 }
 
-void llvm::addPipelineOff(Loop *L) {
-  addPipeline(L, /* No pipeline */ 0, false);
+void llvm::addPipelineOff(Loop *L, StringRef Source) {
+  addPipeline(L, /* No pipeline */ 0, false, PipelineStyle::Default, Source);
 }
 
-void llvm::addFullyUnroll(Loop *L) {
-  addLoopMetadata(L, "llvm.loop.unroll.full");
+void llvm::addFullyUnroll(Loop *L, StringRef Source, DILocation *Loc) {
+  SmallVector<Metadata *, 2> MD;
+  if (Source != "") {
+    MD.push_back(MDString::get(GetContext(L), Source));
+  }
+  if (Loc) {
+    MD.push_back(Loc);
+  }
+  addLoopMetadata(L, "llvm.loop.unroll.full", MD);
 }
 
-void llvm::addPartialUnroll(Loop *L, uint32_t Factor, bool SkipExitCheck) {
-  SmallVector<Metadata *, 1> MD(
-      1, ConstantAsMetadata::get(
-             ConstantInt::get(Type::getInt32Ty(GetContext(L)), Factor)));
+void llvm::addPartialUnroll(Loop *L, uint32_t Factor, bool SkipExitCheck, StringRef Source, DILocation *Loc) {
+  SmallVector<Metadata *, 3> MD{ConstantAsMetadata::get(
+             ConstantInt::get(Type::getInt32Ty(GetContext(L)), Factor))};
+  if (Source != "") {
+    MD.push_back(MDString::get(GetContext(L), Source));
+  }
+  if (Loc)
+    MD.push_back(Loc);
   if (SkipExitCheck) {
     addLoopMetadata(L, "llvm.loop.unroll.withoutcheck", MD);
     return;
@@ -118,14 +142,21 @@ void llvm::addPartialUnroll(Loop *L, uint32_t Factor, bool SkipExitCheck) {
   addLoopMetadata(L, "llvm.loop.unroll.count", MD);
 }
 
-void llvm::addUnrollOff(Loop *L) {
-  addLoopMetadata(L, "llvm.loop.unroll.disable");
+void llvm::addUnrollOff(Loop *L, StringRef Source) {
+  SmallVector<Metadata *, 1> MD;
+  if (Source != "") {
+    MD.push_back(MDString::get(GetContext(L), Source));
+  }
+  addLoopMetadata(L, "llvm.loop.unroll.disable", MD);
 }
 
-void llvm::addFlatten(Loop *L) {
-  addLoopMetadata(L, "llvm.loop.flatten.enable",
-                  {ConstantAsMetadata::get(
-                      ConstantInt::get(Type::getInt1Ty(GetContext(L)), 1))});
+void llvm::addFlatten(Loop *L, StringRef Source, DILocation *Loc) {
+  SmallVector<Metadata *, 3> MD{ConstantAsMetadata::get(
+                      ConstantInt::get(Type::getInt1Ty(GetContext(L)), 1)),
+                      MDString::get(GetContext(L), Source)};
+  if (Loc)
+    MD.push_back(Loc);
+  addLoopMetadata(L, "llvm.loop.flatten.enable", MD);
 }
 
 void llvm::addFlattenOff(Loop *L) {

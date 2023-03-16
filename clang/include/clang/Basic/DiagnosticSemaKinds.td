@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -8997,6 +8997,26 @@ def err_omp_reduction_vla_unsupported : Error<
 def err_omp_linear_distribute_var_non_loop_iteration : Error<
   "only loop iteration variables are allowed in 'linear' clause in distribute directives">;
 } // end of OpenMP category
+
+let CategoryName = "HLS Issue" in {
+// HLS support.
+
+def err_hls_whole_array_function_type : Error<
+  "whole array of pointer to function type %0">;
+
+def err_hls_whole_array_incomplete_type : Error<
+  "whole array of pointer to incomplete type %0">;
+
+def err_hls_whole_array_typecheck_subscripted_value : Error<
+  "subscripted value is not an arrary">;
+
+def err_hls_whole_array_muti_dimension : Error<
+  "subscripted value is whole array exprssion">;
+
+def err_hls_whole_array_use: Error<
+  "HLS whole array expression is not allowed here">;
+
+} // end of HLS category
 
 let CategoryName = "Related Result Type Issue" in {
 // Objective-C related result type compatibility

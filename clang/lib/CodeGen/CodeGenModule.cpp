@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -4939,4 +4939,31 @@ CodeGenModule::createOpenCLIntToSamplerConversion(const Expr *E,
   return CGF.Builder.CreateCall(CreateRuntimeFunction(FTy,
                                 "__translate_sampler_initializer"),
                                 {C});
+}
+
+void CodeGenModule::genTopArgAnnotation() 
+{
+
+  // Annotate the parameter attributes
+  if (getLangOpts().HLSExt && HLSTop) { 
+    auto &Args = HLSTop->topArgs; 
+
+    llvm::IRBuilder< > builder( &*HLSTop->func->getEntryBlock().getFirstInsertionPt());
+    for( int i = 0; i < Args.size(); i++) { 
+      const VarDecl *ParmD = Args[i];
+      assert( isa<ParmVarDecl>(ParmD) && "unexpected, the implicit 'this' parameter must nost be top argument"); 
+      const ParmVarDecl  *D = cast<ParmVarDecl>(ParmD); 
+
+      llvm::Argument * Parm = HLSTop->func->getArg(i);
+
+      GEPFields fields;
+      if (D->getType()->isReferenceType() || D->getType()->isPointerType()) { 
+        fields.push_back(0);
+        GenerateStreamAnnotationIntrinsic(builder, Parm, D, D->getType()->getPointeeType(), fields, true);
+      }
+      else { 
+        GenerateStreamAnnotationIntrinsic(builder, Parm, D, D->getType(), fields, false);
+      }
+    }
+  }
 }

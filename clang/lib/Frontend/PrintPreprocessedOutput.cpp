@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This code simply runs the preprocessor on the input file and prints out the
@@ -27,6 +32,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "clang/Basic/HLSPragmaPreprocessor.inc"
 #include <cstdio>
 using namespace clang;
 
@@ -683,6 +689,49 @@ struct UnknownPragmaHandler : public PragmaHandler {
     Callbacks->setEmittedDirectiveOnThisLine();
   }
 };
+
+struct HLSPragmaHandler : public PragmaHandler {
+  const char *Prefix;
+  PrintPPOutputPPCallbacks *Callbacks;
+
+  HLSPragmaHandler(const char *prefix, PrintPPOutputPPCallbacks *callbacks)
+      : Prefix(prefix), Callbacks(callbacks) {}
+  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+                    Token &PragmaTok) override {
+    // Figure out what line we went to and insert the appropriate number of
+    // newline characters.
+    Callbacks->startNewLineIfNeeded();
+    Callbacks->MoveToLine(PragmaTok.getLocation());
+    Callbacks->OS.write(Prefix, strlen(Prefix));
+
+    Token PrevToken;
+    Token PrevPrevToken;
+    PrevToken.startToken();
+    PrevPrevToken.startToken();
+
+    std::string TokSpell = PP.getSpelling(PragmaTok);
+    hls::pragma::setCurPragma(TokSpell);
+    PP.setMacroExpandCallback(hls::pragma::shouldExpandMacro);
+
+    // Read and print all of the pragma tokens.
+    while (PragmaTok.isNot(tok::eod)) {
+      std::string TokSpell = PP.getSpelling(PragmaTok);
+
+      if (PragmaTok.hasLeadingSpace() ||
+          Callbacks->AvoidConcat(PrevPrevToken, PrevToken, PragmaTok))
+        Callbacks->OS << ' ';
+
+      Callbacks->OS.write(&TokSpell[0], TokSpell.size());
+      PrevPrevToken = PrevToken;
+      PrevToken = PragmaTok;
+
+      PP.Lex(PragmaTok);
+    }
+    PP.setMacroExpandCallback(nullptr);
+    hls::pragma::resetCurPragma();
+    Callbacks->setEmittedDirectiveOnThisLine();
+  }
+};
 } // end anonymous namespace
 
 
@@ -865,6 +914,54 @@ void clang::DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
                                /*RequireTokenExpansion=*/true));
   PP.AddPragmaHandler("omp", OpenMPHandler.get());
 
+  llvm::StringMap<std::unique_ptr<HLSPragmaHandler>> HLSPragmaHandlers;
+  if (PP.getLangOpts().HLSExt) {
+    std::unique_ptr<HLSPragmaHandler> XlxHLSHandler(
+        new HLSPragmaHandler("#pragma HLS", Callbacks));
+    PP.AddPragmaHandler("HLS", XlxHLSHandler.get());
+    HLSPragmaHandlers.insert(std::make_pair("HLS", std::move(XlxHLSHandler)));
+
+    std::unique_ptr<HLSPragmaHandler> XlxhlsHandler(
+        new HLSPragmaHandler("#pragma hls", Callbacks));
+    PP.AddPragmaHandler("hls", XlxhlsHandler.get());
+    HLSPragmaHandlers.insert(std::make_pair("hls", std::move(XlxhlsHandler)));
+
+    std::unique_ptr<HLSPragmaHandler> XlxHLSDIRECTIVEHandler(
+        new HLSPragmaHandler("#pragma HLSDIRECTIVE", Callbacks));
+    PP.AddPragmaHandler("HLSDIRECTIVE", XlxHLSDIRECTIVEHandler.get());
+    HLSPragmaHandlers.insert(
+        std::make_pair("HLSDIRECTIVE", std::move(XlxHLSDIRECTIVEHandler)));
+
+    std::unique_ptr<HLSPragmaHandler> XlxSLXDIRECTIVEHandler(
+        new HLSPragmaHandler("#pragma SLXDIRECTIVE", Callbacks));
+    PP.AddPragmaHandler("SLXDIRECTIVE", XlxSLXDIRECTIVEHandler.get());
+    HLSPragmaHandlers.insert(
+        std::make_pair("SLXDIRECTIVE", std::move(XlxSLXDIRECTIVEHandler)));
+
+
+    std::unique_ptr<HLSPragmaHandler> XlxAPHandler(
+        new HLSPragmaHandler("#pragma AP", Callbacks));
+    PP.AddPragmaHandler("AP", XlxAPHandler.get());
+    HLSPragmaHandlers.insert(std::make_pair("AP", std::move(XlxAPHandler)));
+
+    std::unique_ptr<HLSPragmaHandler> XlxapHandler(
+        new HLSPragmaHandler("#pragma ap", Callbacks));
+    PP.AddPragmaHandler("ap", XlxapHandler.get());
+    HLSPragmaHandlers.insert(std::make_pair("ap", std::move(XlxapHandler)));
+
+    std::unique_ptr<HLSPragmaHandler> XlxAUTOPILOTHandler(
+        new HLSPragmaHandler("#pragma AUTOPILOT", Callbacks));
+    PP.AddPragmaHandler("AUTOPILOT", XlxAUTOPILOTHandler.get());
+    HLSPragmaHandlers.insert(
+        std::make_pair("AUTOPILOT", std::move(XlxAUTOPILOTHandler)));
+
+    std::unique_ptr<HLSPragmaHandler> XlxautopilotHandler(
+        new HLSPragmaHandler("#pragma autopilot", Callbacks));
+    PP.AddPragmaHandler("autopilot", XlxautopilotHandler.get());
+    HLSPragmaHandlers.insert(
+        std::make_pair("autopilot", std::move(XlxautopilotHandler)));
+  }
+
   PP.addPPCallbacks(std::unique_ptr<PPCallbacks>(Callbacks));
 
   // After we have configured the preprocessor, enter the main file.
@@ -898,4 +995,8 @@ void clang::DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
   PP.RemovePragmaHandler("GCC", GCCHandler.get());
   PP.RemovePragmaHandler("clang", ClangHandler.get());
   PP.RemovePragmaHandler("omp", OpenMPHandler.get());
+
+  for (auto &Entry : HLSPragmaHandlers) {
+    PP.RemovePragmaHandler(Entry.first(), Entry.second.get());
+  }
 }

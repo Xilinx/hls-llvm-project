@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3131,7 +3131,10 @@ public:
   static bool isSizeTooLarge(unsigned SizeInBits) {
     static_assert(APIntTypeBitfields::MaxSizeInBits >= 4096,
                   "Bad bitwidth limitation!");
-    return SizeInBits > 4096;
+    return SizeInBits > APIntTypeBitfields::MaxSizeInBits;
+  }
+  static unsigned getMaxSizeInBits() {
+    return APIntTypeBitfields::MaxSizeInBits;
   }
 
   bool isSugared() const { return false; }

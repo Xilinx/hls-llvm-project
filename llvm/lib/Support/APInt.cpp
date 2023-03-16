@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2662,4 +2662,50 @@ void APInt::tcSetLeastSignificantBits(WordType *dst, unsigned parts,
 
   while (i < parts)
     dst[i++] = 0;
+}
+
+APInt llvm::APIntOps::RoundingUDiv(const APInt &A, const APInt &B,
+                                   APInt::Rounding RM) {
+  // Currently udivrem always rounds down.
+  switch (RM) {
+  case APInt::Rounding::DOWN:
+  case APInt::Rounding::TOWARD_ZERO:
+    return A.udiv(B);
+  case APInt::Rounding::UP: {
+    APInt Quo, Rem;
+    APInt::udivrem(A, B, Quo, Rem);
+    if (Rem == 0)
+      return Quo;
+    return Quo + 1;
+  }
+  }
+}
+
+APInt llvm::APIntOps::RoundingSDiv(const APInt &A, const APInt &B,
+                                   APInt::Rounding RM) {
+  switch (RM) {
+  case APInt::Rounding::DOWN:
+  case APInt::Rounding::UP: {
+    APInt Quo, Rem;
+    APInt::sdivrem(A, B, Quo, Rem);
+    if (Rem == 0)
+      return Quo;
+    // This algorithm deals with arbitrary rounding mode used by sdivrem.
+    // We want to check whether the non-integer part of the mathematical value
+    // is negative or not. If the non-integer part is negative, we need to round
+    // down from Quo; otherwise, if it's positive or 0, we return Quo, as it's
+    // already rounded down.
+    if (RM == APInt::Rounding::DOWN) {
+      if (Rem.isNegative() != B.isNegative())
+        return Quo - 1;
+      return Quo;
+    }
+    if (Rem.isNegative() != B.isNegative())
+      return Quo;
+    return Quo + 1;
+  }
+  // Currently sdiv rounds twards zero.
+  case APInt::Rounding::TOWARD_ZERO:
+    return A.sdiv(B);
+  }
 }

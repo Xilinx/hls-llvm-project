@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -6680,8 +6680,10 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
 
   switch (Attr.getKind()) {
   default:
-    if (S.ProcessXlxDeclAttributes(scope, D, Attr))
+    if (S.ProcessXlxDeclAttributes(scope, D, Attr)){ 
+
       break;
+    }
 
     if (!Attr.isStmtAttr()) {
       // Type attributes are handled elsewhere; silently move on.
@@ -6709,9 +6711,6 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
   case AttributeList::AT_XCLInline:
     handleEnableAttribute<XCLInlineAttr>(S, D, Attr, false);
-    break;
-  case AttributeList::AT_XlxFuncInstantiate:
-    handleSimpleAttribute<XlxFuncInstantiateAttr>(S, D, Attr);
     break;
   case AttributeList::AT_XlxVarReset:
     handleEnableAttribute<XlxVarResetAttr>(S, D, Attr);

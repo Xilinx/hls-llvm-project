@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file implements the SourceManager interface.
@@ -45,6 +50,32 @@
 using namespace clang;
 using namespace SrcMgr;
 using llvm::MemoryBuffer;
+
+StringRef clang::make_canonical(SmallVectorImpl<char> &CanonicalNameBuf)
+{
+  StringRef CanonicalName; 
+//#ifdef LLVM_ON_UNIX
+#if 0
+  char buffer[PATH_MAX];
+  std::copy(canonicalName.begin(), canonicalName.end(), &buffer[0]); 
+  buffer[canonicalNameBuffer.size()] = '\0'; 
+  CanonicalNameBuf.reserve(PATH_MAX); 
+  if (realpath(buffer, CanonicalNameBuf.data()))
+    CanonicalName = StringRef(CanonicalNameBuf.data()); 
+#else
+  llvm::sys::fs::make_absolute(CanonicalNameBuf);
+  llvm::sys::path::native(CanonicalNameBuf);
+  // We've run into needing to remove '..' here in the wild though, so
+  // remove it.
+  // On Windows, symlinks are significantly less prevalent, so removing
+  // '..' is pretty safe.
+  // Ideally we'd have an equivalent of `realpath` and could implement
+  // sys::fs::canonical across all the platforms.
+  llvm::sys::path::remove_dots(CanonicalNameBuf, /* remove_dot_dot */ true);
+  CanonicalName = StringRef(CanonicalNameBuf.data(), CanonicalNameBuf.size()); 
+#endif
+  return CanonicalName; 
+}
 
 //===----------------------------------------------------------------------===//
 // SourceManager Helper Classes
@@ -200,6 +231,30 @@ unsigned LineTableInfo::getLineTableFilenameID(StringRef Name) {
   return IterBool.first->second;
 }
 
+
+Optional<unsigned> LineTableInfo::getLineTableFilenameIDByAbsoluteName( StringRef absoluteName)
+{
+  StringRef  filename = llvm::sys::path::filename(absoluteName); 
+  for ( auto &kv : FilenameIDs) { 
+    StringRef searchName = kv.getKey(); 
+
+    StringRef searchFilename = llvm::sys::path::filename(searchName);
+    if (!filename.equals(searchFilename)) { 
+      continue; 
+    }
+
+    SmallVector<char, 256> canonicalNameBuffer(searchName.begin(), searchName.end()); 
+    searchName = make_canonical( canonicalNameBuffer); 
+
+    //llvm::errs() << "try to match the path " << absoluteName << " vs " << searchName << "\n"; 
+    if (absoluteName.equals(searchName)) { 
+      return kv.getValue(); 
+    }
+  }
+  return None; 
+}
+  
+
 /// Add a line note to the line table that indicates that there is a \#line or
 /// GNU line marker at the specified FID/Offset location which changes the
 /// presumed location to LineNo/FilenameID. If EntryExit is 0, then this doesn't
@@ -256,6 +311,25 @@ const LineEntry *LineTableInfo::FindNearestLineEntry(FileID FID,
     std::upper_bound(Entries.begin(), Entries.end(), Offset);
   if (I == Entries.begin()) return nullptr;
   return &*--I;
+}
+
+//return file-offset  and lineno of the linemarker/linecontrol directive 
+std::vector<std::pair<unsigned, unsigned>>  LineTableInfo::FindLineMarkerInFile(FileID FID, StringRef absoluteName) 
+{
+  std::vector<std::pair<unsigned, unsigned>> lines; 
+  const std::vector<LineEntry> &Entries = LineEntries[FID]; 
+  assert(!Entries.empty() && "No #line entries for this FID after all!");
+  Optional<unsigned> ret = getLineTableFilenameIDByAbsoluteName(absoluteName); 
+  if (!ret) { 
+    return lines; 
+  }
+  unsigned filenameID = ret.getValue(); 
+  for( const auto &e: Entries) { 
+    if (e.FilenameID == filenameID) { 
+      lines.push_back(std::make_pair(e.FileOffset, e.LineNo)); 
+    }
+  }
+  return lines; 
 }
 
 /// \brief Add a new line entry that has already been encoded into
@@ -1496,6 +1570,33 @@ PresumedLoc SourceManager::getPresumedLoc(SourceLocation Loc,
   }
 
   return PresumedLoc(Filename.data(), LineNo, ColNo, IncludeLoc);
+}
+
+SourceLocation SourceManager::getSourceLocInMainFile(StringRef fileName, unsigned lineNum, unsigned colNum)
+{
+  std::vector<std::pair<unsigned, unsigned>>  slocs = 
+    LineTable->FindLineMarkerInFile(MainFileID, fileName); 
+
+  if (slocs.empty()) { 
+    return SourceLocation(); 
+  }
+
+  auto it = std::find_if( slocs.begin(), slocs.end(), 
+      [&](std::pair<unsigned, unsigned> p)  { if (p.second > lineNum) return true; else return false;}); 
+
+  if (it == slocs.begin()) { 
+    return SourceLocation(); 
+  }
+
+  it--; 
+  unsigned fileOffset = it->first; 
+  unsigned lineNo = it->second; 
+  unsigned lines = lineNum - lineNo; 
+  unsigned base = getLineNumber(MainFileID, fileOffset); 
+  unsigned finalLines = base + 1 + lines; 
+  SourceLocation SLoc = translateLineCol(MainFileID, finalLines, colNum); 
+  return SLoc; 
+  
 }
 
 /// \brief Returns whether the PresumedLoc for a given SourceLocation is

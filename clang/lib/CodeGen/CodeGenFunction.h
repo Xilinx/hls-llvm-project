@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -31,6 +31,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/ExprHLS.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/ABI.h"
 #include "clang/Basic/CapturedStmt.h"
@@ -1854,11 +1855,7 @@ public:
   llvm::BasicBlock *createBasicBlock(const Twine &name = "",
                                      llvm::Function *parent = nullptr,
                                      llvm::BasicBlock *before = nullptr) {
-#ifdef NDEBUG
-    return llvm::BasicBlock::Create(getLLVMContext(), "", parent, before);
-#else
     return llvm::BasicBlock::Create(getLLVMContext(), name, parent, before);
-#endif
   }
 
   /// getBasicBlockForLabel - Return the LLVM basicblock that the specified
@@ -2432,6 +2429,8 @@ public:
 
   /// Converts Location to a DebugLoc, if debug information is enabled.
   llvm::DebugLoc SourceLocToDebugLoc(SourceLocation Location);
+  /// Converts Location to a DebugLoc, if debug information is enabled.
+  llvm::DebugLoc PragmaSourceLocToDebugLoc(SourceLocation Location, bool IsAutoPragma = false);
 
 
   //===--------------------------------------------------------------------===//
@@ -3253,6 +3252,7 @@ public:
                                 bool Accessed = false);
   LValue EmitOMPArraySectionExpr(const OMPArraySectionExpr *E,
                                  bool IsLowerBound = true);
+  LValue EmitHLSWholeArrayExpr(const HLSWholeArrayExpr *E);
   LValue EmitExtVectorElementExpr(const ExtVectorElementExpr *E);
   LValue EmitMemberExpr(const MemberExpr *E);
   LValue EmitObjCIsaExpr(const ObjCIsaExpr *E);
@@ -3457,12 +3457,17 @@ public:
 
   /// FIFO builtins
   llvm::Value *EmitBuiltinFPGAFifoStatus(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFifoLength(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitBuiltinFPGAFifoBlocking(unsigned BuiltinID,
                                            const CallExpr *E);
   llvm::Value *EmitBuiltinFPGAFifoNonBlocking(unsigned BuiltinID,
                                               const CallExpr *E);
+  /// PIPO builtins
+  llvm::Value *EmitBuiltinFPGAPipoStatus(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAPipoBlocking(unsigned BuiltinID, const CallExpr *E);
   /// set STREAM depth
   llvm::Value *EmitBuiltinFPGASetStreamDepth(unsigned BuiltinID, const CallExpr*E);
+  llvm::Value *EmitBuiltinFPGASetStreamOfBlocksDepth(unsigned BuiltinID, const CallExpr*E);
 
   /// Manual burst builtins
   llvm::Value *EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID, const CallExpr*E);
@@ -3471,6 +3476,9 @@ public:
   llvm::Value * EmitBuiltinFPGAAddInfiniteTask(unsigned BuiltinID, const CallExpr *E);
   llvm::Value * EmitBuiltinFPGATaskDef(unsigned BuiltinID, const CallExpr *E);
   llvm::Value * EmitBuiltinFPGAInfiniteTaskDef(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGANPortChannel(const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGAIP(const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGAFence(const CallExpr *E);
 
 
   /// Legacy builtins
@@ -3779,8 +3787,8 @@ public:
   void EmitXlxFunctionAttributes(const FunctionDecl *FD, llvm::Function *F);
   void EmitXlxFunctionBodyAttributes( ArrayRef<const Attr*> attrs);
   void EmitBundleForScope(const Stmt *SubStmt, ArrayRef<const Attr *> Attrs,
-                          SmallVectorImpl<llvm::OperandBundleDef> &BundleList);
-  void BundleBindOpAttr(const XlxBindOpExprAttr *bindOp, SmallVectorImpl<llvm::OperandBundleDef> &BundleList);
+                          SmallVectorImpl<llvm::OperandBundleDef> &BundleList, 
+                          SmallVectorImpl<llvm::MDNode*> &pragmaLocs);
 
   void  EmitReqdPipeDepthIntrinsic( const XlxReqdPipeDepthAttr *A);
   //void  EmitArrayXFormIntrinsic( const XlxArrayXFormAttr *A);
@@ -3801,15 +3809,17 @@ public:
   void  EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *interface);
   void  EmitAPFifoInterfaceIntrinsic( const APFifoInterfaceAttr *interface);
   void  EmitAPScalarInterfaceIntrinsic( const APScalarInterfaceAttr *interface);
+  void  EmitAPScalarInterruptInterfaceIntrinsic( const APScalarInterruptInterfaceAttr *interface);
   void  EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceAttr *interface);
   void  EmitFPGAFunctionCtrlInterfaceIntrinsic( const FPGAFunctionCtrlInterfaceAttr *interface);
 
   void  EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAttr *attr);
   void  EmitResetIntrinsic( const XlxResetIntrinsicAttr *reset);
   void  EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias);
+  void  EmitFuncInstantiateIntrinsic( const XlxFuncInstantiateAttr* func_inst);
+  void  EmitXlxArrayStencilIntrinsic( const XlxArrayStencilAttr* stencil);
 
   llvm::Value *GetAddrOrValueForExpr(Expr* E, bool supportTopArg);
-  void GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const ParmVarDecl *decl , const QualType type, llvm::SmallVector<unsigned int, 4> fields, bool is_pointer);
 
   void EmitFPGATaskDefIntrinsic(const XlxTaskAttr *attr, const Expr *E ) ;
   void EmitFPGAInfiniteTaskDefIntrinsic(const XlxInfiniteTaskAttr *attr, const Expr *E ) ;
@@ -4256,6 +4266,7 @@ template <> struct DominatingValue<RValue> {
     return value.restore(CGF);
   }
 };
+
 
 }  // end namespace CodeGen
 }  // end namespace clang

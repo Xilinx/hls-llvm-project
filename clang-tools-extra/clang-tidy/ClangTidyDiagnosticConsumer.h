@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -131,6 +131,8 @@ public:
   /// This is called from the \c ClangTidyCheck base class.
   void setSourceManager(SourceManager *SourceMgr);
 
+  SourceManager *getSourceManager() const { return SourceMgr;  }
+
   /// \brief Should be called when starting to process new translation unit.
   void setCurrentFile(StringRef File);
 
@@ -139,6 +141,8 @@ public:
 
   /// \brief Sets ASTContext for the current translation unit.
   void setASTContext(ASTContext *Context);
+
+  ASTContext* getASTContext() const  {  return astContext; }
 
   /// \brief Gets the language options from the AST context.
   const LangOptions &getLangOpts() const { return LangOpts; }
@@ -226,6 +230,9 @@ private:
   llvm::DenseMap<unsigned, std::string> CheckNamesByDiagnosticID;
 
   ProfileData *Profile;
+
+  ASTContext *astContext; 
+  SourceManager *SourceMgr; 
 };
 
 /// \brief A diagnostic consumer that turns each \c Diagnostic into a

@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -29,15 +29,26 @@ let TargetPrefix = "fpga" in {
 
 // None of these intrinsics accesses memory at all.
 let IntrProperties = [IntrNoMem] in {
-// fpga.part.select(V, Lo, Hi) - Select V[Hi:Lo]
-def int_fpga_part_select : Intrinsic<[llvm_anyint_ty],
-                                     [llvm_anyint_ty,
-                                      LLVMMatchType<1>, LLVMMatchType<1>]>;
+// iN fpga.smod(iN %lhs, iN %rhs)
+//
+// Computes the mathematical modulo:
+//   smod iN %lhs, %rhs                 when %lhs is non-negative
+//   add iN (smod iN %lhs, %rhs), %rhs  when %lhs is negative
+//
+// This corresponds to the usual modulo:
+// - the result is always non-negative
+// - the result is always contained between 0 (incl.) and %rhs (excl.)
+// - %lhs - fpga.smod(%lhs, %rhs) is divisible by %rhs
+def int_fpga_smod : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>]>;
 
-// fpga.part.set(V, U, Lo, Hi) - Inject U to V[Hi:Lo]
+// iP fpga.part.select(iN %src, iK %off) - Select src[off+P-1:off]
+def int_fpga_part_select : Intrinsic<[llvm_anyint_ty],
+                                     [llvm_anyint_ty, llvm_anyint_ty]>;
+
+// iN fpga.part.set(iN %src, iP part, iK %off) - Inject part to src[off+P-1:off]
 def int_fpga_part_set : Intrinsic<[llvm_anyint_ty],
                                   [LLVMMatchType<0>, llvm_anyint_ty,
-                                   LLVMMatchType<0>, LLVMMatchType<0>]>;
+                                   llvm_anyint_ty]>;
 
 
 // fpga.legacy.part.select(V, Lo, Hi) - Select V[Hi:Lo]
@@ -150,6 +161,14 @@ def int_fpga_fifo_nb_pop : Intrinsic<[llvm_i1_ty, llvm_any_ty], [LLVMAnyPointerT
 def int_fpga_fifo_nb_push : Intrinsic<[llvm_i1_ty], [llvm_any_ty, LLVMAnyPointerType<LLVMMatchType<0>>],
                                       [IntrArgMemOnly, NoCapture<1>]>;
 
+// i32 fpga.fifo.size(%type *%fifo)
+def int_fpga_fifo_size: Intrinsic<[llvm_i32_ty], [LLVMAnyPointerType<llvm_any_ty>],
+                                  [IntrArgMemOnly, NoCapture<0>]>;
+
+// i32 fpga.fifo.capacity(%type *%fifo)
+def int_fpga_fifo_capacity: Intrinsic<[llvm_i32_ty], [LLVMAnyPointerType<llvm_any_ty>],
+                                      [IntrArgMemOnly, NoCapture<0>]>;
+
 //===---
 //
 // Shift register builtins
@@ -181,6 +200,56 @@ def int_fpga_shift_register_peek :
     Intrinsic<[llvm_any_ty], [LLVMAnyPointerType<LLVMMatchType<0>>, llvm_anyint_ty],
               [IntrReadMem, IntrArgMemOnly, NoCapture<0>]>,
     GCCBuiltin<"__fpga_shift_register_peek">;
+
+
+//===---
+//
+//  Stream-of-Blocks Intrinsics
+//
+//  Note that the underlying object is expected to be an array.
+//  The depth of the stream-of-block isn't related to any array dimension.
+//  The array passed as argument serves as both: the handle that represents the
+//  stream-of-block, and the buffer in which normal load/store can be performed.
+//
+//  `acquire` take the ownership of the block, which allows to read and write into the buffer.
+//  `release` relinquish the ownership of the block, which forbids further access on it until
+//  a subsequent acquire is performed.
+//
+//  `pop` is intended for the consumer side while `push` is intended for the producer side.
+//  Semantically, the blocks `pop.acquired` contains the data from blocks `push.relased`.
+//  Only one block can be held at a time (as only one buffer is available).
+//
+// `empty` and `full` are intentionally not marked as read-only. Even though they semantically
+// are read-only, we would need them to be considered as atomic because dataflow context are
+// a form of multi-process environment in which channels can lead to data-race if their atomic
+// behavior isn't accounted for.
+//
+//===---
+
+// i1 fpga.pipo.not.empty(%type *%pipo)
+def int_fpga_pipo_not_empty : Intrinsic<[llvm_i1_ty], [LLVMAnyPointerType<llvm_any_ty>],
+                                        [IntrArgMemOnly, NoCapture<0>]>;
+
+// i1 fpga.pipo.not.full(%type *%pipo)
+def int_fpga_pipo_not_full : Intrinsic<[llvm_i1_ty], [LLVMAnyPointerType<llvm_any_ty>],
+                                       [IntrArgMemOnly, NoCapture<0>]>;
+
+// void fpga.pipo.pop.acquire(%type *%pipo)
+def int_fpga_pipo_pop_acquire : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
+                                          [IntrArgMemOnly, NoCapture<0>]>;
+
+// void fpga.pipo.pop.release(%type *%pipo)
+def int_fpga_pipo_pop_release : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
+                                          [IntrArgMemOnly, NoCapture<0>]>;
+
+// void fpga.pipo.push.acquire(%type *%pipo)
+def int_fpga_pipo_push_acquire : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
+                                           [IntrArgMemOnly, NoCapture<0>]>;
+
+// void fpga.pipo.push.release(%type *%pipo)
+def int_fpga_pipo_push_release : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
+                                           [IntrArgMemOnly, NoCapture<0>]>;
+
 
 //===---
 //
@@ -325,34 +394,34 @@ def int_fpga_type_annotate: Intrinsic<[], [llvm_vararg_ty], [IntrInaccessibleMem
 // Ptr = fpga.seq.load.begin(Ptr, Len)
 def int_fpga_seq_load_begin : Intrinsic<[LLVMAnyPointerType<llvm_any_ty>],
                                         [LLVMMatchType<0>, llvm_anyint_ty],
-                                        []>;
+                                        [IntrArgMemOnly]>;
 
 // Data = fpga.seq.load(Ptr, Offset)
 def int_fpga_seq_load : Intrinsic<[llvm_any_ty],
                                   [LLVMAnyPointerType<LLVMMatchType<0>>,
                                    llvm_anyint_ty],
-                                  []>;
+                                  [IntrArgMemOnly]>;
 
 // fpga.seq.load.end(Ptr, Len)
 def int_fpga_seq_load_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>,
                                            llvm_anyint_ty],
-                                      []>;
+                                      [IntrArgMemOnly]>;
 
 // Ptr = fpga.seq.store.begin(Ptr, Len)
 def int_fpga_seq_store_begin : Intrinsic<[LLVMAnyPointerType<llvm_any_ty>],
                                          [LLVMMatchType<0>, llvm_anyint_ty],
-                                         []>;
+                                         [IntrArgMemOnly]>;
 
 // fpga.seq.store(Data, Ptr, Offset)
 def int_fpga_seq_store : Intrinsic<[], [llvm_any_ty,
                                         LLVMAnyPointerType<LLVMMatchType<0>>,
                                         llvm_anyint_ty, llvm_anyint_ty],
-                                   []>;
+                                   [IntrArgMemOnly]>;
 
 // fpga.seq.store.end(Ptr, Len)
 def int_fpga_seq_store_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>,
                                             llvm_anyint_ty],
-                                       []>;
+                                       [IntrArgMemOnly]>;
 
 // Abstracted function to write to printf buffer
 def int_fpga_get_printf_buffer : Intrinsic<[LLVMAnyPointerType<llvm_anyint_ty>], [],
@@ -405,4 +474,12 @@ def int_fpga_add_infinite_task : Intrinsic<[],
                                            [LLVMAnyPointerType<llvm_i32_ty>, LLVMAnyPointerType<llvm_i32_ty>],
                                            [IntrArgMemOnly, NoCapture<0>]>;
 
+
+// i64* llvm.fpga.any()
+def int_fpga_any : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
+
+// void llvm.fpga.fence(...)
+def int_fpga_fence : Intrinsic<[], 
+                               [llvm_vararg_ty],
+                               [IntrArgMemOnly]>;
 }

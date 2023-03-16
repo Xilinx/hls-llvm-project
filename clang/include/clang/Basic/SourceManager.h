@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -1633,6 +1638,7 @@ public:
     // expanded (while the spelling is part of the macro definition).
     return getImmediateExpansionRange(Loc).first;
   }
+  SourceLocation getSourceLocInMainFile(const StringRef fileName, unsigned  lineNo, unsigned colNum); 
 
 private:
   friend class ASTReader;
@@ -1729,7 +1735,10 @@ private:
                                          SourceLocation SpellLoc,
                                          SourceLocation ExpansionLoc,
                                          unsigned ExpansionLength) const;
+
 };
+
+extern StringRef make_canonical(SmallVectorImpl<char> &canonicalNameBuffer);
 
 /// \brief Comparison function object.
 template<typename T>

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements methods that make it really easy to deal with intrinsic
@@ -27,7 +32,9 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Support/raw_ostream.h"
+
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -46,6 +53,10 @@ Value *DbgInfoIntrinsic::getVariableLocation(bool AllowNullOp) const {
   // When the value goes to null, it gets replaced by an empty MDNode.
   assert(!cast<MDNode>(MD)->getNumOperands() && "Expected an empty MDNode");
   return nullptr;
+}
+
+void DbgInfoIntrinsic::setVariable(DILocalVariable *NewVar) {
+  setArgOperand(1, MetadataAsValue::get(NewVar->getContext(), NewVar));
 }
 
 int llvm::Intrinsic::lookupLLVMIntrinsicByName(ArrayRef<const char *> NameTable,

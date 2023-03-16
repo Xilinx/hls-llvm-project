@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines routines for manipulating CXCursors. It should be the
@@ -341,6 +346,10 @@ CXCursor cxcursor::MakeCXCursor(const Stmt *S, const Decl *Parent,
 
   case Stmt::OMPArraySectionExprClass:
     K = CXCursor_OMPArraySectionExpr;
+    break;
+  
+  case Stmt::HLSWholeArrayExprClass:
+    K = CXCursor_HLSWholeArrayExpr;
     break;
 
   case Stmt::BinaryOperatorClass:

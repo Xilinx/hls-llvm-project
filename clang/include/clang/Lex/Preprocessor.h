@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -122,6 +122,8 @@ enum MacroUse {
   // macro name specified in #undef
   MU_Undef  = 2
 };
+
+using MacroExpandCallBack = bool (StringRef Name);
 
 /// \brief Engages in a tight little dance with the lexer to efficiently
 /// preprocess tokens.
@@ -778,7 +780,7 @@ private:
   MacroInfoChain *MIChainHead = nullptr;
 
   void updateOutOfDateIdentifier(IdentifierInfo &II) const;
-
+  MacroExpandCallBack *ShouldExpandMacro = nullptr;
 public:
   Preprocessor(std::shared_ptr<PreprocessorOptions> PPOpts,
                DiagnosticsEngine &diags, LangOptions &opts, SourceManager &SM,
@@ -789,6 +791,10 @@ public:
                TranslationUnitKind TUKind = TU_Complete);
 
   ~Preprocessor();
+
+  void setMacroExpandCallback(MacroExpandCallBack *callback = nullptr) {
+    ShouldExpandMacro = callback;
+  }
 
   /// \brief Initialize the preprocessor using information about the target.
   ///

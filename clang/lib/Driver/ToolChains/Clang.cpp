@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3275,8 +3275,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 // Disable the verification pass in -asserts builds.
 #ifdef NDEBUG
   CmdArgs.push_back("-disable-llvm-verifier");
-  // Discard LLVM value names in -asserts builds.
-  CmdArgs.push_back("-discard-value-names");
 #endif
 
   // Set the main file name, so that debug info works even with
@@ -3355,6 +3353,20 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (Arg *A = Args.getLastArg(options::OPT_hls_platform_db_name)) {
     CmdArgs.push_back(Args.MakeArgString("-hls-platform-db-name=" + StringRef(A->getValue())));
+    A->claim();
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_hls_support_slx)) { 
+    CmdArgs.push_back(Args.MakeArgString("-hls-support-slx")); 
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_device_resource_info)) {
+    CmdArgs.push_back(Args.MakeArgString("-device-resource-info=" + StringRef(A->getValue())));
+    A->claim();
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_device_name_info)) {
+    CmdArgs.push_back(Args.MakeArgString("-device-name-info=" + StringRef(A->getValue())));
     A->claim();
   }
 

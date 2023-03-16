@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -22,6 +22,7 @@
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_XILINX_DIRECTIVE2PRAGMA_H
 
 #include "../ClangTidy.h"
+#include "llvm/ADT/MapVector.h"
 
 namespace clang {
 namespace tidy {
@@ -52,7 +53,12 @@ struct DirectiveHandle {
   std::string FunctionName;
   std::string Label;
   std::string FunctionLabel;
+  std::string SourceFile;
+  std::string SourceLine;
+  std::string Id;
+  std::string Location; 
   struct PragmaHandle PragmaItem; //  1 on 1 map
+  bool  FromSLX; 
 };
 typedef std::vector<struct DirectiveHandle> DirectiveLists;
 struct SrcDirectiveHandle {
@@ -99,6 +105,7 @@ enum ErrorType {
   ERR_Variable_Not_Exist,
   ERR_Function_Not_Exist,
   ERR_Label_Not_Exist,
+  Err_Location_Missed
 };
 class VariableInfo {
 public:
@@ -129,6 +136,8 @@ public:
   ASTContext *Context;
   SourceManager *SM;
   VariableInfo *VarInfo;
+  StringRef Location; 
+  StringRef FromSLX; 
 };
 
 class Directive2pragmaCheck : public ClangTidyCheck {
@@ -178,6 +187,7 @@ public:
   needInsertIntoBrace(Stmt *stmt,
                       const ast_matchers::MatchFinder::MatchResult &Result,
                       SourceLocation &Loc);
+  std::string dumpSetDirectiveLineNo(DirectiveHandle *Directived);
   std::string dumpPragma(DirectiveHandle *Directived);
   void setDiagMsg(DirectiveHandle *Pragma, DirectiveInfo *Info);
 
@@ -191,9 +201,9 @@ private:
   // store default func unit;
   std::vector<std::string> ListCore;
   // DirectiveLists index  map to successful inserted pragma for each tu
-  std::map<DirectiveHandle *, std::string> InsertedPragma;
+  llvm::MapVector<DirectiveHandle *, std::string> InsertedPragma;
   // for each directive collect info
-  std::map<DirectiveHandle *, DirectiveInfo *> PragmaInfo;
+  llvm::MapVector<DirectiveHandle *, DirectiveInfo *> PragmaInfo;
 };
 
 } // namespace xilinx

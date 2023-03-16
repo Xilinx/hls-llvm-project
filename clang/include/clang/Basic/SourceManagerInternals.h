@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 /// \file
@@ -118,6 +123,9 @@ public:
   /// If there is no line entry before \p Offset in \p FID, returns null.
   const LineEntry *FindNearestLineEntry(FileID FID, unsigned Offset);
 
+  /// \brief Find the offset by lineNo, HLS directive2pramga special handler function 
+  std::vector<std::pair<unsigned, unsigned>>  FindLineMarkerInFile(FileID fileID, StringRef filename); 
+
   // Low-level access
   using iterator = std::map<FileID, std::vector<LineEntry>>::iterator;
 
@@ -127,6 +135,8 @@ public:
   /// \brief Add a new line entry that has already been encoded into
   /// the internal representation of the line table.
   void AddEntry(FileID FID, const std::vector<LineEntry> &Entries);
+
+  Optional<unsigned> getLineTableFilenameIDByAbsoluteName(StringRef name) ;
 };
 
 } // namespace clang

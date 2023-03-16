@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -33,6 +33,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/XILINXFPGAPlatformBasic.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -572,26 +573,40 @@ void CodeGenFunction::EmitLabelStmt(const LabelStmt &S) {
 void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
   auto Attrs = S.getAttrs();
 
-  SmallVector<llvm::OperandBundleDef, 4> ScopeAttrs;
+  SmallVector<llvm::MDNode*, 4>  pragmaLocs ; 
+  SmallVector<llvm::OperandBundleDef, 4> ScopeBundleDefs;
   if (getLangOpts().HLSExt)
-    EmitBundleForScope(S.getSubStmt(), Attrs, ScopeAttrs);
+    EmitBundleForScope(S.getSubStmt(), Attrs, ScopeBundleDefs, pragmaLocs);
 
-  llvm::CallInst *Entry = nullptr;
+  assert( pragmaLocs.size() == ScopeBundleDefs.size() && "each operand Bundle should have one location");
+
+  SmallVector<llvm::CallInst*, 4> Entrys ; 
   // Build the single-entry-single-exit region for the AttributedBlock
-  if (!ScopeAttrs.empty()) {
-    auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
-        CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
-    Entry = Builder.CreateCall(ScopeEntry, None, ScopeAttrs);
+  if (!ScopeBundleDefs.empty()) {
+    for( int i = 0; i < ScopeBundleDefs.size(); i++ ) { 
+      auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
+          CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
+      llvm::CallInst* Entry = Builder.CreateCall(ScopeEntry, None, ScopeBundleDefs[i]);
+      Entry->setMetadata("pragma.location", pragmaLocs[i]);
+      Entrys.push_back(Entry);
+    }
   }
 
   //HLS Attrirbute binding on NullStmt standfor HLSStmt, which will emit intrinsic 
   if (isa<NullStmt>(S.getSubStmt())) {
     for(auto* A: Attrs) {
+      getDebugInfo()->EmitLocation(Builder, A->getLocation()); 
       if (XlxDependenceAttr const *dep = dyn_cast<XlxDependenceAttr>(A)){
         EmitXlxDependenceIntrinsic(dep);
       }
+      else if (XlxArrayStencilAttr const *stencil = dyn_cast<XlxArrayStencilAttr>(A)){
+        EmitXlxArrayStencilIntrinsic(stencil);
+      }
       else if (XlxMAXIAliasAttr const *maxi_alias = dyn_cast<XlxMAXIAliasAttr>(A)){
         EmitMAXIAliasIntrinsic(maxi_alias);
+      }
+      else if (XlxFuncInstantiateAttr const *func_inst = dyn_cast<XlxFuncInstantiateAttr>(A)){
+        EmitFuncInstantiateIntrinsic(func_inst);
       }
       else if (XlxCrossDependenceAttr const *dep = dyn_cast<XlxCrossDependenceAttr>(A)) { 
         EmitXlxCrossDependenceIntrinsic(dep);
@@ -641,6 +656,9 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
       else if (auto const *apScalar = dyn_cast<APScalarInterfaceAttr>(A)) { 
         EmitAPScalarInterfaceIntrinsic(apScalar);
       }
+      else if (auto const *apScalar = dyn_cast<APScalarInterruptInterfaceAttr>(A)) { 
+        EmitAPScalarInterruptInterfaceIntrinsic(apScalar);
+      }
       else if (auto const *apFifo = dyn_cast<APFifoInterfaceAttr>(A)) { 
         EmitAPFifoInterfaceIntrinsic(apFifo);
       }
@@ -659,25 +677,27 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
       else if (auto const *reset = dyn_cast<XlxResetIntrinsicAttr>(A)){ 
         EmitResetIntrinsic(reset);
       }
- 
-      EmitStopPoint(A->getLocation());
     }
   }
 
   EmitStmt(S.getSubStmt(), S.getAttrs());
 
   // Emit scope exit intrinsic
-  if (Entry) {
-    // Do not insert scope if we met terminate instruction (goto/break/return)
-    if (!Builder.GetInsertBlock()) {
-      Entry->removeFromParent();
-      Entry->dropAllReferences();
-    } else {
-      auto *ScopeExit = llvm::Intrinsic::getDeclaration(
-          CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
-      Builder.CreateCall(ScopeExit, Entry);
+  if (Entrys.size() > 0) {
+    for( int i = Entrys.size() - 1; i >= 0;  i-- ) { 
+      llvm::CallInst *Entry = Entrys[i];
+      // Do not insert scope if we met terminate instruction (goto/break/return)
+      if (!Builder.GetInsertBlock()) {
+        Entry->removeFromParent();
+        Entry->dropAllReferences();
+      } else {
+        //Builder.SetCurrentDebugLocation(PragmaSourceLocToDebugLoc( locations[i] ));
+        auto *ScopeExit = llvm::Intrinsic::getDeclaration(
+            CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
+        Builder.CreateCall(ScopeExit, Entry);
+      }
     }
-  }
+  } 
 }
 
 void CodeGenFunction::EmitGotoStmt(const GotoStmt &S) {
@@ -1222,12 +1242,15 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
   EmitBranchThroughCleanup(ReturnBlock);
 }
 
+extern StringRef getPragmaContext(const Attr *A);
+
 void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
   // As long as debug info is modeled with instructions, we have to ensure we
   // have a place to insert here and write the stop point here.
   if (HaveInsertPoint())
     EmitStopPoint(&S);
 
+  SmallVector<llvm::CallInst*, 4> BindOpScopeEntries; 
   for (const auto *I : S.decls()) {
     llvm::CallInst *Entry = nullptr;
     if (auto *dep = I->getAttr<XlxDependenceAttr>()) {
@@ -1236,20 +1259,48 @@ void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
     else if (auto *dep = I->getAttr<XlxCrossDependenceAttr>()) {
       EmitXlxCrossDependenceIntrinsic(dep);
     }
+    else if (auto *dep = I->getAttr<XlxArrayStencilAttr>()) {
+      EmitXlxArrayStencilIntrinsic(dep);
+    }
     else if (I->hasAttr<XlxBindOpExprAttr>()){ 
       SmallVector<llvm::OperandBundleDef, 6> BundleList;
+      SmallVector<llvm::DebugLoc, 4> debugLocs; 
       for (auto bindOp: I->specific_attrs<XlxBindOpExprAttr>()) {
-        BundleBindOpAttr(bindOp, BundleList);
-      }
-      auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
+
+        auto var_expr = bindOp->getVariable();
+
+        auto op_enum = (platform::PlatformBasic::OP_TYPE) bindOp->getOp()->EvaluateKnownConstInt(getContext()).getSExtValue(); 
+        auto impl_enum = (platform::PlatformBasic::IMPL_TYPE)bindOp->getImpl()->EvaluateKnownConstInt(getContext()).getSExtValue(); 
+
+        // strip null terminator
+        auto latency = bindOp->getLatency()->EvaluateKnownConstInt(getContext()).getSExtValue(); 
+
+        llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(bindOp->getLocation());
+        // TODO, use  enum encoding insteading of "string"
+
+        llvm::Value *args[] = {Builder.getInt32(op_enum),
+                         Builder.getInt32(impl_enum),
+                         Builder.getInt32(latency),
+                       };
+
+        llvm::MDBuilder MDB(getLLVMContext());
+        llvm::MDNode *dbgLoc = llvm::MDNode::get(getLLVMContext(), {MDB.createString("fpga_resource_hint"), MDB.createString(getPragmaContext(bindOp)), Loc.get()});
+
+        auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
           CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
-      Entry = Builder.CreateCall(ScopeEntry, None, BundleList);
+        Entry = Builder.CreateCall(ScopeEntry, None, llvm::OperandBundleDef("fpga_resource_hint", args));
+        Entry->setMetadata("pragma.location", dbgLoc);
+        BindOpScopeEntries.push_back( Entry );
+      }
     }
     EmitDecl(*I);
-    if (I->hasAttr<XlxBindOpExprAttr>()) { 
-      auto *ScopeExit = llvm::Intrinsic::getDeclaration(
+
+    if (BindOpScopeEntries.size()) { 
+      for( int i = 0; i < BindOpScopeEntries.size(); i++) { 
+        auto *ScopeExit = llvm::Intrinsic::getDeclaration(
           CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
-      Builder.CreateCall(ScopeExit, Entry);
+        Builder.CreateCall(ScopeExit, BindOpScopeEntries[i]);
+      }
     }
   }
 }

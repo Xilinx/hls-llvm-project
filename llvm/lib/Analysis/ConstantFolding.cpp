@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1037,8 +1037,129 @@ Constant *ConstantFoldInstOperandsImpl(const Value *InstOrCE, unsigned Opcode,
   }
 }
 
-Constant *FoldPartSelect(ArrayRef<Constant *> Operands) {
-  assert(Operands.size() == 3 && "Part select must have 3 arguments");
+Constant *FoldSMod(ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 2 && "SMod must have 2 arguments");
+  Constant *LHS = Operands[0];
+  Constant *RHS = Operands[1];
+  auto *Ty = cast<IntegerType>(LHS->getType());
+
+  if (RHS->isNullValue())
+    return UndefValue::get(Ty);
+
+  if (RHS->isOneValue())
+    return Constant::getNullValue(Ty);
+
+  if (isa<UndefValue>(RHS))
+    return UndefValue::get(Ty);
+
+  if (isa<UndefValue>(LHS))
+    return Constant::getNullValue(Ty);
+
+  APInt LV = cast<ConstantInt>(LHS)->getValue();
+  APInt RV = cast<ConstantInt>(RHS)->getValue();
+  APInt RetV = LV.srem(RV);
+  if (RetV.isNegative())
+    RetV += RV;
+  return ConstantInt::get(Ty, RetV);
+}
+
+Constant *FoldPartSelect(ArrayRef<Constant *> Operands, Type *Ty) {
+  assert(Operands.size() == 2 && "Part select must have 2 arguments");
+  Constant *SrcI = Operands[0];
+  Constant *OffI = Operands[1];
+  IntegerType *RetTy = cast<IntegerType>(Ty);
+
+  // If the source is undef, the result is undef
+  if (isa<UndefValue>(SrcI))
+    return UndefValue::get(Ty);
+
+  // If the offset is undef, the result is undef
+  if (isa<UndefValue>(OffI))
+    return UndefValue::get(Ty);
+
+  ConstantInt *Src = dyn_cast<ConstantInt>(SrcI);
+  ConstantInt *Off = dyn_cast<ConstantInt>(OffI);
+  if (!Src || !Off)
+    return nullptr;
+
+  APInt RetV = Src->getValue();
+  RetV = RetV.lshr(Off->getValue());
+  RetV = RetV.zextOrTrunc(RetTy->getBitWidth());
+  return ConstantInt::get(RetTy, RetV);
+}
+
+Constant *FoldPartSet(ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 3 && "Part set must have 3 arguments");
+  Constant *SrcI = Operands[0];
+  Constant *RepI = Operands[1];
+  Constant *OffI = Operands[2];
+  IntegerType *RetTy = cast<IntegerType>(SrcI->getType());
+  IntegerType *RepTy = cast<IntegerType>(RepI->getType());
+
+  // If the part is undef, returns the source
+  if (isa<UndefValue>(RepI))
+    return SrcI;
+
+  // If the offset is undef, the result is undef
+  if (isa<UndefValue>(OffI))
+    return UndefValue::get(SrcI->getType());
+
+  // If the source is undef handle like zero
+  if (isa<UndefValue>(SrcI))
+    SrcI = Constant::getNullValue(SrcI->getType());
+
+  ConstantInt *Src = dyn_cast<ConstantInt>(SrcI);
+  ConstantInt *Rep = dyn_cast<ConstantInt>(RepI);
+  ConstantInt *Off = dyn_cast<ConstantInt>(OffI);
+  if (!Src || !Rep || !Off)
+    return nullptr;
+
+  APInt RepV = Rep->getValue();
+  APInt MaskV(RepTy->getBitWidth(), -1, /*isSigned=*/true);
+  RepV = RepV.zextOrTrunc(RetTy->getBitWidth()).shl(Off->getValue());
+  MaskV = MaskV.zextOrTrunc(RetTy->getBitWidth()).shl(Off->getValue());
+  APInt RetV = (Src->getValue() & ~MaskV) | RepV;
+  return ConstantInt::get(RetTy, RetV);
+}
+
+Constant *FoldBitConcat(ArrayRef<Constant *> Operands) {
+  assert(!Operands.empty());
+  bool AllUndefs = true;
+  Constant *FirstOp = Operands.front();
+  APInt RetV(FirstOp->getType()->getIntegerBitWidth(), 0);
+  if (ConstantInt *FirstC = dyn_cast<ConstantInt>(FirstOp)) {
+    RetV = FirstC->getValue();
+    AllUndefs = false;
+  } else if (!isa<UndefValue>(FirstOp))
+    return nullptr;
+
+  auto It = Operands.begin();
+  ++It;
+  unsigned NewBitWidth = RetV.getBitWidth();
+  for (auto Ie = Operands.end(); It != Ie; ++It) {
+    APInt C((*It)->getType()->getIntegerBitWidth(), 0);
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(*It)) {
+      C = CI->getValue();
+      AllUndefs = false;
+    } else if (!isa<UndefValue>(*It)) {
+      return nullptr;
+    }
+    NewBitWidth += C.getBitWidth();
+    RetV = RetV.zext(NewBitWidth);
+    RetV <<= C.getBitWidth();
+    RetV |= C.zext(NewBitWidth);
+  }
+
+  Constant *Ret = nullptr;
+  if (AllUndefs)
+    Ret = UndefValue::get(IntegerType::get(FirstOp->getContext(), NewBitWidth));
+  else
+    Ret = ConstantInt::get(FirstOp->getContext(), RetV);
+  return Ret;
+}
+
+Constant *FoldLegacyPartSelect(ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 3 && "Legacy part select must have 3 arguments");
   Constant *SrcI = Operands[0];
   // If the souce is undef, treat it as 0
   if (isa<UndefValue>(SrcI)) 
@@ -1073,8 +1194,8 @@ Constant *FoldPartSelect(ArrayRef<Constant *> Operands) {
   return ConstantInt::get(Src->getContext(), Result);
 }
 
-Constant *FoldPartSet(ArrayRef<Constant *> Operands) {
-  assert(Operands.size() == 4 && "Part set must have 4 arguments");
+Constant *FoldLegacyPartSet(ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 4 && "Legacy part set must have 4 arguments");
   Constant *SrcI = Operands[0];
   // If the souce is undef, treat it as 0
   if (isa<UndefValue>(SrcI)) 
@@ -1482,8 +1603,12 @@ bool llvm::canConstantFoldCallTo(ImmutableCallSite CS, const Function *F) {
   case Intrinsic::x86_sse2_cvtsd2si64:
   case Intrinsic::x86_sse2_cvttsd2si:
   case Intrinsic::x86_sse2_cvttsd2si64:
+  case Intrinsic::fpga_smod:
+  case Intrinsic::fpga_part_select:
+  case Intrinsic::fpga_part_set:
   case Intrinsic::fpga_legacy_part_select:
   case Intrinsic::fpga_legacy_part_set:
+  case Intrinsic::fpga_bit_concat:
     return true;
   default:
     return false;
@@ -1881,6 +2006,8 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
 
         return ConstantFP::get(Ty->getContext(), Val);
       }
+      case Intrinsic::fpga_bit_concat:
+        return FoldBitConcat(Operands);
       default:
         return nullptr;
       }
@@ -1915,6 +2042,19 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
 
     return nullptr;
   }
+
+  if (IntrinsicID == Intrinsic::fpga_smod) {
+    return FoldSMod(Operands);
+  }
+
+  if (IntrinsicID == Intrinsic::fpga_part_select) {
+    return FoldPartSelect(Operands, Ty);
+  } else if (IntrinsicID == Intrinsic::fpga_part_set){
+    return FoldPartSet(Operands);
+  }
+
+  if (IntrinsicID == Intrinsic::fpga_bit_concat) 
+    return FoldBitConcat(Operands);
 
   if (Operands.size() == 2) {
     if (auto *Op1 = dyn_cast<ConstantFP>(Operands[0])) {
@@ -2037,9 +2177,9 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
   }
 
   if (IntrinsicID == Intrinsic::fpga_legacy_part_select) {
-    return FoldPartSelect(Operands);
+    return FoldLegacyPartSelect(Operands);
   } else if (IntrinsicID == Intrinsic::fpga_legacy_part_set){
-    return FoldPartSet(Operands);
+    return FoldLegacyPartSet(Operands);
   }
 
   if (Operands.size() != 3)

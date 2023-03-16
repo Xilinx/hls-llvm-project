@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include "ClangTidyOptions.h"
@@ -20,6 +25,15 @@
 #include <utility>
 
 #define DEBUG_TYPE "clang-tidy-options"
+
+using namespace llvm;
+
+static cl::OptionCategory HLSClangTidyCategory("hls-clang-tidy options");
+static cl::opt<bool> EnableConfigFile("enable-config-file", cl::desc(R"(
+Enable .clang-tidy config file setting.
+)"),
+                                        cl::init(false),
+                                        cl::cat(HLSClangTidyCategory));
 
 using clang::tidy::ClangTidyOptions;
 using clang::tidy::FileFilter;
@@ -208,7 +222,9 @@ FileOptionsProvider::FileOptionsProvider(
     const ClangTidyOptions &OverrideOptions)
     : DefaultOptionsProvider(GlobalOptions, DefaultOptions),
       OverrideOptions(OverrideOptions) {
-  ConfigHandlers.emplace_back(".clang-tidy", parseConfiguration);
+  if (EnableConfigFile)
+    ConfigHandlers.emplace_back(".clang-tidy", parseConfiguration);
+  ConfigHandlers.emplace_back(".autosim-clang-tidy", parseConfiguration);
 }
 
 FileOptionsProvider::FileOptionsProvider(

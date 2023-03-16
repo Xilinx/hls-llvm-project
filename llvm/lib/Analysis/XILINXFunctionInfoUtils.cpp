@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -21,10 +21,26 @@
 
 #include "llvm/Analysis/XILINXFunctionInfoUtils.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include <cassert>
 #include <set>
 
 using namespace llvm;
+
+bool llvm::hasFunctionInstantiate(const Function *F) {
+  if(!F)
+    return false;
+
+  for(const Instruction &I : instructions(F)) {
+    if(const PragmaInst *PI = dyn_cast<PragmaInst>(&I)) {
+      if(isa<FuncInstantiateInst>(PI)) 
+        return true;
+    }
+  } 
+  
+  return false;
+}
 
 bool llvm::isDataFlow(const Function *F) {
   return F->hasFnAttribute("fpga.dataflow.func");
@@ -136,13 +152,13 @@ Optional<const std::string> llvm::getTopFunctionName(const Function *F) {
   return None;
 }
 
-bool llvm::isIPCore(const Function *F) {
-  if (!F->hasFnAttribute("fpga.resource.hint"))
-    return false;
-  auto AVal = F->getFnAttribute("fpga.resource.hint").getValueAsString();
-  auto P = AVal.split('.');
-  if (P.first == "vivado_ip")
-    return true;
+bool llvm::HasVivadoIP(const Function *F) {
+  for (const_inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    if (isa<XlxIPInst>(&*I)) {
+      return true;
+    }
+  }
+  
   return false;
 }
 
@@ -200,6 +216,7 @@ bool llvm::isSystemHLSHeaderFile(const std::string FileName) {
     "hls_util.h",
     "hls_task.h",
     "hls_burst_maxi.h",
+    "hls_np_channel.h",
     "iterator.h",
     "list.h",
     "set.h",
@@ -214,6 +231,7 @@ bool llvm::isSystemHLSHeaderFile(const std::string FileName) {
     "complex",
     "dsp48e1_builtins.h",
     "dsp48e2_builtins.h",
+    "hls_cordic.h",
   });
 
   std::string NameWithoutPath = filename(FileName, sys::path::Style::posix);
@@ -225,3 +243,53 @@ bool llvm::isSystemHLSHeaderFunc(const Function *F) {
   return isSystemHLSHeaderFile(FileName);
 }
 
+// Judge if HLS intrinsic "llvm.fpga.any()"
+bool llvm::isHlsFpgaAnyIntrinsic(const Value *V) {
+  if (!V)
+    return false;
+  if (auto *II = dyn_cast<IntrinsicInst>(V)) {
+    switch (II->getIntrinsicID()) {
+      case Intrinsic::fpga_any:
+        return true;
+      default:
+        return false;
+    }
+  }
+  return false;
+}
+
+MDTuple *llvm::getFuncPragmaInfo(Function *F, StringRef PragmaName) {
+  Metadata *M = F->getMetadata("fpga.function.pragma");
+  if (!M) {
+    return nullptr;
+  }
+  assert(isa<MDTuple>(M) && "unexpected Metadata type from clang codegen");
+  for (auto &Op : cast<MDTuple>(M)->operands()) {
+    MDTuple *OnePragma = cast<MDTuple>(Op.get());
+    Metadata *Name = OnePragma->getOperand(0).get();
+    assert(isa<MDString>(Name) && "unexpected MDType");
+    if (cast<MDString>(Name)->getString().equals(PragmaName)) {
+      return OnePragma;
+    }
+  }
+  return nullptr;
+}
+
+StringRef llvm::getFuncPragmaSource(Function *F, StringRef PragmaName) {
+  auto *OnePragma = getFuncPragmaInfo(F, PragmaName);
+  return getPragmaSourceFromMDNode(OnePragma);
+}
+
+DebugLoc llvm::getFuncPragmaLoc(Function *F, StringRef PragmaName) {
+  auto *OnePragma = getFuncPragmaInfo(F, PragmaName);
+  if (!OnePragma) {
+    return DebugLoc();
+  }
+  Metadata *Loc =
+      OnePragma->getOperand(OnePragma->getNumOperands() - 1).get();
+  // If function is mared with 'nodebug' attr, then debugloc will be missing
+  if (!Loc)
+    return DebugLoc();
+  assert(isa<DILocation>(Loc) && "unexpected MDType");
+  return DebugLoc(cast<DILocation>(Loc));
+}

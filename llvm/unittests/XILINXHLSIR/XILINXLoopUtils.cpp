@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -91,10 +91,15 @@ TEST(XILINXLoopUtilsTest, ForLoopForm) {
         BasicBlock *Header = &*(++FI);
         assert(Header->getName() == "for.cond");
         Loop *L = LI.getLoopFor(Header);
+        PHINode *Inst_i = dyn_cast<PHINode>(&Header->front());
 
         // Test if Loop L is for loop.
         EXPECT_TRUE(L->isLoopSimplifyForm());
+        EXPECT_FALSE(isRotatedLoop(L));
         EXPECT_TRUE(isForLoop(L));
+
+        // Test if succeed to query the loop induction variable.
+        EXPECT_EQ(getIndVarOrAuxiliaryIndVar(L, SE), Inst_i);
 
         // Check if succeed to query and emit loop trip count information.
         Optional<LoopTripCountMDInfo> EmptyLTCInfo = getLoopTripCount(L);
@@ -199,12 +204,17 @@ TEST(XILINXLoopUtilsTest, LoopRotateForm) {
         BasicBlock *Header = &*(++FI);
         assert(Header->getName() == "for.body");
         Loop *L = LI.getLoopFor(Header);
+        PHINode *Inst_i = dyn_cast<PHINode>(&Header->front());
 
         // Test if Loop L is do-while form.
         EXPECT_TRUE(L->isLoopSimplifyForm());
         // TODO: Need to import from upstream LLVM
         // EXPECT_TRUE(L->isRotatedForm());
+        EXPECT_TRUE(isRotatedLoop(L));
         EXPECT_FALSE(isForLoop(L));
+
+        // Test if succeed to query the loop induction variable.
+        EXPECT_EQ(getIndVarOrAuxiliaryIndVar(L, SE), Inst_i);
 
         // Check if succeed to query and emit loop trip count information.
         Optional<LoopTripCountMDInfo> EmptyLTCInfo = getLoopTripCount(L);

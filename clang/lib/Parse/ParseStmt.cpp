@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -378,11 +378,15 @@ Retry:
 
   case tok::annot_pragma_XlxHLS:
   case tok::annot_pragma_XlxHLS_old:
-  case tok::annot_pragma_XlxHLS_directive:
+  case tok::annot_pragma_XlxHLS_directive: 
+  case tok::annot_pragma_XlxSLX_directive:  {
     //TODO, should we support __attribute__(( ...)) { #pragma HLS .... 
     //currently, we don't support it, error out directly
     ProhibitAttributes(Attrs);
     //generate ParseAttributeList for HLS pragma
+    Scope *CurScope = getCurScope();
+    CurScope->setFlags( CurScope->getFlags() | Scope::HLSDirectiveScope);
+   
     HandleXlxPragma();
     //for Dependence Pragma, get the ParsedAttributeList 
     //and add to "Attrs" list,  the statment following the pragma
@@ -395,6 +399,7 @@ Retry:
     else { 
         return StmtEmpty();
     }
+  }
   case tok::annot_pragma_openmp:
     ProhibitAttributes(Attrs);
     return ParseOpenMPDeclarativeOrExecutableDirective(Allowed);

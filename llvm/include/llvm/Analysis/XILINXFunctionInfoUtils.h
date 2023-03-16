@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -35,6 +35,9 @@
 
 namespace llvm {
 
+/// Returns true if Function \p F contains function_instantiate pragma
+bool hasFunctionInstantiate(const Function *F);
+
 /// Returns true if Function \p F is a dataflow function.
 bool isDataFlow(const Function *F);
 
@@ -69,14 +72,63 @@ bool isTop(const Function *F);
 /// Returns Function \p Top 's name if it's a top function.
 Optional<const std::string> getTopFunctionName(const Function *Top);
 
-/// Returns true if Function \p F is IP core
-bool isIPCore(const Function *F);
+/// Returns true if Function \p F has IP core
+bool HasVivadoIP(const Function *F);
 
 /// Returns true if Function \p F is from HLS Lib source file
 bool isSystemHLSHeaderFunc(const Function *F);
 /// Returns true if source file name is from HLS Lib
 bool isSystemHLSHeaderFile(const std::string FileName);
 std::string getFuncSourceFileName(const Function *F);
+
+/// Returns true if llvm.fpga.any intrinsic
+bool isHlsFpgaAnyIntrinsic(const Value *V);
+
+MDTuple *getFuncPragmaInfo(Function *F, StringRef pragmaName);
+
+StringRef getFuncPragmaSource(Function *F, StringRef pragmaName);
+
+DebugLoc getFuncPragmaLoc(Function *F, StringRef pragmaName);
+
+inline DebugLoc  getInlinePragmaLoc(Function *F) 
+{
+  return getFuncPragmaLoc( F, "fpga.inline");
+}
+
+inline DebugLoc getDataflowPragmaLoc(Function *F)
+{
+  return getFuncPragmaLoc(F, "fpga.dataflow.func");
+}
+inline DebugLoc getPipelinePragmaLoc(Function* F)
+{
+  return getFuncPragmaLoc(F, "fpga.static.pipeline");
+}
+
+inline DebugLoc getExprBalancePragmaLoc(Function* F) 
+{
+  return getFuncPragmaLoc(F, "fpga.exprbalance.func");
+}
+
+inline DebugLoc  getMergeLoopPragmaLoc( Function *F) 
+{
+  return getFuncPragmaLoc(F, "fpga.mergeloop");
+}
+
+inline DebugLoc getTopPragmaLoc( Function *F) 
+{
+  return getFuncPragmaLoc(F, "fpga.top");
+}
+
+inline DebugLoc getLatencyPragmaLoc(Function *F)
+{
+  return getFuncPragmaLoc(F, "fpga.latency");
+}
+
+inline DebugLoc getPreservePragmaLoc( Function * F) 
+{
+  return getFuncPragmaLoc(F, "fpga_preserve");
+}
+
 
 } // end namespace llvm
 

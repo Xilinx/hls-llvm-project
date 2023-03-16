@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -519,6 +519,12 @@ public:
   /// Erase Value from ValueExprMap and ExprValueMap.
   void eraseValueFromMap(Value *V);
 
+  /// Insert V to S mapping into ValueExprMap and ExprValueMap.
+  void insertValueToMap(Value *V, const SCEV *S);
+
+  /// Notify this ScalarEvolution that \p User directly uses SCEVs in \p Ops.
+  void registerUser(const SCEV *User, ArrayRef<const SCEV *> Ops);
+
   /// Return a SCEV expression for the full generality of the specified
   /// expression.
   const SCEV *getSCEV(Value *V);
@@ -620,6 +626,16 @@ public:
                            SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap,
                            unsigned Depth = 0);
 
+  /// Compute ceil(N / D). N and D are treated as unsigned values.
+  ///
+  /// Since SCEV doesn't have native ceiling division, this generates a
+  /// SCEV expression of the following form:
+  ///
+  /// umin(N, 1) + floor((N - umin(N, 1)) / D)
+  ///
+  /// A denominator of zero or poison is handled the same way as getUDivExpr().
+  const SCEV *getUDivCeilSCEV(const SCEV *N, const SCEV *D);
+
   /// Return a SCEV corresponding to a conversion of the input value to the
   /// specified type.  If the type must be extended, it is zero extended.
   const SCEV *getTruncateOrZeroExtend(const SCEV *V, Type *Ty);
@@ -660,6 +676,9 @@ public:
   /// SCEVUnknown pointer for well-formed pointer-type expressions, but corner
   /// cases do exist.
   const SCEV *getPointerBase(const SCEV *V);
+
+  /// Compute an expression equivalent to S - getPointerBase(S).
+  const SCEV *removePointerBase(const SCEV *S);
 
   /// Return a SCEV expression for the specified value at the specified scope
   /// in the program.  The L value specifies a loop nest to evaluate the
@@ -1333,6 +1352,9 @@ private:
   /// Compute a BlockDisposition value.
   BlockDisposition computeBlockDisposition(const SCEV *S, const BasicBlock *BB);
 
+  /// Stores all SCEV that use a given SCEV as its direct operand.
+  DenseMap<const SCEV *, SmallPtrSet<const SCEV *, 8> > SCEVUsers;
+
   /// Memoized results from getRange
   DenseMap<const SCEV *, ConstantRange> UnsignedRanges;
 
@@ -1670,8 +1692,12 @@ private:
   /// to be a constant.
   Optional<APInt> computeConstantDifference(const SCEV *LHS, const SCEV *RHS);
 
-  /// Drop memoized information computed for S.
-  void forgetMemoizedResults(const SCEV *S);
+  /// Drop memoized information for all \p SCEVs.
+  void forgetMemoizedResults(ArrayRef<const SCEV *> SCEVs,
+                             bool SkipUnknownPhis = false);
+
+  /// Helper for forgetMemoizedResults.
+  void forgetMemoizedResultsImpl(const SCEV *S, bool SkipUnknownPhis = false);
 
   /// Return an existing SCEV for V if there is one, otherwise return nullptr.
   const SCEV *getExistingSCEV(Value *V);

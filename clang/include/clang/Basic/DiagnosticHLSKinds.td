@@ -1,6 +1,6 @@
 //==--- DiagnosticHLSKinds.td -----HLS related diagnostics ----------------===//
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -87,6 +87,10 @@ def warn_confilict_pragma_parameter : Warning<
   "pragma parameter '%0' conflicts with '%1'">,
   InGroup<InvalidXlxPragmas>;
 
+def err_performance_at_least_one_parameter_required : Error<
+  "performance pragma requires at least one of 'target_ti'|'target_tl'|'assume_ti'|'assume_tl' be specified"
+>;
+
 def err_resource_pragma_xpm_memory_option_conflict : Error<
   "auto|distribute|block|uram can only be selected as one choice for XPM_MEMORY in Resource pragma.">;
 
@@ -132,7 +136,7 @@ def warn_invalid_pragma_variable : Warning<
   "Invalid variable in '#pragma HLS %0': expect variable to be %1">,
   InGroup<InvalidXlxPragmas>;
 def warn_implicit_hls_stream : Warning<
-  "Invalid variable in '#pragma HLS %0': expect variable to have 'hls::stream' type">,
+  "Invalid variable in '#pragma HLS %0': expect variable to have '%1' type">,
   InGroup<InvalidXlxPragmas>;
 def warn_obsolete_pragma_hls_token_replaced : Warning<
   "'%0' in '#pragma HLS %1' is replaced by '%2'">,
@@ -147,8 +151,10 @@ def warn_xlx_pragma_applied_in_wrong_scope : Warning<
 def err_top_pragma_appiled_in_wrong_scope : Error<
   "'#pragma HLS top' cannot be applied in class method">;
 
+def warn_xlx_invalid_resource_option: Warning< 
+  "Invalid Directive: for current device, %0 is invalid combination for %1">;
 def err_xlx_invalid_resource_option: Error< 
-  "Invalid Directive: %0 is invalid combination options">;
+  "Invalid Directive: for current device, %0 is invalid combination for %1">;
 
 def err_xlx_invalid_offset_value: Error<
   "unexpected interface offset value '%0', expects '[slave, direct, off]'">;
@@ -164,8 +170,6 @@ def warn_attribute_argument_type : Warning<
   "%0 attribute requires %select{int or bool|an integer "
   "constant|a string|an identifier}1">,
   InGroup<IgnoredXlxAttributes>;
-
-
 
 
 //===----------------------------------------------------------------------===//
@@ -219,13 +223,12 @@ def warn_xlx_loop_tripcount_ignored: Warning<
 def err_xlx_expr_not_ice : Error<
   "unexpected, expression is not constant integer">;
 
+def err_xlx_expr_not_dce : Error<
+  "unexpected, expression is not constant floating number">;
+
 def warn_allocation_conflict: Warning<
   "ALLOCATION pragma conflicts with %0, and will be ignored">,
   InGroup<IgnoredXlxPragmas>;
-
-
-def err_latency_value_is_out_of_range
-   :Error<"'Latency' value %0 is out of range, valid value is %1">;
 
 def err_xlx_attribute_invalid_option_and_because
     : Error<"the value for option %0 is invalid, %1" >;
@@ -238,6 +241,8 @@ def warn_xlx_attribute_ignore_option : Warning<
 def warn_xlx_attribute_ignore_because_invalid_option: Warning<
   "%0 pragma is ignored, because %1 ">, 
   InGroup<InvalidXlxPragmas>;
+def err_xlx_attribute_ignore_because_invalid_option: Error<
+  "%0 pragma is ignored, because %1 ">;
 def warn_xlx_attribute_argument_outof_range: Warning<
   "%0 requires integer const between %1 and %2 inclusive">, 
   InGroup<InvalidXlxPragmas>;
@@ -250,7 +255,8 @@ def warn_xlx_dependence_inter_require_distance_option: Warning<
   "Ignoring invalid 'distance' value in 'dependence' pragma , 'inter' option require 'distance' option presented and 'distance' should be more than 0">,
   InGroup<InvalidXlxPragmas>;
 
-
+def err_xlx_variable_length_array_type_unsupport: Error<
+  "Variable length array is not supported">;
 
 // ------- Scout HLS error for pragma options: error out directly
 def err_xlx_pragma_not_supported_by_scout_HLS: Error<
@@ -333,6 +339,12 @@ def warn_ignore_xcl_dataflow_on_invalid_statement : Warning<
 def warn_statistics_xcl_dataflow_on_invalid_statement : Warning<
   "There are a total of %0 such instances of non-canonical statements in the dataflow region">,
   InGroup<IgnoredDataflowAttr>;
+
+def err_xlx_float2int_failed : Error<
+  "Convert floating number into integer failed">;
+
+def warn_xlx_float2int_inexact: Warning<
+  "Convert floating number into integer causes fractional truncation">;
 
 }
 

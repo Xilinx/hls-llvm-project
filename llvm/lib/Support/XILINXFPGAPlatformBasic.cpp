@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -659,9 +659,7 @@ std::pair<PlatformBasic::MEMORY_TYPE, PlatformBasic::MEMORY_IMPL> PlatformBasic:
         case PlatformBasic::ROM_1P_1S_AUTO:
             memoryPair = std::make_pair(MEMORY_ROM_1P_1S, MEMORY_IMPL_AUTO);
             break;
-        case PlatformBasic::ROM_NP_AUTO:
-            memoryPair = std::make_pair(MEMORY_ROM_NP, MEMORY_IMPL_AUTO);
-            break;
+
         case PlatformBasic::ROM_NP_LUTRAM:
             memoryPair = std::make_pair(MEMORY_ROM_NP, MEMORY_IMPL_LUTRAM);
             break;
@@ -865,6 +863,20 @@ void SetPlatformDbFile( std::string db_file)
 {
     default_db_file = db_file;
 }
+static std::string g_device_resource_info  = "";
+void SetPlatformDeviceResourceInfo( std::string resource_info) 
+{
+    g_device_resource_info = resource_info;
+}
+static std::string g_device_name_info  = "";
+void SetPlatformDeviceNameInfo( std::string deviceName) 
+{
+    g_device_name_info = deviceName;
+}
+std::string GetPlatformDeviceNameInfo ()
+{
+    return g_device_name_info;
+}
 
 PlatformBasic* PlatformBasic::getInstance()
 {
@@ -1001,11 +1013,11 @@ std::vector<std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE>> Platfor
 {
     std::vector<std::pair<OP_TYPE, IMPL_TYPE>> opImpls;
     // special for DSP48
-    if(iequals(coreName, "dsp48"))
-    {
-        opImpls.push_back(std::make_pair(OP_MUL, DSP));
-        return opImpls;
-    }
+    //if(iequals(coreName, "dsp48"))
+    //{
+    //    opImpls.push_back(std::make_pair(OP_MUL, DSP));
+    //    return opImpls;
+    //}
     std::vector<PlatformBasic::CoreBasic*> cores;
     auto it = mCoreNameMap.find(getLowerString(coreName));
     if(it != mCoreNameMap.end())
@@ -1015,6 +1027,23 @@ std::vector<std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE>> Platfor
     for(auto& core : cores)
     {
         opImpls.push_back(core->getOpAndImpl());
+    }
+    return opImpls;
+}
+
+std::vector<std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE>> PlatformBasic::getOpImplFromCoreNameInCompleteRepository(const std::string& coreName) const
+{
+    std::vector<std::pair<OP_TYPE, IMPL_TYPE>> opImpls;
+
+    std::vector<PlatformBasic::CoreBasic*> coreBasics;
+    auto it = mCoreNameMapInCompleteRepository.find(getLowerString(coreName));
+    if(it != mCoreNameMapInCompleteRepository.end())
+    {
+        coreBasics = it->second;
+    }
+    for(auto& coreBasic : coreBasics)
+    {
+        opImpls.push_back(coreBasic->getOpAndImpl());
     }
     return opImpls;
 }
@@ -1050,7 +1079,7 @@ bool PlatformBasic::isPublicType(MEMORY_TYPE type) const
     return isPublic;
 }
 
-std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::verifyBindOp(const std::string& opStr, const std::string& implStr) const
+std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::getOpImplFromStr(const std::string& opStr, const std::string& implStr) const
 {
     OP_TYPE op = getOpFromName(opStr);
     IMPL_TYPE impl = UNSUPPORTED;
@@ -1065,30 +1094,31 @@ std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::verif
         else
         {
             impl = getImplFromName(coreImpl);
-            // if op+impl can not match to a public core, still return (-1,-1)
-            auto coreBasic = getCoreFromOpImpl(op, impl);
-            if(coreBasic == NULL || !coreBasic->isPublic())
-            {
-                op = OP_UNSUPPORTED;
-                impl = UNSUPPORTED;
-            }
         }
-    }
-    if(!isPublicOp(op))
-    {
-        op = OP_UNSUPPORTED;
-        impl = UNSUPPORTED;
     }
     return std::make_pair(op, impl);
 }
 
-std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::verifyBindStorage(const std::string& type, const std::string& implName) const
+std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::verifyBindOp(const std::string& opStr, const std::string& implStr) const
 {
-      OP_TYPE op = OP_MEMORY;
+    auto Res = getOpImplFromStr(opStr, implStr);
+    if (!isNOIMPL(Res.second)) {
+        auto coreBasic = getCoreFromOpImpl(Res.first, Res.second);
+        if(coreBasic == NULL || !coreBasic->isPublic())
+        {
+            Res.first = OP_UNSUPPORTED;
+            Res.second = UNSUPPORTED;
+        }
+    }
+
+    return Res;
+}
+
+std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::getStorageTypeImplFromStr(const std::string& type, const std::string& implName) const
+{
+    OP_TYPE op = OP_MEMORY;
     IMPL_TYPE impl = UNSUPPORTED;
-    // to support impl=all
-    auto coreImpl = getUserControlData().getCoreImpl(type, implName, true);
-    if(coreImpl.empty() || getMemImplFromName(getLowerString(coreImpl)) == MEMORY_IMPL_AUTO)
+    if(implName.empty() || getMemImplFromName(getLowerString(implName)) == MEMORY_IMPL_AUTO)
     {
         // Use NOIMPL 
         auto memType = getMemTypeFromName(type);
@@ -1099,23 +1129,33 @@ std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::verif
     }
     else
     {
-        auto it = mImplStr2Enum.find(getLowerString(type + "_" + coreImpl));
+        auto it = mImplStr2Enum.find(getLowerString(type + "_" + implName));
         if(it != mImplStr2Enum.end())
         {
             impl = it->second;
         }
-        // if op+impl can not match to a public core, still return (-1,-1)
-        auto coreBasic = getCoreFromOpImpl(op, impl);
-        if(coreBasic == NULL || !coreBasic->isPublic())
-        {
-            impl = UNSUPPORTED;
-        }
     }
+
     if(impl == UNSUPPORTED)
     {
         op = OP_UNSUPPORTED;
     }
+
     return std::make_pair(op, impl);
+}
+
+std::pair<PlatformBasic::OP_TYPE, PlatformBasic::IMPL_TYPE> PlatformBasic::verifyBindStorage(const std::string& type, const std::string& implName) const
+{
+    auto Res = getStorageTypeImplFromStr(type, implName);
+    
+    if (!isNOIMPL(Res.second)) {
+        auto coreBasic = getCoreFromOpImpl(Res.first, Res.second);
+        if(coreBasic == NULL || !coreBasic->isPublic()) {
+            Res.first = OP_UNSUPPORTED;
+            Res.second = UNSUPPORTED;
+        }
+    }
+    return Res;
 }
 
 bool PlatformBasic::verifyInterfaceStorage(std::string storageType, std::pair<OP_TYPE, IMPL_TYPE> * coreEnums) const
@@ -1722,7 +1762,6 @@ void PlatformBasic::checkEnumEncode()
     assert(OP_SPECIFCORE == getOpFromName("specifcore"));
     assert(OP_SPECINTERFACE == getOpFromName("specinterface"));
     assert(OP_SPECIPCORE == getOpFromName("specipcore"));
-    assert(OP_SPECKEEPVALUE == getOpFromName("speckeepvalue"));
     assert(OP_SPECLATENCY == getOpFromName("speclatency"));
     assert(OP_SPECLOOPBEGIN == getOpFromName("specloopbegin"));
     assert(OP_SPECLOOPEND == getOpFromName("specloopend"));
@@ -1874,7 +1913,6 @@ void PlatformBasic::checkEnumEncode()
     assert(ROM_2P_LUTRAM == getImplFromName("rom_2p_lutram"));
     assert(ROM_AUTO == getImplFromName("rom_auto"));
     assert(ROM_COREGEN_AUTO == getImplFromName("rom_coregen_auto"));
-    assert(ROM_NP_AUTO == getImplFromName("rom_np_auto"));
     assert(ROM_NP_BRAM == getImplFromName("rom_np_bram"));
     assert(ROM_NP_LUTRAM == getImplFromName("rom_np_lutram"));
     assert(S_AXILITE == getImplFromName("s_axilite"));
@@ -1935,7 +1973,7 @@ void PlatformBasic::checkEnumEncode()
 
 bool PlatformBasic::load(const std::string& libraryName)
 {
-    bool result = loadStrEnumConverter() && loadCoreBasic(libraryName) && loadAlias();
+    bool result = loadStrEnumConverter() && loadCoreBasic(libraryName) && loadAlias() && loadCoreBasicInCompleteRepository();
     checkEnumEncode();
     return result;
 }
@@ -2004,8 +2042,68 @@ void PlatformBasic::createMemoryCoreBasic(std::string coreName, std::string op, 
     mCoreNameMap[getLowerString(coreName)] = std::vector<CoreBasic*>(1, coreBasic);
 }
 
+bool PlatformBasic::loadCoreBasicInCompleteRepository()
+{
+    mCoreNameMapInCompleteRepository.clear();
+
+    auto& selector = Selector::getInstance();
+    std::string cmd = "select CORE_NAME,TYPE,OP,IMPL,MAX_LATENCY,MIN_LATENCY,IS_PUBLIC from COMPLETE_CoreDef ";
+    std::vector<CoreBasicDef*> defs = selector.selectCoreBasics(cmd);
+
+    // for alias core
+    cmd = "select CORE_NAME,TYPE,OP,IMPL,MAX_LATENCY,MIN_LATENCY,IS_PUBLIC from\
+    platform_basic_deprecated where TYPE == 'deprecated' ";
+    std::vector<CoreBasicDef*> deprecatedDefs = selector.selectCoreBasics(cmd);
+    defs.insert(defs.end(), deprecatedDefs.begin(), deprecatedDefs.end());
+
+    for (auto def : defs) 
+    {
+        if (def->type == "storage")
+        {
+            OP_TYPE opCode = OP_MEMORY;
+            IMPL_TYPE implCode = getImplFromName(def->op + "_" + def->impl);
+
+            auto coreBasic = new CoreBasic(opCode, implCode, def->maxLat, def->minLat, def->name, def->isPublic);
+
+            mCoreNameMapInCompleteRepository[getLowerString(def->name)] = std::vector<CoreBasic*>(1, coreBasic);
+        }
+        else 
+        {
+            std::vector<std::string> ops = split(def->op, ",");
+            std::vector<CoreBasic*> coreBasics;
+            for(const auto& opStr : ops)
+            {
+                OP_TYPE opCode = getOpFromName(opStr);
+        
+                IMPL_TYPE implCode = getImplFromName(def->impl);
+        
+                auto coreBasic = new CoreBasic(opCode, implCode, def->maxLat, def->minLat, def->name, def->isPublic);
+                coreBasics.push_back(coreBasic);
+            } 
+            mCoreNameMapInCompleteRepository[getLowerString(def->name)] = coreBasics;
+        }
+    }
+
+    cmd = "select CORE_NAME,BASE from platform_basic_deprecated where TYPE == 'alias' ";
+    std::map<std::string, std::string> aliasMap = selector.selectAliasCores(cmd);
+    for(auto& pair : aliasMap)
+    {
+        if(mCoreNameMapInCompleteRepository.find(pair.second) != mCoreNameMapInCompleteRepository.end())
+        {
+            mCoreNameMapInCompleteRepository[pair.first] = mCoreNameMapInCompleteRepository[pair.second];
+        }
+    }
+
+    return !defs.empty();
+}
+
 bool PlatformBasic::loadCoreBasic(const std::string& libraryName)
 {
+    std::string deviceResourceInfo = g_device_resource_info;
+    if (deviceResourceInfo.empty()) {
+        deviceResourceInfo = "SLICE_112480.0000_LUT_899840.0000_FF_1799680.0000_DSP_1968.0000_BRAM_1934.0000_URAM_463.0000";
+        std::cerr << "WARNING: using default platform device information: " << deviceResourceInfo << std::endl;
+    }
     mCoreBasicMap.clear();
     mCoreNameMap.clear();
 
@@ -2020,15 +2118,46 @@ bool PlatformBasic::loadCoreBasic(const std::string& libraryName)
     std::vector<CoreBasicDef*> deprecatedDefs = selector.selectCoreBasics(cmd);
     defs.insert(defs.end(), deprecatedDefs.begin(), deprecatedDefs.end());
 
+    std::vector<std::string> seglist;
+    std::string delimiter = "_";
+    size_t pos = 0;
+    std::string token;
+    while ((pos = deviceResourceInfo.find(delimiter)) != std::string::npos) {
+        token = deviceResourceInfo.substr(0, pos);
+        seglist.push_back(token);
+        deviceResourceInfo.erase(0, pos + delimiter.length());
+    }
+    seglist.push_back(deviceResourceInfo);
+
+    std::map<std::string,double> resValue;
+    for (int i = 0; i < seglist.size(); i += 2 )
+    {
+        std::string key = getLowerString(seglist[i]);
+        double value = std::stod(seglist[i+1]);
+        resValue[key] = value;
+    }
+
     for(auto def : defs)
     {
         if(def->type == "storage")
         {
+            if (resValue.find("uram")->second == 0 && def->impl.find("uram") != std::string::npos) {
+                continue;
+            }
+            if (resValue.find("bram")->second == 0 && def->impl.find("bram") != std::string::npos) {
+                continue;
+            }
             createMemoryCoreBasic(def->name, def->op, def->impl, 
                                   def->maxLat, def->minLat, def->isPublic);
         }
         else
         {
+            if (resValue.find("dsp")->second == 0) {
+                if (def->impl.find("dsp") != std::string::npos || def->impl.find("vivado_dds") != std::string::npos || def->impl.find("vivado_fir") != std::string::npos || def->impl.find("vivado_fft") != std::string::npos || def->impl.find("qadder") != std::string::npos)
+                {
+                    continue;
+                }
+            }
             createCoreBasics(def->name, def->op, def->impl,
                              def->maxLat, def->minLat, def->isPublic);
         }

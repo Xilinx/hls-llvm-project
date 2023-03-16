@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
@@ -3831,6 +3831,10 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
   const FunctionDecl *PatternDef = PatternDecl->getDefinition();
   Stmt *Pattern = nullptr;
   if (PatternDef) {
+    if (getLangOpts().HLSExt) {
+      mergeDeclAttributes(Function, const_cast<FunctionDecl *>(PatternDef));
+    }
+    
     Pattern = PatternDef->getBody(PatternDef);
     PatternDecl = PatternDef;
     if (PatternDef->willHaveBody())

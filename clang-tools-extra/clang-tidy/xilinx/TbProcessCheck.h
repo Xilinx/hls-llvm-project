@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -26,6 +26,9 @@
 namespace clang {
 namespace tidy {
 namespace xilinx {
+
+using clang::ast_matchers::MatchFinder;
+
 struct wrapfunction {
   std::string Prefix;
   std::string RetType;
@@ -50,16 +53,47 @@ struct wrapdumper {
   SmallVector<structdecl, 4> SturctureDecl;
   //	llvm::StringMap<std::string> StructMap;
 };
+
+class TbProcessCheck;
+struct HandleTop : public MatchFinder::MatchCallback {
+  const FunctionDecl *top;
+  TbProcessCheck *check;
+
+  HandleTop(TbProcessCheck *check) : top(nullptr), check(check) {}
+  void run(const MatchFinder::MatchResult &res) override;
+};
+
+struct HandleTopDef : public MatchFinder::MatchCallback {
+  const FunctionDecl *topdef;
+  TbProcessCheck *check;
+
+  HandleTopDef(TbProcessCheck *check) : topdef(nullptr), check(check) {}
+  void run(const MatchFinder::MatchResult &res) override;
+};
+
+struct HandleCall : public MatchFinder::MatchCallback {
+  const Expr *call;
+  TbProcessCheck *check;
+
+  HandleCall(TbProcessCheck *check) : call(nullptr), check(check) {}
+  void run(const MatchFinder::MatchResult &res) override;
+};
+
+struct HandleMain : public MatchFinder::MatchCallback {
+  TbProcessCheck *check;
+
+  HandleMain(TbProcessCheck *check) : check(check) {}
+  void run(const MatchFinder::MatchResult &res) override;
+};
+
 /// FIXME: Write a short description.
 ///
 /// For the user-facing documentation see:
 /// http://clang.llvm.org/extra/clang-tidy/checks/xilinx-tb-process.html
-class TbProcessCheck : public ClangTidyCheck {
-public:
+struct TbProcessCheck : public ClangTidyCheck {
   TbProcessCheck(StringRef Name, ClangTidyContext *Context);
   void storeOptions(ClangTidyOptions::OptionMap &Options) override;
   void registerMatchers(ast_matchers::MatchFinder *Finder) override;
-  void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
 
   SourceLocation
   findLocationAfterBody(const ast_matchers::MatchFinder::MatchResult &Result,
@@ -88,14 +122,18 @@ public:
                        const clang::FunctionDecl *Callee,
                        const ast_matchers::MatchFinder::MatchResult &Result);
 
-private:
   std::string TopFunctionName;
   bool KeepTopName;
   bool NewFlow;
   bool BCSim;
   std::string BuildDir;
   wrapdumper Wrap;
+  HandleTop hTop;
+  HandleTopDef hTopDef;
+  HandleCall hCall;
+  HandleMain hMain;
 };
+
 } // namespace xilinx
 } // namespace tidy
 } // namespace clang

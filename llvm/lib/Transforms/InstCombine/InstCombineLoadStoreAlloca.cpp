@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the visit functions for load, store and alloca.
@@ -27,6 +32,7 @@
 using namespace llvm;
 using namespace PatternMatch;
 
+extern cl::opt<bool> HLS;
 #define DEBUG_TYPE "instcombine"
 
 STATISTIC(NumDeadStore,    "Number of dead stores eliminated");
@@ -1379,10 +1385,13 @@ Instruction *InstCombiner::visitStoreInst(StoreInst &SI) {
   Value *Val = SI.getOperand(0);
   Value *Ptr = SI.getOperand(1);
 
-  // Try to canonicalize the stored type.
-  if (combineStoreToValueType(*this, SI))
-    return eraseInstFromFunction(SI);
-
+  //HLS begin: avoid generating pointer bitcast
+  if (!HLS) {
+    // Try to canonicalize the stored type.
+    if (combineStoreToValueType(*this, SI))
+      return eraseInstFromFunction(SI);
+  }
+  //HLS end: avoid generating pointer bitcast
   // Attempt to improve the alignment.
   unsigned KnownAlign = getOrEnforceKnownAlignment(
       Ptr, DL.getPrefTypeAlignment(Val->getType()), DL, &SI, &AC, &DT);
@@ -1395,13 +1404,16 @@ Instruction *InstCombiner::visitStoreInst(StoreInst &SI) {
   else if (StoreAlign == 0)
     SI.setAlignment(EffectiveStoreAlign);
 
-  // Try to canonicalize the stored type.
-  if (unpackStoreToAggregate(*this, SI))
-    return eraseInstFromFunction(SI);
+  //HLS begin: avoid generating pointer bitcast
+  if (!HLS) {
+    // Try to canonicalize the stored type.
+    if (unpackStoreToAggregate(*this, SI))
+      return eraseInstFromFunction(SI);
 
-  if (removeBitcastsFromLoadStoreOnMinMax(*this, SI))
-    return eraseInstFromFunction(SI);
-
+    if (removeBitcastsFromLoadStoreOnMinMax(*this, SI))
+      return eraseInstFromFunction(SI);
+  }
+  //HLS end: avoid generating pointer bitcast
   // Replace GEP indices if possible.
   if (Instruction *NewGEPI = replaceGEPIdxWithZero(*this, Ptr, SI)) {
       Worklist.Add(NewGEPI);

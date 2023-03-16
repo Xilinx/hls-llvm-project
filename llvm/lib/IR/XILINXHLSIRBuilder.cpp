@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -28,9 +28,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/XILINXFPGAIntrinsicInst.h"
+#include "llvm/IR/XILINXAggregateUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/XILINXAggregateUtil.h"
 
 #define DEBUG_TYPE "xilinx-hls-ir-builder"
 
@@ -44,6 +44,11 @@ static cl::opt<bool> OptimalByteenableGenerate(
     "xilinx-optimal-byte-enable-gen",
     cl::desc("Assume same byte enable mask within an alignment."), cl::Hidden,
     cl::init(false));
+
+static cl::opt<bool> SModUsesURem(
+    "reflow-smod-uses-urem",
+    cl::desc("Implement signed-modulo using urem (instead of srem)"),
+    cl::Hidden, cl::init(true));
 
 HLSIRBuilder::HLSIRBuilder(BasicBlock *TheBB, BasicBlock::iterator IP,
                            MDNode *FPMathTag,
@@ -112,6 +117,64 @@ Value *HLSIRBuilder::CreateSDiv(Value *LHS, APInt RHS, const Twine &Name,
     return LHS;
 
   return CreateSDiv(LHS, ConstantInt::get(Context, RHS), Name, isExact);
+}
+
+Value *HLSIRBuilder::GenerateSMod(Value *LHS, Value *RHS, const Twine &Name) {
+  assert(LHS->getType() == RHS->getType() &&
+         "SMod requires matching argument types");
+
+  if (match(RHS, m_Power2()))
+    return CreateURem(LHS, RHS, Name);
+
+  // Provide two implementation as we are unsure which one is the nicest
+  // to the remaining of the tool.
+  //  - "urem" one will test if the input is negative, and produce a
+  // select-opposite / urem / select-opposite-add sequence
+  //  - "srem" one will test if the result is negative, and produce a
+  // srem / select-opposite-add sequence
+  //
+  // The first is expected to be simpler to optimize into urem as range
+  // analysis on input is easier than on results. In case that happens,
+  // a urem will be the resulting code, matching the above special cases.
+  // The second needs more deduction as the tool need to analyze the sign
+  // of the result. Even in the case the condition is eliminated, the tool
+  // now has a srem to work with instead of a urem.
+  auto *Zero = Constant::getNullValue(LHS->getType());
+  if (SModUsesURem) {
+    // If %LHS is non-negative, returns %LHS urem %RHS
+    // else returns %RHS + ~(~%LHS urem %RHS)
+    auto *NNeg = CreateICmpSLE(Zero, LHS, Name + ".nneg");
+    auto *Res = CreateSelect(NNeg, LHS, CreateNot(LHS),
+                             Name + ".smodpre");
+    Res = CreateURem(Res, RHS, Name);
+    Res = CreateSelect(NNeg, Res, CreateAdd(RHS, CreateNot(Res)),
+                       Name + ".smodpost");
+    return Res;
+  } else {
+    // If (%LHS srem %RHS) is non-negative, returns it
+    // else returns %RHS + (%LHS srem %RHS)
+    auto *Res = CreateSRem(LHS, RHS, Name);
+    auto *NNeg = CreateICmpSLE(Zero, Res, Name + ".nneg");
+    Res = CreateSelect(NNeg, Res, CreateAdd(RHS, Res),
+                       Name + ".smodpost");
+    return Res;
+  }
+}
+
+Value *HLSIRBuilder::CreateSMod(Value *LHS, Value *RHS, const Twine &Name) {
+  assert(LHS->getType() == RHS->getType() &&
+         "SMod requires matching argument types");
+
+  if (match(RHS, m_One()))
+    return getIntN(LHS->getType()->getIntegerBitWidth(), 0);
+
+  if (match(RHS, m_Power2()))
+    return CreateURem(LHS, RHS, Name);
+
+  if (isa<Constant>(LHS) && isa<Constant>(RHS))
+    return GenerateSMod(LHS, RHS, Name);
+
+  return CreateBinaryIntrinsic(Intrinsic::fpga_smod, LHS, RHS, Name);
 }
 
 //===----------------------------------------------------------------------===//
@@ -316,6 +379,13 @@ Constant *HLSIRBuilder::rewriteConstant(Constant *C, Type *T) {
 }
 
 //===----------------------------------------------------------------------===//
+Value *HLSIRBuilder::GenerateMask(Value *Off, IntegerType *PartTy) {
+  auto *Ty = cast<IntegerType>(Off->getType());
+  auto *AllOnes = Constant::getAllOnesValue(PartTy);
+  return CreateShl(CreateZExtOrTrunc(AllOnes, Ty),
+                   CreateZExtOrTrunc(Off, Ty));
+}
+
 Value *HLSIRBuilder::GenerateMask(Value *Hi, Value *Lo) {
   auto *Ty = cast<IntegerType>(Hi->getType());
   auto *SizeInBits = ConstantInt::get(Ty, Ty->getBitWidth());
@@ -327,12 +397,9 @@ Value *HLSIRBuilder::GenerateMask(Value *Hi, Value *Lo) {
   return CreateSub(Mask, CreateShl(One, Lo));
 }
 
-Value *HLSIRBuilder::GeneratePartSelect(Value *V, Value *Lo, Value *Hi,
+Value *HLSIRBuilder::GeneratePartSelect(Value *Src, Value *Off,
                                         IntegerType *RetTy) {
-  auto *Result = CreateLShr(
-      CreateAnd(V, GenerateMask(CreateZExtOrTrunc(Hi, V->getType()),
-                                CreateZExtOrTrunc(Lo, V->getType()))),
-      CreateZExtOrTrunc(Lo, V->getType()));
+  auto *Result = CreateLShr(Src, CreateZExtOrTrunc(Off, Src->getType()));
   assert(Result->getType()->getIntegerBitWidth() >= RetTy->getBitWidth() &&
          "Bad return type!");
   if (Result->getType() != RetTy)
@@ -359,97 +426,97 @@ unsigned HLSIRBuilder::getConstantVectorNumElts(Value *V,
   return 0;
 }
 
-Value *HLSIRBuilder::CreatePartSelect(Value *V, uint32_t Lo, uint32_t Hi) {
-  uint32_t DstSizeInBits = Hi - Lo + 1;
-
+Value *HLSIRBuilder::CreatePartSelect(Value *V, uint32_t Off, uint32_t BW) {
   if (isa<UndefValue>(V))
-    return UndefValue::get(getIntNTy(DstSizeInBits));
+    return UndefValue::get(getIntNTy(BW));
 
   // FIXME: Move this to reflow instruction simplifier
   if (auto *IT = dyn_cast<IntegerType>(V->getType())) {
-    if (Lo == 0)
-      return CreateZExtOrTrunc(V, getIntNTy(DstSizeInBits));
+    if (Off == 0)
+      return CreateZExtOrTrunc(V, getIntNTy(BW));
 
     if (auto *ZE = dyn_cast<ZExtInst>(V)) {
       auto SrcSizeInBits = ZE->getSrcTy()->getIntegerBitWidth();
-      if (SrcSizeInBits <= Lo)
-        return getIntN(DstSizeInBits, 0);
+      if (SrcSizeInBits <= Off)
+        return getIntN(BW, 0);
 
-      if (SrcSizeInBits - 1 >= Hi)
-        return CreatePartSelect(ZE->getOperand(0), Lo, Hi);
+      if (SrcSizeInBits >= Off + BW)
+        return CreatePartSelect(ZE->getOperand(0), Off, BW);
     }
 
     Value *Data;
     uint64_t Amt;
     if (match(V, m_Shl(m_Value(Data), m_ConstantInt(Amt)))) {
-      if (Lo > Amt)
-        return CreatePartSelect(Data, Lo - Amt, Hi - Amt);
+      if (Off > Amt)
+        return CreatePartSelect(Data, Off - Amt, BW);
     }
 
     // Try to extract element from bitconcat.
     if (auto *BitConcat = dyn_cast<BitConcatInst>(V))
-      if (auto *Elt = BitConcat->getElement(Hi, Lo))
+      if (auto *Elt = BitConcat->getElement(Off + BW - 1, Off))
         return Elt;
   }
 
   // Ask the constant folder to extract element from vector
-  unsigned NumElts = getConstantVectorNumElts(V, DstSizeInBits);
-  unsigned Idx = Lo / DstSizeInBits;
-  if (NumElts > Idx && Lo % DstSizeInBits == 0)
-    return CreateExtractElement(V, Lo / DstSizeInBits);
+  unsigned NumElts = getConstantVectorNumElts(V, BW);
+  unsigned Idx = Off / BW;
+  if (NumElts > Idx && Off % BW == 0)
+    return CreateExtractElement(V, Idx);
 
   auto *SrcTy = getIntNTy(DL.getTypeSizeInBits(V->getType()));
-  return CreatePartSelectCall(V, ConstantInt::get(SrcTy, Lo),
-                              ConstantInt::get(SrcTy, Hi),
-                              getIntNTy(DstSizeInBits));
+  return CreatePartSelectCall(V, ConstantInt::get(SrcTy, Off), getIntNTy(BW));
 }
 
-Value *HLSIRBuilder::CreatePartSelect(Value *V, Value *Lo, Value *Hi,
+Value *HLSIRBuilder::CreatePartSelect(Value *V, Value *Lo,
                                       IntegerType *RetTy) {
   if (isa<UndefValue>(V))
     return UndefValue::get(RetTy);
 
   // Do constant folding whenever possible
-  auto *IntHi = dyn_cast<ConstantInt>(Hi);
-  auto *IntLo = dyn_cast<ConstantInt>(Lo);
-  if (IntHi && IntLo) {
+  if (auto *IntLo = dyn_cast<ConstantInt>(Lo)) {
     if (isa<ConstantInt>(V))
-      return cast<ConstantInt>(GeneratePartSelect(V, Lo, Hi, RetTy));
-    assert(IntHi->getZExtValue() >= IntLo->getZExtValue() && "Bad range!");
-    return CreatePartSelect(V, IntLo->getZExtValue(), IntHi->getZExtValue());
+      return cast<ConstantInt>(GeneratePartSelect(V, Lo, RetTy));
+    return CreatePartSelect(V, IntLo->getZExtValue(), RetTy->getBitWidth());
   }
 
-  return CreatePartSelectCall(V, Lo, Hi, RetTy);
+  return CreatePartSelectCall(V, Lo, RetTy);
 }
 
-/// Generate the fpga.part.select call without any optimizations
-Value *HLSIRBuilder::CreatePartSelectCall(Value *V, Value *Lo, Value *Hi,
+/// Create the fpga.part.select call without any optimizations
+Value *HLSIRBuilder::CreatePartSelectCall(Value *Src, Value *Off,
                                           IntegerType *RetTy) {
-  V = twoStepsBitCast(V);
-  Lo = CreateZExtOrTrunc(Lo, V->getType());
-  Hi = CreateZExtOrTrunc(Hi, V->getType());
-  auto *SrcTy = cast<IntegerType>(V->getType());
-  Type *ArgTys[] = {RetTy, SrcTy};
-  auto *PartSelect = Intrinsic::getDeclaration(
-      getModule(), Intrinsic::fpga_part_select, ArgTys);
+  IntegerType *SrcTy = dyn_cast<IntegerType>(Src->getType());
+  assert(SrcTy && "Only accept IntegerType value to part select!");
+  IntegerType *OffTy = dyn_cast<IntegerType>(Off->getType());
+  assert(OffTy && "Off should be IntegerType!");
 
-  Value *Args[] = {V, Lo, Hi};
+  assert(SrcTy->getBitWidth() >= RetTy->getBitWidth() &&
+         "Src must be of at least RetTy size!");
+
+  Type *ArgTys[] = {RetTy, SrcTy, OffTy};
+  auto *PartSelect = Intrinsic::getDeclaration(
+    getModule(), Intrinsic::fpga_part_select, ArgTys);
+
+  Value *Args[] = {Src, Off};
   return CreateCall(PartSelect, Args);
 }
 
 /// Generate the fpga.part.set call without any optimizations
-Value *HLSIRBuilder::CreatePartSetCall(Value *V, Value *R, Value *Lo, Value *Hi,
-                                       IntegerType *RetTy) {
-  V = twoStepsBitCast(V);
-  R = twoStepsBitCast(R);
-  Lo = CreateZExtOrTrunc(Lo, RetTy);
-  Hi = CreateZExtOrTrunc(Hi, RetTy);
-  auto *SrcTy = cast<IntegerType>(R->getType());
-  Type *ArgTys[] = {RetTy, SrcTy};
+Value *HLSIRBuilder::CreatePartSetCall(Value *Src, Value *Rep, Value *Off) {
+  IntegerType *SrcTy = dyn_cast<IntegerType>(Src->getType());
+  IntegerType *RepTy = dyn_cast<IntegerType>(Rep->getType());
+  assert(SrcTy && RepTy && "Only accept IntegerType value to part set!");
+  IntegerType *OffTy = dyn_cast<IntegerType>(Off->getType());
+  assert(OffTy && "Off should be IntegerType!");
+
+  assert(SrcTy->getBitWidth() >= RepTy->getBitWidth() &&
+         "Src must be of at least Rep size!");
+
+  Type *ArgTys[] = {SrcTy, RepTy, OffTy};
   auto *PartSet = Intrinsic::getDeclaration(
       getModule(), Intrinsic::fpga_part_set, ArgTys);
 
-  Value *Args[] = {V, R, Lo, Hi};
+  Value *Args[] = {Src, Rep, Off};
   return CreateCall(PartSet, Args);
 }
 
@@ -581,38 +648,26 @@ Value *HLSIRBuilder::CreateByteenableUpdate(Value *PrevValue, Value *CurrValue,
   return Val;
 }
 
-Value *HLSIRBuilder::GeneratePartSet(Value *Dst, Value *Src, Value *Lo,
-                                     Value *Hi) {
-  return CreateOr(CreateAnd(Dst, CreateNot(GenerateMask(
-                                     CreateZExtOrTrunc(Hi, Dst->getType()),
-                                     CreateZExtOrTrunc(Lo, Dst->getType())))),
-                  CreateShl(CreateZExt(Src, Dst->getType()),
-                            CreateZExtOrTrunc(Lo, Dst->getType())));
+Value *HLSIRBuilder::GeneratePartSet(Value *Src, Value *Rep, Value *Off) {
+  IntegerType *RepTy = cast<IntegerType>(Rep->getType());
+  Value *Mask = GenerateMask(CreateZExtOrTrunc(Off, Src->getType()), RepTy);
+  return CreateOr(CreateAnd(Src, CreateNot(Mask)),
+                  CreateShl(CreateZExtOrTrunc(Rep, Src->getType()),
+                            CreateZExtOrTrunc(Off, Src->getType())));
 }
 
-Value *HLSIRBuilder::CreatePartSet(Value *Dst, Value *Src, uint32_t Lo,
-                                   uint32_t Hi) {
+Value *HLSIRBuilder::CreatePartSet(Value *Dst, Value *Src, uint32_t Lo) {
   auto *DstTy = cast<IntegerType>(Dst->getType());
-  assert(Lo <= Hi && "Bad range!");
-  return CreatePartSet(Dst, Src, ConstantInt::get(DstTy, Lo),
-                       ConstantInt::get(DstTy, Hi));
+  return CreatePartSet(Dst, Src, ConstantInt::get(DstTy, Lo));
 }
 
-Value *HLSIRBuilder::CreatePartSet(Value *Dst, Value *Src, Value *Lo,
-                                   Value *Hi) {
+Value *HLSIRBuilder::CreatePartSet(Value *Dst, Value *Src, Value *Lo) {
   Dst = twoStepsBitCast(Dst);
   Src = twoStepsBitCast(Src);
   assert(cast<IntegerType>(Dst->getType())->getBitWidth() >=
          cast<IntegerType>(Src->getType())->getBitWidth());
-  Lo = CreateZExtOrTrunc(Lo, Dst->getType());
-  Hi = CreateZExtOrTrunc(Hi, Dst->getType());
-
-  // assert(Lo->getZExtValue() <= Hi->getZExtValue() && "Bad range!");
-  Type *ArgTys[] = {Dst->getType(), Src->getType()};
-  auto *PartSet =
-      Intrinsic::getDeclaration(getModule(), Intrinsic::fpga_part_set, ArgTys);
-  Value *Args[] = {Dst, Src, Lo, Hi};
-  return CreateCall(PartSet, Args);
+  //Lo = CreateZExtOrTrunc(Lo, Dst->getType());
+  return CreatePartSetCall(Dst, Src, Lo);
 }
 
 Value *HLSIRBuilder::GenerateBitConcat(ArrayRef<Value *> Args,
@@ -986,6 +1041,12 @@ Value *HLSIRBuilder::CreateFIFOStatus(Intrinsic::ID ID, Value *Fifo) {
   return CreateCall(Intr, {Fifo});
 }
 
+Value *HLSIRBuilder::CreateFIFOLength(Intrinsic::ID ID, Value *Fifo) {
+  auto *FifoTy = Fifo->getType();
+  auto *Intr = Intrinsic::getDeclaration(getModule(), ID, {FifoTy});
+  return CreateCall(Intr, {Fifo});
+}
+
 Value *HLSIRBuilder::CreateFIFONotEmpty(Value *Fifo) {
   return CreateFIFOStatus(Intrinsic::fpga_fifo_not_empty, Fifo);
 }
@@ -1026,6 +1087,36 @@ Value *HLSIRBuilder::CreateFIFONbPop(Value *Fifo) {
 
 Value *HLSIRBuilder::CreateFIFONbPush(Value *V, Value *Fifo) {
   return CreateFIFOPush(Intrinsic::fpga_fifo_nb_push, V, Fifo);
+}
+
+Value *HLSIRBuilder::CreatePIPOInst(Intrinsic::ID ID, Value *Pipo) {
+  auto *PipoTy = Pipo->getType();
+  auto *Intr = Intrinsic::getDeclaration(getModule(), ID, {PipoTy});
+  return CreateCall(Intr, {Pipo});
+}
+
+Value *HLSIRBuilder::CreatePIPONotEmpty(Value *Pipo) {
+  return CreatePIPOInst(Intrinsic::fpga_pipo_not_empty, Pipo);
+}
+
+Value *HLSIRBuilder::CreatePIPONotFull(Value *Pipo) {
+  return CreatePIPOInst(Intrinsic::fpga_pipo_not_full, Pipo);
+}
+
+Value *HLSIRBuilder::CreatePIPOPopAcquire(Value *Pipo) {
+  return CreatePIPOInst(Intrinsic::fpga_pipo_pop_acquire, Pipo);
+}
+
+Value *HLSIRBuilder::CreatePIPOPopRelease(Value *Pipo) {
+  return CreatePIPOInst(Intrinsic::fpga_pipo_pop_release, Pipo);
+}
+
+Value *HLSIRBuilder::CreatePIPOPushAcquire(Value *Pipo) {
+  return CreatePIPOInst(Intrinsic::fpga_pipo_push_acquire, Pipo);
+}
+
+Value *HLSIRBuilder::CreatePIPOPushRelease(Value *Pipo) {
+  return CreatePIPOInst(Intrinsic::fpga_pipo_push_release, Pipo);
 }
 
 uint64_t HLSIRBuilder::calculateByteOffset(Type *T,
@@ -1256,22 +1347,6 @@ static unsigned GetNumElements(Constant *C) {
   llvm_unreachable("Not handled.");
 }
 
-static Type *GetElementType(Constant *C, unsigned Idx) {
-  // LLVM has crappy aggregate API...
-  assert(isa<ConstantData>(C) || isa<ConstantAggregate>(C));
-  // Even those have way too many childrens...
-
-  Type *Ty = C->getType();
-  if (auto *STy = dyn_cast<StructType>(Ty))
-    return STy->getElementType(Idx);
-  if (auto *ATy = dyn_cast<ArrayType>(Ty))
-    return ATy->getElementType();
-  if (auto *VTy = dyn_cast<VectorType>(Ty))
-    return VTy->getElementType();
-
-  llvm_unreachable("Not handled.");
-}
-
 static uint64_t GetElementOffset(Constant *C, unsigned Idx,
                                  const DataLayout &DL) {
   // LLVM has crappy aggregate API...
@@ -1416,9 +1491,7 @@ Value *HLSIRBuilder::packArrayToInt(Value *ArrayObj) {
 
     // part.set
     auto Begin = i * ElemSizeInBits;
-    auto End = Begin + ElemSizeInBits - 1;
-    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin),
-                             getIntN(SizeInBits, End));
+    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin));
   }
   return RetVal;
 }
@@ -1448,9 +1521,7 @@ Value *HLSIRBuilder::packStructToInt(Value *StructObj) {
 
     // part.set
     auto Begin = DL.getStructLayout(STy)->getElementOffsetInBits(i);
-    auto End = Begin + ElemSizeInBits - 1;
-    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin),
-                             getIntN(SizeInBits, End));
+    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin));
   }
   return RetVal;
 }
@@ -1477,10 +1548,9 @@ Value *HLSIRBuilder::unpackIntToArray(Value *IntObj, ArrayType *RetTy) {
   for (unsigned i = 0; i < RetTy->getNumElements(); i++) {
     // part.select
     auto Begin = i * ElemSizeInBits;
-    auto End = Begin + ElemSizeInBits - 1;
     auto *SubIntObj =
         GeneratePartSelect(IntObj, getIntN(SizeInBits, Begin),
-                           getIntN(SizeInBits, End), getIntNTy(ElemSizeInBits));
+                           getIntNTy(ElemSizeInBits));
     Value *Elem = nullptr;
     if (ElemTy->isStructTy()) {
       Elem = unpackIntToStruct(SubIntObj, cast<StructType>(ElemTy));
@@ -1511,10 +1581,9 @@ Value *HLSIRBuilder::unpackIntToStruct(Value *IntObj, StructType *RetTy) {
     auto ElemSizeInBits = DL.getTypeAllocSizeInBits(ElemTy);
     // part.select
     auto Begin = DL.getStructLayout(RetTy)->getElementOffsetInBits(i);
-    auto End = Begin + ElemSizeInBits - 1;
     auto *SubIntObj =
         GeneratePartSelect(IntObj, getIntN(SizeInBits, Begin),
-                           getIntN(SizeInBits, End), getIntNTy(ElemSizeInBits));
+                           getIntNTy(ElemSizeInBits));
     Value *Elem = nullptr;
     if (ElemTy->isStructTy()) {
       Elem = unpackIntToStruct(SubIntObj, cast<StructType>(ElemTy));
@@ -1578,9 +1647,7 @@ Value *HLSIRBuilder::packArrayToIntInBitLevel(Value *ArrayObj) {
 
     // part.set
     auto Begin = i * ElemSizeInBits;
-    auto End = Begin + ElemSizeInBits - 1;
-    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin),
-                             getIntN(SizeInBits, End));
+    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin));
   }
   return RetVal;
 }
@@ -1610,9 +1677,7 @@ Value *HLSIRBuilder::packStructToIntInBitLevel(Value *StructObj) {
 
     // part.set
     auto Begin = ElemOffset;
-    auto End = Begin + ElemSizeInBits - 1;
-    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin),
-                             getIntN(SizeInBits, End));
+    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin));
     ElemOffset += ElemSizeInBits;
   }
   return RetVal;
@@ -1643,10 +1708,9 @@ Value *HLSIRBuilder::unpackIntToArrayInBitLevel(Value *IntObj,
   for (unsigned i = 0; i < RetTy->getNumElements(); i++) {
     // part.select
     auto Begin = i * ElemSizeInBits;
-    auto End = Begin + ElemSizeInBits - 1;
     auto *SubIntObj =
         GeneratePartSelect(IntObj, getIntN(SizeInBits, Begin),
-                           getIntN(SizeInBits, End), getIntNTy(ElemSizeInBits));
+                           getIntNTy(ElemSizeInBits));
     Value *Elem = nullptr;
     if (ElemTy->isStructTy()) {
       Elem = unpackIntToStructInBitLevel(SubIntObj, cast<StructType>(ElemTy));
@@ -1679,11 +1743,10 @@ Value *HLSIRBuilder::unpackIntToStructInBitLevel(Value *IntObj,
     auto ElemSizeInBits = getAggregatedBitwidthInBitLevel(DL, ElemTy);
     // part.select
     auto Begin = ElemOffset;
-    auto End = Begin + ElemSizeInBits - 1;
     ElemOffset += ElemSizeInBits;
     auto *SubIntObj =
         GeneratePartSelect(IntObj, getIntN(SizeInBits, Begin),
-                           getIntN(SizeInBits, End), getIntNTy(ElemSizeInBits));
+                           getIntNTy(ElemSizeInBits));
     Value *Elem = nullptr;
     if (ElemTy->isStructTy()) {
       Elem = unpackIntToStructInBitLevel(SubIntObj, cast<StructType>(ElemTy));
@@ -1747,9 +1810,7 @@ Value *HLSIRBuilder::packArrayToIntInByteLevel(Value *ArrayObj) {
 
     // part.set
     auto Begin = i * ElemSizeInBits;
-    auto End = Begin + ElemSizeInBits - 1;
-    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin),
-                             getIntN(SizeInBits, End));
+    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin));
   }
   return RetVal;
 }
@@ -1779,9 +1840,7 @@ Value *HLSIRBuilder::packStructToIntInByteLevel(Value *StructObj) {
 
     // part.set
     auto Begin = ElemOffset;
-    auto End = Begin + ElemSizeInBits - 1;
-    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin),
-                             getIntN(SizeInBits, End));
+    RetVal = GeneratePartSet(RetVal, Elem, getIntN(SizeInBits, Begin));
     ElemOffset += ElemSizeInBits;
   }
   return RetVal;
@@ -1812,10 +1871,9 @@ Value *HLSIRBuilder::unpackIntToArrayInByteLevel(Value *IntObj,
   for (unsigned i = 0; i < RetTy->getNumElements(); i++) {
     // part.select
     auto Begin = i * ElemSizeInBits;
-    auto End = Begin + ElemSizeInBits - 1;
     auto *SubIntObj =
         GeneratePartSelect(IntObj, getIntN(SizeInBits, Begin),
-                           getIntN(SizeInBits, End), getIntNTy(ElemSizeInBits));
+                           getIntNTy(ElemSizeInBits));
     Value *Elem = nullptr;
     if (ElemTy->isStructTy()) {
       Elem = unpackIntToStructInByteLevel(SubIntObj, cast<StructType>(ElemTy));
@@ -1850,11 +1908,10 @@ Value *HLSIRBuilder::unpackIntToStructInByteLevel(Value *IntObj,
     auto ElemSizeInBits = getAggregatedBitwidthInByteLevel(DL, ElemTy);
     // part.select
     auto Begin = ElemOffset;
-    auto End = Begin + ElemSizeInBits - 1;
     ElemOffset += ElemSizeInBits;
     auto *SubIntObj =
         GeneratePartSelect(IntObj, getIntN(SizeInBits, Begin),
-                           getIntN(SizeInBits, End), getIntNTy(ElemSizeInBits));
+                           getIntNTy(ElemSizeInBits));
     Value *Elem = nullptr;
     if (ElemTy->isStructTy()) {
       Elem = unpackIntToStructInByteLevel(SubIntObj, cast<StructType>(ElemTy));
@@ -1881,43 +1938,52 @@ Value *HLSIRBuilder::unpackIntToStructInByteLevel(Value *IntObj,
 
 Value *HLSIRBuilder::CreateArrayPartitionInst(
     Value *V, ArrayXFormInst<ArrayPartitionInst>::XFormMode Mode, int32_t Dim,
-    int32_t Factor, bool Dynamic, int64_t BitSize) {
+    int32_t Factor, bool Dynamic, int64_t BitSize, StringRef Source) {
   auto *M = getModule();
   Type *Int32Ty = Type::getInt32Ty(M->getContext());
   Type *Int1Ty = Type::getInt1Ty(M->getContext());
   return Insert(PragmaInst::Create<ArrayPartitionInst>(
       {V, ConstantInt::get(Int32Ty, Mode), ConstantInt::get(Int32Ty, Factor),
        ConstantInt::getSigned(Int32Ty, Dim), ConstantInt::get(Int1Ty, Dynamic)},
-      nullptr, M, BitSize));
+      nullptr, M, BitSize, Source));
 }
 
 Value *HLSIRBuilder::CreateArrayReshapeInst(
     Value *V, ArrayXFormInst<ArrayReshapeInst>::XFormMode Mode, int32_t Dim,
-    int32_t Factor, int64_t BitSize) {
+    int32_t Factor, int64_t BitSize, StringRef Source) {
   auto *M = getModule();
   Type *Int32Ty = Type::getInt32Ty(M->getContext());
   return Insert(PragmaInst::Create<ArrayReshapeInst>(
       {V, ConstantInt::get(Int32Ty, Mode), ConstantInt::get(Int32Ty, Factor),
        ConstantInt::getSigned(Int32Ty, Dim)},
-      nullptr, M, BitSize));
+      nullptr, M, BitSize, Source));
 }
 
 Value *HLSIRBuilder::CreateDependenceInst(Value *V, bool isEnforced,
                                           DependenceInst::DepType Ty,
                                           DependenceInst::Direction Dir,
                                           int32_t Dist,
+                                          bool IsUserPragma,
                                           int64_t BitSize) {
   auto *M = getModule();
   Type *Int32Ty = Type::getInt32Ty(M->getContext());
   auto DirCode = static_cast<int>(Dir);
   auto TypeCode = static_cast<int>(Ty);
+  // TODO: clean IsUserPragma
+  StringRef Source;
+  if (IsUserPragma) {
+    Source = "infer-from-pragma";
+  } else {
+    Source = "infer-from-design";
+  }
   return Insert(PragmaInst::Create<DependenceInst>(
       {V, ConstantInt::get(Int32Ty, /* No class*/ 0),
        ConstantInt::get(Int32Ty, isEnforced),
        ConstantInt::get(Int32Ty, DirCode),
        ConstantInt::getSigned(Int32Ty, Dist),
-       ConstantInt::get(Int32Ty, TypeCode)},
-      nullptr, M, BitSize));
+       ConstantInt::get(Int32Ty, TypeCode),
+       ConstantInt::getBool(M->getContext(), IsUserPragma)},
+      nullptr, M, BitSize, Source));
 }
 
 Value *HLSIRBuilder::CreateAggregateInst(Value *V, int64_t BitSize) {
@@ -1932,14 +1998,39 @@ Value *HLSIRBuilder::CreateDisaggregateInst(Value *V, int64_t BitSize) {
 
 Value *HLSIRBuilder::CreateXlxFunctionAllocationInst(Function *F,
                                                      StringRef Str,
-                                                     int32_t Limit) {
+                                                     int32_t Limit,
+                                                     StringRef Source) {
   auto *M = getModule();
   auto &Ctx = M->getContext();
   return Insert(PragmaInst::Create<XlxFunctionAllocationInst>(
       {F,
        ConstantDataArray::getString(Ctx, Str, false),
        ConstantInt::get(Type::getInt32Ty(M->getContext()), Limit)},
-       nullptr, M));
+       nullptr, M, -1, Source));
+}
+
+Value *HLSIRBuilder::CreateStreamLabelInst(Value *V, int32_t Dim,
+                                           int64_t BitSize) {
+  auto *M = getModule();
+  Type *Int32Ty = Type::getInt32Ty(M->getContext());
+  return Insert(PragmaInst::Create<StreamLabelInst>(
+      {V, ConstantInt::getSigned(Int32Ty, Dim)}, nullptr, M, BitSize));
+}
+
+Value *HLSIRBuilder::CreateShiftRegLabelInst(Value *V, int32_t Dim,
+                                             int64_t BitSize) {
+  auto *M = getModule();
+  Type *Int32Ty = Type::getInt32Ty(M->getContext());
+  return Insert(PragmaInst::Create<ShiftRegLabelInst>(
+      {V, ConstantInt::getSigned(Int32Ty, Dim)}, nullptr, M, BitSize));
+}
+
+Value *HLSIRBuilder::CreateStreamOfBlocksLabelInst(Value *V, int32_t Dim,
+                                                   int64_t BitSize) {
+  auto *M = getModule();
+  Type *Int32Ty = Type::getInt32Ty(M->getContext());
+  return Insert(PragmaInst::Create<StreamOfBlocksLabelInst>(
+      {V, ConstantInt::getSigned(Int32Ty, Dim)}, nullptr, M, BitSize));
 }
 
 Value *HLSIRBuilder::CreateStreamPragmaInst(Value *V, int32_t Depth, int64_t BitSize) {
@@ -1970,7 +2061,7 @@ Value *HLSIRBuilder::CreateSAXIPragmaInst(Value *V, StringRef Bundle,
        ConstantDataArray::getString(Ctx, SignalName, false),
        ConstantDataArray::getString(Ctx, ClockName, false),
        ConstantDataArray::getString(Ctx, ImplName, false)},
-      nullptr, M));
+      nullptr, M, BitSize));
 }
 
 Value *HLSIRBuilder::CreateMAXIPragmaInst(
@@ -1978,7 +2069,7 @@ Value *HLSIRBuilder::CreateMAXIPragmaInst(
     StringRef SignalName, int64_t NumReadOutstanding,
     int64_t NumWriteOutstanding, int64_t MaxReadBurstLen,
     int64_t MaxWriteBurstLen, int64_t Latency, int64_t MaxWidenBitwidth,
-    int64_t BitSize) {
+    StringRef ChannelID, int64_t BitSize, StringRef Source) {
   auto *M = getModule();
   auto &Ctx = M->getContext();
   Type *Int64Ty = Type::getInt64Ty(Ctx);
@@ -1992,8 +2083,9 @@ Value *HLSIRBuilder::CreateMAXIPragmaInst(
        ConstantInt::getSigned(Int64Ty, MaxReadBurstLen),
        ConstantInt::getSigned(Int64Ty, MaxWriteBurstLen),
        ConstantInt::getSigned(Int64Ty, Latency),
-       ConstantInt::getSigned(Int64Ty, MaxWidenBitwidth)},
-      nullptr, M, BitSize));
+       ConstantInt::getSigned(Int64Ty, MaxWidenBitwidth),
+       ConstantDataArray::getString(Ctx, ChannelID, false)},
+      nullptr, M, BitSize, Source));
 }
 
 Value *HLSIRBuilder::CreateAXISPragmaInst(Value *V, bool HasRegister,

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -655,7 +655,7 @@ Value *getPointerOperand(Instruction *I) {
     return LI->getPointerOperand();
   if (StoreInst *SI = dyn_cast<StoreInst>(I))
     return SI->getPointerOperand();
-  llvm_unreachable("Value is not load or store instruction");
+  // llvm_unreachable("Value is not load or store instruction");
   return nullptr;
 }
 
@@ -981,7 +981,8 @@ bool DependenceInfo::isKnownPredicate(ICmpInst::Predicate Pred, const SCEV *X,
   case CmpInst::ICMP_SLT:
     return SE->isKnownNegative(Delta);
   default:
-    llvm_unreachable("unexpected predicate in isKnownPredicate");
+    return false;
+    // llvm_unreachable("unexpected predicate in isKnownPredicate");
   }
 }
 
@@ -2083,6 +2084,7 @@ bool DependenceInfo::symbolicRDIVtest(const SCEV *A1, const SCEV *A2,
 //
 // Return true if dependence disproved.
 bool DependenceInfo::testSIV(const SCEV *Src, const SCEV *Dst, unsigned &Level,
+
                              FullDependence &Result, Constraint &NewConstraint,
                              const SCEV *&SplitIter) const {
   DEBUG(dbgs() << "    src = " << *Src << "\n");
@@ -2134,8 +2136,8 @@ bool DependenceInfo::testSIV(const SCEV *Src, const SCEV *Dst, unsigned &Level,
                               CurLoop, Level, Result, NewConstraint) ||
       gcdMIVtest(Src, Dst, Result);
   }
-  llvm_unreachable("SIV test expected at least one AddRec");
-  return false;
+  // llvm_unreachable("SIV test expected at least one AddRec");
+  return true;
 }
 
 
@@ -2203,7 +2205,8 @@ bool DependenceInfo::testRDIV(const SCEV *Src, const SCEV *Dst,
       llvm_unreachable("RDIV reached by surprising SCEVs");
   }
   else
-    llvm_unreachable("RDIV expected at least one AddRec");
+    // llvm_unreachable("SIV test expected at least one AddRec");
+    return true;
   return exactRDIVtest(SrcCoeff, DstCoeff,
                        SrcConst, DstConst,
                        SrcLoop, DstLoop,

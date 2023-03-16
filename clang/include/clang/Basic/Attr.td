@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3044,16 +3044,6 @@ def XlxDataPack: Attr{
 
 }
 
-def XlxResourceIPCore: InheritableAttr{
-  let Spellings = [GNU<"xlx_resource_ipcore">];
-  let LangOpts = [HLSExt];
-  let Documentation = [Undocumented];
-  let Args = [
-            IdentifierArgument<"IP">,
-            IdentifierArgument<"Core">
-             ];
-}
-
 def XlxBindOp: Attr{
   let Spellings = [GNU<"xlx_bind_op">];
   let LangOpts = [HLSExt];
@@ -3145,6 +3135,17 @@ def XlxCrossDependence: Attr{
                             ["NO_DIRECTION", "RAW", "WAR", "WAW"] >,
               ExprArgument<"Distance">,
               DefaultBoolArgument<"Compel", 0>
+             ];
+}
+
+def XlxArrayStencil: Attr{
+  let Spellings = [GNU<"fpga_array_stencil">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Variable">,
+              DefaultBoolArgument<"Enabled", 1>
              ];
 }
 
@@ -3365,11 +3366,12 @@ def XlxExprBalance : InheritableAttr {
   let Args = [DefaultBoolArgument<"Enabled", 1>];
 }
 
-def XlxFuncInstantiate : InheritableAttr {
+def XlxFuncInstantiate : Attr {
   let Spellings = [GNU<"xlx_func_instantiate">];
-  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
   let LangOpts = [HLSExt];
   let Documentation = [Undocumented];
+  let Args = [ExprArgument<"Variable">];
+  let TemplateDependent = 1;
 }
 
 def XlxOccurrence : InheritableAttr {
@@ -3418,6 +3420,21 @@ def XCLLatency : InheritableAttr {
   let Documentation = [Undocumented];
   let Args = [ExprArgument<"Min">,
               ExprArgument<"Max">];
+}
+
+def XlxPerformance : Attr {
+  let Spellings = [GNU<"xlx_performance">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [ExprArgument<"TargetTI">,
+              ExprArgument<"TargetTL">,
+              ExprArgument<"AssumeTI">,
+              ExprArgument<"AssumeTL">,
+              EnumArgument<"PerformanceScope", 
+                           "PerformanceScopeType",
+                           ["loop", "region"],
+                           ["Loop", "Region"]>];
 }
 
 def MAXIAdaptor : InheritableAttr {
@@ -3549,7 +3566,8 @@ def MAXIInterface: InheritableAttr{
               ExprArgument<"MaxReadBurstLength">,
               ExprArgument<"MaxWriteBurstLength">,
               ExprArgument<"Latency">,
-              ExprArgument<"MaxWidenBitWidth">
+              ExprArgument<"MaxWidenBitWidth">,
+              ExprArgument<"Channel"> 
              ];
 }
 
@@ -3612,6 +3630,22 @@ def APScalarInterface: InheritableAttr{
               StringArgument<"Mode">,
               BoolArgument<"IsRegister">,
               StringArgument<"SignalName">
+             ];
+
+}
+
+def APScalarInterruptInterface: InheritableAttr{ 
+  let Spellings = [GNU<"ap_scalar_interrupt">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Subjects = SubjectList<[ParmVar], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              StringArgument<"Mode">,
+              BoolArgument<"IsRegister">,
+              StringArgument<"SignalName">,
+              ExprArgument<"Interrupt">
              ];
 
 }

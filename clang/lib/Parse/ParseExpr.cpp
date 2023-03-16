@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1532,6 +1532,23 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
   return Res;
 }
 
+static inline bool ENABLE_ARRAY_STAR() {
+  /// enable this feature by default, if we have not done this in 22.1, we can disable it
+  /// easily. when release to user, this will not triger unexpected behavior when user 
+  /// unintentionally write the expression.
+  return true;
+
+  const char *tmp = std::getenv("HLS_SUPPORT_ARRAY_STAR_EXPR");
+  if(!tmp)
+    return false;
+  
+  std::string Env = tmp;
+  if(Env == "ON")
+    return true;
+
+  return false;
+}
+
 /// \brief Once the leading part of a postfix-expression is parsed, this
 /// method parses any suffixes that apply.
 ///
@@ -1604,7 +1621,7 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       T.consumeOpen();
       Loc = T.getOpenLocation();
       ExprResult Idx, Length;
-      SourceLocation ColonLoc;
+      SourceLocation ColonLoc, StarLoc;
       if (getLangOpts().CPlusPlus11 && Tok.is(tok::l_brace)) {
         Diag(Tok, diag::warn_cxx98_compat_generalized_initializer_lists);
         Idx = ParseBraceInitializer();
@@ -1621,6 +1638,16 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
           if (Tok.isNot(tok::r_square))
             Length = ParseExpression();
         }
+      } else if(getLangOpts().HLSExt && ENABLE_ARRAY_STAR()) {
+        // Parse [* or [ expr
+        if(Tok.is(tok::star) && NextToken().is(tok::r_square)) {
+            // Consume '*'
+            StarLoc = ConsumeToken();
+        } else {
+            // [ expr
+            Idx = ParseExpression();
+        }
+        
       } else
         Idx = ParseExpression();
 
@@ -1632,6 +1659,8 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
         if (ColonLoc.isValid()) {
           LHS = Actions.ActOnOMPArraySectionExpr(LHS.get(), Loc, Idx.get(),
                                                  ColonLoc, Length.get(), RLoc);
+        } else if(StarLoc.isValid()) {
+          LHS = Actions.ActOnHLSWholeArrayExpr(getCurScope(), LHS.get(), Loc, StarLoc, RLoc);  
         } else {
           LHS = Actions.ActOnArraySubscriptExpr(getCurScope(), LHS.get(), Loc,
                                                 Idx.get(), RLoc);

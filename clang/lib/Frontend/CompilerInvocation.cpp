@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -49,6 +49,7 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/XILINXFPGAPlatformBasic.h"
+#include "llvm/Support/XILINXFPGACoreInstFactory.h"
 #include <atomic>
 #include <memory>
 #include <sys/stat.h>
@@ -529,6 +530,9 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
     else
       Opts.setDebugInfo(static_cast<codegenoptions::DebugInfoKind>(Val));
   }
+  else if (Args.hasArg(options::OPT_fhls)){ 
+      Opts.setDebugInfo(codegenoptions::LimitedDebugInfo); 
+  }
   if (Arg *A = Args.getLastArg(OPT_debugger_tuning_EQ)) {
     unsigned Val = llvm::StringSwitch<unsigned>(A->getValue())
                        .Case("gdb", unsigned(llvm::DebuggerKind::GDB))
@@ -593,10 +597,19 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
 //ZhaoKang
 #if 1
   if (Arg *ALib = Args.getLastArg(options::OPT_hls_platform_name)) { 
-    if (Arg *APath = Args.getLastArg(options::OPT_hls_platform_db_name)) { 
+    if (Arg *APath = Args.getLastArg(options::OPT_hls_platform_db_name)) {
+      if (Arg *ADevice = Args.getLastArg(options::OPT_device_resource_info)) {
+        platform::SetPlatformDeviceResourceInfo(ADevice->getValue());
+      }
+      if (Arg *ADeviceName = Args.getLastArg(options::OPT_device_name_info)) {
+        platform::SetPlatformDeviceNameInfo(ADeviceName->getValue());
+      }
       //load sqlite3db 
       platform::SetPlatformDbFile(APath->getValue());
-      platform::PlatformBasic::getInstance()->load( ALib->getValue());
+      platform::PlatformBasic::getInstance()->load(ALib->getValue());
+
+      pf_newFE::SetPlatformDbFile(APath->getValue());
+      pf_newFE::CoreInstFactory::getInstance()->createCores(ALib->getValue());
     }
   }
 #endif
@@ -2067,6 +2080,10 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   // -fhls option enable HLS-specific language extensions
   if (Args.hasArg(options::OPT_fhls))
     Opts.HLSExt = 1;
+
+  if (Args.hasArg(options::OPT_hls_support_slx)) {
+    Opts.HLSSLX = 1; 
+  }
 
   if (Args.hasArg(options::OPT_fstrict_dataflow))
     Opts.StrictDataflow = 1;

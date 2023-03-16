@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -350,6 +350,8 @@ public:
 
   // Converts a SourceLocation to a DebugLoc
   llvm::DebugLoc SourceLocToDebugLoc(SourceLocation Loc);
+  // Converts a Pragma SourceLocation to a DebugLoc
+  llvm::DebugLoc PragmaSourceLocToDebugLoc(SourceLocation Loc, bool IsAutoPragma = false);
 
   /// Emit metadata to indicate a change in line/column information in
   /// the source file. If the location is invalid, the previous

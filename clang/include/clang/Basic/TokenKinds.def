@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -806,6 +806,7 @@ ANNOTATION(pragma_openmp_end)
 // handles #pragma HLS|AP|AUTOPILOT ... directives.
 ANNOTATION(pragma_XlxHLS)
 ANNOTATION(pragma_XlxHLS_directive)
+ANNOTATION(pragma_XlxSLX_directive)
 ANNOTATION(pragma_XlxHLS_old)
 ANNOTATION(pragma_XlxHLS_end)
 

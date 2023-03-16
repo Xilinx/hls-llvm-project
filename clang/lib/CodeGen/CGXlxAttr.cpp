@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2021 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -36,6 +36,109 @@
 using namespace clang;
 using namespace sema;
 using namespace CodeGen;
+
+StringRef getPragmaContext(const Attr* A) 
+{
+  if (!A->getPragmaContext() ) { 
+    //for "top attribute , some opencl attribute , there is no pragma annotation, so return "user" directly 
+    return "user" ; 
+  }
+    if(A->getPragmaContext()->getName().equals_lower("SLXDIRECTIVE")) { 
+      return "infer-from-pragma";
+    }
+    else if (A->getPragmaContext()->getName().equals_lower("HLSDIRECTIVE")) { 
+      return "user" ;
+    }
+    else if (
+        A->getPragmaContext()->getName().equals_lower("HLS") || 
+        A->getPragmaContext()->getName().equals_lower("AP") || 
+        A->getPragmaContext()->getName().equals_lower("AUTOPILOT")) { 
+      return "user"; 
+    }
+    
+#if 0
+  switch (A->getKind()) { 
+    case attr::XlxPerformance:
+    case attr::XCLMaxWorkGroupSize : 
+    case attr::XCLZeroGlobalWorkOffset: 
+    case attr::XCLSingleWorkitem:
+    case attr::XCLPipelineLoop: 
+    case attr::XlxRewinding: 
+    case attr::XCLPipelineWorkitems: 
+    case attr::XlxPipeline: 
+    case attr::XCLUnrollWorkitems: 
+    case attr::XlxUnrollRegionHint: 
+    case attr::XCLFlattenLoop: 
+    case attr::XlxMergeLoop: 
+    case attr::XCLLoopTripCount: 
+    case attr::XlxLoopTripCount: 
+    case attr::XlxStable: 
+    case attr::XlxBindStorage:
+    case attr::XlxStableContent:
+    case attr::XlxShared:
+    case attr::XlxDisaggr:
+    case attr::XlxDataPack:
+    case attr::XlxBindOp:
+    case attr::XlxBindOpExpr:
+    case attr::XlxDependence:
+    case attr::XlxCrossDependence:
+    case attr::XlxArrayStencil:
+    case attr::XCLReqdPipeDepth: 
+    case attr::XlxReqdPipeDepth: 
+    case attr::XCLVisibility: 
+    case attr::XCLDataFlow: 
+    case attr::XCLOutline: 
+    case attr::XCLInline: 
+    case attr::XCLRegionName: 
+    case attr::FPGAResourceHint: 
+    case attr::XlxFunctionAllocation: 
+    case attr::FPGAResourceLimitHint: 
+    case attr::XlxArrayGeometry: 
+    case attr::XCLArrayGeometry:
+    case attr::XlxArrayPartitionXForm:
+    case attr::XlxArrayReshapeXForm:
+    case attr::XCLArrayXForm:
+    case attr::XCLArrayView:
+    case attr::XlxArrayView:
+    case attr::SDxKernel:
+    case attr::XlxExprBalance:
+    case attr::XlxFuncInstantiate:
+    case attr::XlxOccurrence:
+    case attr::XlxProtocol:
+    case attr::XlxVarReset:
+    case attr::XlxResetIntrinsic:
+    case attr::XCLLatency:
+    case attr::MAXIAdaptor:
+    case attr::SAXIAdaptor:
+    case attr::AXISAdaptor:
+    case attr::BRAMAdaptor:
+    case attr::FPGAScalarInterface:
+    case attr::FPGAScalarInterfaceWrapper:
+    case attr::FPGAAddressInterface:
+    case attr::SAXILITEOffsetInterface:
+    case attr::MAXIInterface:
+    case attr::AXIStreamInterface:
+    case attr::MemoryInterface:
+    case attr::APFifoInterface:
+    case attr::APScalarInterface:
+    case attr::APScalarInterruptInterface:
+    case attr::FPGAFunctionCtrlInterface:
+    case attr::FPGARegister:
+    case attr::FPGADataFootPrintHint:
+    case attr::FPGASignalName:
+    case attr::FPGAMaxiMaxWidenBitwidth:
+    case attr::FPGAMaxiLatency:
+    case attr::FPGAMaxiNumRdOutstand:
+    case attr::FPGAMaxiNumWtOutstand:
+    case attr::FPGAMaxiRdBurstLen:
+    case attr::FPGAMaxiWtBurstLen:
+    case attr::CodeGenType:
+    case attr::Unpacked:
+    case attr::HLSPreserve:
+    default:
+      return "user"; 
+#endif 
+} 
 
 /// ExtractAttrInteger - Extract the integer value from the attribute argument.
 /// \param Attr, The attribute we are trying to extract the integer value.
@@ -98,6 +201,45 @@ static int HLSEvaluateInteger(Expr *E, CodeGenModule& CGM,  const ASTContext &Ct
   }
 }
 
+static int64_t HLSEvaluateDoubleAsInteger(Expr *E, CodeGenModule& CGM,  const ASTContext &Ctx) {
+
+  if (!E)
+    return 0;
+
+  Expr::EvalResult EvalResult;
+  bool Result = E->EvaluateAsRValue(EvalResult, Ctx);
+
+  if (Result && !EvalResult.HasSideEffects) {
+    if (EvalResult.Val.isInt()) {
+      llvm::APSInt IntValue = EvalResult.Val.getInt();
+      return IntValue.getSExtValue();
+    } else if (EvalResult.Val.isFloat()) {
+      llvm::APFloat FloatVal = EvalResult.Val.getFloat();
+
+      llvm::APSInt IntValue(64, false);
+      bool isExact = false;
+      llvm::APFloat::opStatus status = FloatVal.convertToInteger(
+          IntValue, llvm::APFloat::rmTowardZero, &isExact);
+
+      if (status != llvm::APFloat::opOK && status != llvm::APFloat::opInexact) {
+        /// error out this convert float to integer
+        CGM.getDiags().Report(E->getExprLoc(), diag::err_xlx_float2int_failed);
+        return 0;
+      }
+
+      if (status == llvm::APFloat::opInexact) {
+        /// warning floating fraction truncate
+        CGM.getDiags().Report(E->getExprLoc(),
+                              diag::warn_xlx_float2int_inexact);
+      }
+
+      return IntValue.getSExtValue();
+    }
+  }
+
+  CGM.getDiags().Report(E->getExprLoc(), diag::err_xlx_expr_not_dce);
+  return 0;
+}
 
 int CodeGenFunction::HLSEvaluateInteger(Expr *E, int Default ) { 
 
@@ -446,9 +588,31 @@ static bool IsHLSStreamType(QualType ty) {
   return false;
 }
 
-using GEPFields = llvm::SmallVector<unsigned int, 4>;
-void CodeGenFunction::GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const ParmVarDecl *parm_decl, QualType type, GEPFields fields, bool parm_is_pointer)
+template <typename BuilderType>
+static void CreateCallSideEffect(CodeGenModule &CGM, BuilderType &Builder, StringRef name, llvm::ArrayRef<llvm::Value*> args, int64_t port_width = -1, StringRef pragmaContext = "user") {
+  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
+  bundleDefs.emplace_back(name, args);
+
+  auto *decl = llvm::Intrinsic::getDeclaration(
+      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
+
+  auto *CI = Builder.CreateCall(decl, None, bundleDefs);
+
+  llvm::AttrBuilder builder;
+  if (port_width >= 0) {
+    builder.addAttribute("xlx.port.bitwidth", std::to_string(port_width));
+  }
+  builder.addAttribute("xlx.source", pragmaContext);
+  llvm::AttributeList attr_list = llvm::AttributeList::get(CGM.getLLVMContext(), llvm::AttributeList::FunctionIndex, builder);
+  CI->setAttributes(attr_list);
+
+  CI->setOnlyAccessesInaccessibleMemory();
+  CI->setDoesNotThrow();
+}
+
+void CodeGenModule::GenerateStreamAnnotationIntrinsic(llvm::IRBuilder<> &Builder, llvm::Value* parm, const ParmVarDecl *parm_decl, QualType type, GEPFields  fields, bool parm_is_pointer)
 {
+  type = type.getCanonicalType();
   bool cur_is_pointer = false;
   clang::RecordDecl* recordDecl = nullptr;
   if (type->isPointerType() || type->isReferenceType()){ 
@@ -457,7 +621,7 @@ void CodeGenFunction::GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const
   }
   if (IsHLSStreamType(type)){ 
     if (!cur_is_pointer & !parm_is_pointer) {
-      CGM.getDiags().Report(parm_decl->getLocation(),
+      getDiags().Report(parm_decl->getLocation(),
          diag::warn_invalid_variable_expr);
       return ;
     }
@@ -467,15 +631,7 @@ void CodeGenFunction::GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const
       llvm::SmallVector<llvm::Value*, 4> idxs;
       if (fields.size() <= 1 ) { 
         llvm::Value *args[] = { parm };
-        SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-        bundleDefs.emplace_back("stream_interface", args);
-    
-        auto *sideeffect = llvm::Intrinsic::getDeclaration(
-                              &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-    
-        auto *call = Builder.CreateCall(sideeffect, None, bundleDefs);
-        call->setOnlyAccessesInaccessibleMemory();
-        call->setDoesNotThrow();
+        CreateCallSideEffect(*this, Builder, "stream_interface", args);
       }
       else { 
         for( int i = 0; i < fields.size(); i++ ) { 
@@ -484,16 +640,7 @@ void CodeGenFunction::GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const
         auto lv = Builder.CreateInBoundsGEP(parm, idxs);
     
         llvm::Value *args[] = { lv };
-        SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-        bundleDefs.emplace_back("stream_interface", args);
-    
-        auto *sideeffect = llvm::Intrinsic::getDeclaration(
-                              &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-    
-        auto *call = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-        call->setOnlyAccessesInaccessibleMemory();
-        call->setDoesNotThrow();
+        CreateCallSideEffect(*this, Builder, "stream_interface", args);
       }
       return ;
     }
@@ -501,32 +648,23 @@ void CodeGenFunction::GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const
       auto lv = Builder.CreateExtractValue(parm, makeArrayRef(fields));
 
       llvm::Value *args[] = { lv };
-      SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-      bundleDefs.emplace_back("stream_interface", args);
-  
-      auto *sideeffect = llvm::Intrinsic::getDeclaration(
-                            &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-  
-      auto *call = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-      call->setOnlyAccessesInaccessibleMemory();
-      call->setDoesNotThrow();
+      CreateCallSideEffect(*this, Builder, "stream_interface", args);
       return ;
     }
   }
 
   if (cur_is_pointer) { 
-    // current field is pointer type , we can not suppot it , if use specific following pramga 
-    // #pramga HLS interface m_axi port =  arg.pointer_field
+    // current field is pointer type , we can not suppot it , if use specific following pragma 
+    // #pragma HLS interface m_axi port =  arg.pointer_field
     //
     return ;
   }
 
   if (auto* typedefType = llvm::dyn_cast<clang::TypedefType>(type)) {
-      GenerateStreamAnnotationIntrinsic(parm, parm_decl, typedefType->getDecl()->getUnderlyingType(), fields, parm_is_pointer);
+      GenerateStreamAnnotationIntrinsic(Builder, parm, parm_decl, typedefType->getDecl()->getUnderlyingType(), fields, parm_is_pointer);
       return;
   } else if (auto* elaboratedType = llvm::dyn_cast<clang::ElaboratedType>(type)) {
-      GenerateStreamAnnotationIntrinsic(parm, parm_decl, elaboratedType->getNamedType(), fields, parm_is_pointer);
+      GenerateStreamAnnotationIntrinsic(Builder, parm, parm_decl, elaboratedType->getNamedType(), fields, parm_is_pointer);
       return;
   } else if (auto* recordType = llvm::dyn_cast<clang::RecordType>(type)) {
       recordDecl = recordType->getDecl()->getDefinition();
@@ -534,14 +672,14 @@ void CodeGenFunction::GenerateStreamAnnotationIntrinsic(llvm::Value* parm, const
       recordDecl = type->getAsStructureType()->getDecl();
   } else if (type->isArrayType()) {
       fields.push_back(0);
-      GenerateStreamAnnotationIntrinsic(parm, parm_decl, getContext().getAsArrayType(type)->getElementType(), fields, parm_is_pointer);
+      GenerateStreamAnnotationIntrinsic(Builder, parm, parm_decl, getContext().getAsArrayType(type)->getElementType(), fields, parm_is_pointer);
       return;
   }
 
   if (recordDecl) { 
     for (auto it = recordDecl->field_begin(); it != recordDecl->field_end(); ++it) {
       fields.push_back(it->getFieldIndex());
-      GenerateStreamAnnotationIntrinsic(parm, parm_decl, it->getType(), fields, parm_is_pointer);
+      GenerateStreamAnnotationIntrinsic(Builder, parm, parm_decl, it->getType(), fields, parm_is_pointer);
       fields.pop_back();
     }
   }
@@ -705,9 +843,6 @@ void CodeGenFunction::EmitXlxParamAttributes(const ParmVarDecl *D,
     }
   }
 
-  if (D->hasAttr<XlxFuncInstantiateAttr>())
-    Parm->addAttr(llvm::Attribute::get(Ctx, "fpga.func.instantiate"));
-
     /*
     DeclRefExpr* parm = DeclRefExpr::Create(
                               getContext(), 
@@ -723,16 +858,6 @@ void CodeGenFunction::EmitXlxParamAttributes(const ParmVarDecl *D,
          bool RefersToEnclosingVariableOrCapture, SourceLocation NameLoc,
          QualType T, ExprValueKind VK, NamedDecl *FoundD = nullptr,
     */
-  if (CurFuncDecl->hasAttr<SDxKernelAttr>()) { 
-    GEPFields fields;
-    if (D->getType()->isReferenceType() || D->getType()->isPointerType()) { 
-      fields.push_back(0);
-      GenerateStreamAnnotationIntrinsic(Parm, D, D->getType()->getPointeeType(), fields, true);
-    }
-    else { 
-      GenerateStreamAnnotationIntrinsic(Parm, D, D->getType(), fields, false);
-    }
-  }
 
   // Return nullptr if we didn't annotated anything
   if (ScopeAttrs.empty())
@@ -752,7 +877,11 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
   if (getLangOpts().CPlusPlus)
     if (auto *NameII = FD->getIdentifier())
       Fn->addFnAttr("fpga.demangled.name", NameII->getName());
+  
+  auto &Ctx = getLLVMContext(); 
+  llvm::MDBuilder MDB(Ctx);
 
+  SmallVector<llvm::Metadata *, 4> Args;
   if (auto DownwardInline = FD->getAttr<XCLInlineAttr>()) {
     auto mode = DownwardInline->getRecursive();
     if (mode == 0)
@@ -761,10 +890,24 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
       Fn->addFnAttr("fpga.recursive.inline");
     else if (mode == 2)
       Fn->addFnAttr("fpga.region.inline.off");
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(DownwardInline->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(DownwardInline)), Loc.getAsMDNode()}));
+  }
+
+  if (auto AlwaysInline = FD->getAttr<AlwaysInlineAttr>()) { 
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(AlwaysInline->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(AlwaysInline)), Loc.getAsMDNode()}));
+  }
+
+  if (auto NoInline = FD->getAttr<NoInlineAttr>()) { 
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(NoInline->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(NoInline)), Loc.getAsMDNode()}));
   }
 
   if (auto *A = FD->getAttr<XCLDataFlowAttr>()) {
     Fn->addFnAttr("fpga.dataflow.func", std::to_string(A->getPropagation()));
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.dataflow.func"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
   }
 
   // according Xlnx's document, OpenCL 's xcl_pipeline_workitems can not apply
@@ -777,6 +920,8 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
     std::string args = std::to_string(II) + "." + std::to_string(0);
 
     Fn->addFnAttr("fpga.static.pipeline", args);
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.static.pipeline"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
   }
 
   if (auto *A = FD->getAttr<XlxPipelineAttr>()) {
@@ -787,137 +932,47 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
     std::string args = std::to_string(II) + "." + std::to_string(Style);
 
     Fn->addFnAttr("fpga.static.pipeline", args);
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.static.pipeline"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
   }
 
-  if (auto *A = FD->getAttr<XlxExprBalanceAttr>())
+  if (auto *A = FD->getAttr<XlxExprBalanceAttr>()) {
     Fn->addFnAttr("fpga.exprbalance.func", std::to_string(A->getEnabled()));
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.exprbalance.func"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
+  }
 
-  if (auto *A = FD->getAttr<XlxMergeLoopAttr>())
+  if (auto *A = FD->getAttr<XlxMergeLoopAttr>()) {
     Fn->addFnAttr("fpga.mergeloop", std::to_string(A->getForce()));
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.mergeloop"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
+  }
 
-  if (auto *A = FD->getAttr<SDxKernelAttr>())
+  if (auto *A = FD->getAttr<SDxKernelAttr>()) {
     Fn->addFnAttr("fpga.top.func", A->getRTLName());
-
-  auto &Ctx = getLLVMContext();
-  llvm::MDBuilder MDB(Ctx);
-
-  for (auto *A : FD->specific_attrs<MAXIAdaptorAttr>()) {
-    const std::string &Prefix = "fpga.adaptor.maxi.";
-    const std::string &Name = A->getName();
-
-    auto ROSInt = EvaluateInteger(A->getNumReadOutstanding(), getContext(),
-                                  /*Default*/ 0);
-    auto WOSInt = EvaluateInteger(A->getNumWriteOutstanding(), getContext(),
-                                  /*Default*/ 0);
-    auto RBLInt = EvaluateInteger(A->getMaxReadBurstLength(), getContext(),
-                                  /*Default*/ 0);
-    auto WBLInt = EvaluateInteger(A->getMaxWriteBurstLength(), getContext(),
-                                  /*Default*/ 0);
-    auto Latency = EvaluateInteger(A->getLatency(), getContext(),
-                                   /*Default*/ 0);
-    auto *Node =
-        llvm::MDNode::get(Ctx, {MDB.createConstant(Builder.getInt32(ROSInt)),
-                                MDB.createConstant(Builder.getInt32(WOSInt)),
-                                MDB.createConstant(Builder.getInt32(RBLInt)),
-                                MDB.createConstant(Builder.getInt32(WBLInt)),
-                                MDB.createConstant(Builder.getInt32(Latency))});
-
-    Fn->addMetadata(Prefix + Name, *Node);
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.top"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
   }
 
-  for (auto *A : FD->specific_attrs<BRAMAdaptorAttr>()) {
-    const std::string &Prefix = "fpga.adaptor.bram.";
-    const std::string &Name = A->getName();
-    auto Latency = EvaluateInteger(A->getLatency(), getContext(),
-                                   /*Default*/ 1);
-
-    auto RAMType = EvaluateInteger(A->getRAMType(), getContext(), -1);
-    auto RAMImpl = EvaluateInteger(A->getRAMImpl(), getContext(), -1);
-    if (RAMType != platform::PlatformBasic::OP_UNSUPPORTED) {
-      const platform::PlatformBasic *XilinxPlatform =
-          platform::PlatformBasic::getInstance();
-      auto range = XilinxPlatform->verifyLatency(
-          (platform::PlatformBasic::OP_TYPE)RAMType,
-          (platform::PlatformBasic::IMPL_TYPE)RAMImpl);
-      if (Latency != -1 && (Latency < range.first || Latency > range.second)) {
-        CGM.getDiags().Report(A->getLocation(),
-                              diag::err_latency_value_is_out_of_range)
-            << Latency
-            << "[" + std::to_string(range.first) + ", " +
-                   std::to_string(range.second) + "]";
-      }
-    }
-
-    auto *Node = llvm::MDNode::get(
-        Ctx, {MDB.createString(Name),
-              MDB.createString(A->ConvertModeTypeToStr(A->getMode())),
-              MDB.createConstant(Builder.getInt32(RAMType)),
-              MDB.createConstant(Builder.getInt32(RAMImpl)),
-              MDB.createConstant(Builder.getInt32(Latency))});
-
-    Fn->addMetadata(Prefix + Name, *Node);
-  }
-
-  for (auto *A : FD->specific_attrs<SAXIAdaptorAttr>()) {
-    const std::string &Prefix = "fpga.adaptor.saxi.";
-    const std::string &Name = A->getName();
-    auto *Node = llvm::MDNode::get(Ctx, {MDB.createString(A->getClock())});
-
-    Fn->addMetadata(Prefix + Name, *Node);
-  }
-
-  for (auto *A : FD->specific_attrs<AXISAdaptorAttr>()) {
-    const std::string &Prefix = "fpga.adaptor.axis.";
-    const std::string &Name = A->getName();
-    auto *Node = llvm::MDNode::get(
-        Ctx,
-        {
-            MDB.createString(
-                A->ConvertAXISRegisterModeTypeToStr(A->getRegisterMode())),
-            MDB.createString(A->ConvertDirectionTypeToStr(A->getDirection())),
-        });
-
-    Fn->addMetadata(Prefix + Name, *Node);
-  }
-
-  // Return attributes
-  if (auto *A = FD->getAttr<FPGAScalarInterfaceAttr>()) {
-    const std::string &Name = "fpga.scalar.interface";
-    const std::string &Attr = SynthesisAttr(A);
-    Fn->addAttribute(llvm::AttributeList::ReturnIndex,
-                     llvm::Attribute::get(Ctx, Name, Attr));
-  }
-
-  // Return attributes with interface wrapper
-  if (auto *A = FD->getAttr<FPGAScalarInterfaceWrapperAttr>()) {
-    const std::string &Name = "fpga.interface.wrapper";
-    const std::string &Attr = SynthesisAttr(A, getContext());
-    Fn->addAttribute(llvm::AttributeList::ReturnIndex,
-                     llvm::Attribute::get(Ctx, Name, Attr));
-  }
-
-  // Function ctrl interface attributes
-  if (auto *A = FD->getAttr<FPGAFunctionCtrlInterfaceAttr>()) {
-    const std::string Name = "fpga.handshake.mode";
-    const std::string &Attr = SynthesisAttr(A);
-    Fn->addFnAttr(Name, Attr);
-  }
 
   for (auto *A : FD->specific_attrs<XCLLatencyAttr>()) {
     int Min = EvaluateInteger(A->getMin(), getContext(), /*Default*/ 0);
     int Max = EvaluateInteger(A->getMax(), getContext(), /*Default*/ 65535);
     Fn->addFnAttr("fpga.latency",
                   std::to_string(Min) + "." + std::to_string(Max));
-  }
 
-  for (auto *A : FD->specific_attrs<XlxResourceIPCoreAttr>()) {
-    Fn->addFnAttr("fpga.resource.hint", A->getIP()->getName().str() + "." +
-                                            A->getCore()->getName().str() +
-                                            "." + std::to_string(-1));
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.latency"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
   }
 
   for (auto *A : FD->specific_attrs<HLSPreserveAttr>()) {
     Fn->addFnAttr("hls_preserve");
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("hls_preserve"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
+  }
+   
+  if(!Args.empty()) {
+    Fn->addMetadata("fpga.function.pragma", *llvm::MDNode::get(Ctx, Args));
   }
 }
 
@@ -951,26 +1006,6 @@ static DeclRefExpr *GetAssignmentLHS(Expr *FE) {
   return nullptr;
 }
 
-void CodeGenFunction::BundleBindOpAttr(const XlxBindOpExprAttr *bindOp, SmallVectorImpl<llvm::OperandBundleDef> &BundleList) 
-{
-  auto var_expr = bindOp->getVariable();
-  auto op_enum = (platform::PlatformBasic::OP_TYPE)EvaluateInteger(
-      bindOp->getOp(), getContext(), -1);
-  auto impl_enum = (platform::PlatformBasic::IMPL_TYPE)EvaluateInteger(
-      bindOp->getImpl(), getContext(), -1);
-
-  // strip null terminator
-  auto latency =
-      EvaluateInteger(bindOp->getLatency(), getContext(), /*Default*/ -1);
-
-  // TODO, use  enum encoding insteading of "string"
-
-  llvm::Value *args[] = {Builder.getInt32(op_enum),
-                         Builder.getInt32(impl_enum),
-                         Builder.getInt32(latency)};
-
-  BundleList.emplace_back("fpga_resource_hint", args);
-}
 
 void CodeGenFunction::LowerBindOpScope(
     Stmt *&stmt, SmallVector<const XlxBindOpAttr *, 4> BindOpAttrs) {
@@ -1191,19 +1226,29 @@ static Expr * GetBaseExpr( Expr* E)
 
 void CodeGenFunction::EmitBundleForScope(
     const Stmt *SubStmt, ArrayRef<const Attr *> Attrs,
-    SmallVectorImpl<llvm::OperandBundleDef> &BundleList) {
+    SmallVectorImpl<llvm::OperandBundleDef> &BundleList,
+    SmallVectorImpl<llvm::MDNode*>  &pragmaLocs
+    ) {
   // auto &Ctx = Builder.getContext();
   SmallVector<llvm::Value*, 4> ComputeRegionPtrs;
+  SourceLocation ComputeRegionLoc; 
   if (isa<NullStmt>(SubStmt)) { 
     return ;
   }
 
+  llvm::MDBuilder MDB(getLLVMContext());
+
+  StringRef computeRegionPragmaContext ; 
+
   for (auto *A : Attrs) {
+    bool isNormalKind = true;
     switch (A->getKind()) {
     default:
+      isNormalKind = false;
       break;
-    case attr::XCLSingleWorkitem:
+    case attr::XCLSingleWorkitem:{
       BundleList.emplace_back(A->getSpelling(), None);
+    }
       break;
     case attr::XCLPipelineWorkitems: {
       // xilinx "xcl_pipeline_workitems" support workitems
@@ -1214,10 +1259,11 @@ void CodeGenFunction::EmitBundleForScope(
       BundleList.emplace_back(A->getSpelling(), Builder.getInt32(II));
       break;
     }
-    case attr::XCLUnrollWorkitems:
+    case attr::XCLUnrollWorkitems:{
       BundleList.emplace_back(
           A->getSpelling(),
           Builder.getInt32(cast<XCLUnrollWorkitemsAttr>(A)->getUnrollHint()));
+    }
       break;
     case attr::XCLArrayView: {
       auto *View = cast<XCLArrayViewAttr>(A);
@@ -1246,6 +1292,9 @@ void CodeGenFunction::EmitBundleForScope(
 
       auto *Copy = Builder.CreateCall(SSACopy, V, ScopeAttrs, V->getName());
       ComputeRegionPtrs.push_back(Copy);
+      ComputeRegionLoc = A->getLocation();
+      isNormalKind = false;
+      computeRegionPragmaContext = getPragmaContext(A); 
       break;
     }
     case attr::XCLOutline: {
@@ -1277,9 +1326,7 @@ void CodeGenFunction::EmitBundleForScope(
       auto Name = resourceLimit->getInstanceName()->getName();
       llvm::Value *Args[] = {llvm::ConstantDataArray::getString(getLLVMContext(),Name),
                              llvm::ConstantDataArray::getString(getLLVMContext(), InstanceType),
-                             Builder.getInt32(LimitInt)
-
-      };
+                             Builder.getInt32(LimitInt)};
       SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
       BundleList.emplace_back(A->getSpelling(), Args);
       break;
@@ -1289,10 +1336,11 @@ void CodeGenFunction::EmitBundleForScope(
       auto CycleInt = EvaluateInteger(Cycle, getContext(), /*Default*/ 1);
       BundleList.emplace_back(A->getSpelling(), Builder.getInt32(CycleInt));
     }; break;
-    case attr::XlxProtocol:
+    case attr::XlxProtocol: {
       BundleList.emplace_back(
           A->getSpelling(),
           Builder.getInt32(cast<XlxProtocolAttr>(A)->getProtocolMode()));
+    }
       break;
     case attr::XCLLatency: {
       int Min = EvaluateInteger(cast<XCLLatencyAttr>(A)->getMin(), getContext(),
@@ -1301,13 +1349,58 @@ void CodeGenFunction::EmitBundleForScope(
                                 /*Default*/ 65535);
 
       llvm::Value *LatencyArray[] = {Builder.getInt32(Min),
-                                     Builder.getInt32(Max)};
+                                     Builder.getInt32(Max)
+      };
+
       BundleList.emplace_back(A->getSpelling(), LatencyArray);
+      break;
+    }
+    case attr::XlxPerformance: {
+      const XlxPerformanceAttr *PerformanceAttr = cast<XlxPerformanceAttr>(A);
+      bool isLoop =
+          PerformanceAttr->getPerformanceScope() == XlxPerformanceAttr::Loop;
+
+      int64_t TargetTI = HLSEvaluateDoubleAsInteger(
+          PerformanceAttr->getTargetTI(), CGM, getContext());
+      int64_t TargetTL = HLSEvaluateDoubleAsInteger(
+          PerformanceAttr->getTargetTL(), CGM, getContext());
+      int64_t AssumeTI = HLSEvaluateDoubleAsInteger(
+          PerformanceAttr->getAssumeTI(), CGM, getContext());
+      int64_t AssumeTL = HLSEvaluateDoubleAsInteger(
+          PerformanceAttr->getAssumeTL(), CGM, getContext());
+
+      llvm::Value *Args[] = {Builder.getInt32(isLoop),
+                             Builder.getInt64(TargetTI),
+                             Builder.getInt64(TargetTL),
+                             Builder.getInt64(AssumeTI),
+                             Builder.getInt64(AssumeTL),
+                             Builder.getInt32(0) /// 0 means for cycle
+                            };
+
+      BundleList.emplace_back(A->getSpelling(), Args);
       break;
     }
     case attr::XlxBindOpExpr: {
       auto *bindOp = dyn_cast<XlxBindOpExprAttr>(A);
-      BundleBindOpAttr(bindOp, BundleList);
+
+      auto var_expr = bindOp->getVariable();
+      auto op_enum = (platform::PlatformBasic::OP_TYPE)EvaluateInteger(
+                                      bindOp->getOp(), getContext(), -1);
+      auto impl_enum = (platform::PlatformBasic::IMPL_TYPE)EvaluateInteger(
+                                      bindOp->getImpl(), getContext(), -1);
+
+      // strip null terminator
+      auto latency =
+            EvaluateInteger(bindOp->getLatency(), getContext(), /*Default*/ -1);
+
+      // TODO, use  enum encoding insteading of "string"
+
+      llvm::Value *args[] = {Builder.getInt32(op_enum),
+                         Builder.getInt32(impl_enum),
+                         Builder.getInt32(latency),
+                       };
+
+      BundleList.emplace_back("fpga_resource_hint", args);
       break;
     }
     case attr::XlxTask: { 
@@ -1327,10 +1420,22 @@ void CodeGenFunction::EmitBundleForScope(
       break;
     }
     }
+    if (isNormalKind) {
+      auto spelling = A->getSpelling();
+      if (A->getKind() == attr::XlxBindOpExpr) {
+        spelling = "fpga_resource_hint";
+      }
+      llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+      pragmaLocs.push_back(llvm::MDNode::get(getLLVMContext(), {MDB.createString(spelling), MDB.createString(getPragmaContext(A)), Loc.get()}));
+    }
   }
 
-  if (!ComputeRegionPtrs.empty())
+  if (!ComputeRegionPtrs.empty()){ 
     BundleList.emplace_back("fpga_compute_region", ComputeRegionPtrs);
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(ComputeRegionLoc);
+    pragmaLocs.push_back(llvm::MDNode::get(getLLVMContext(), {MDB.createString("fpga_compute_region"), 
+          MDB.createString(computeRegionPragmaContext), Loc.get()}));
+  }
 }
 
 Expr* EmitHLSVariableRecur( Expr *E, SmallVectorImpl<unsigned int> &idxs, std::string &name , CodeGenModule &CGM, ASTContext &context) 
@@ -1347,6 +1452,9 @@ Expr* EmitHLSVariableRecur( Expr *E, SmallVectorImpl<unsigned int> &idxs, std::s
       int idx = cast<FieldDecl>(sub)->getFieldIndex();
       idxs.push_back(idx);
       name.append( "." ).append(sub->getName().str());
+    } else if (isa<VarDecl>(sub)) {
+      // field is static
+      return E;
     }
     else{ 
       CGM.getDiags().Report(E->getExprLoc(),
@@ -1431,6 +1539,15 @@ std::pair<llvm::Value*, int64_t>  CodeGenFunction::EmitHLSVariableExpr( Expr *ex
    *
    *  so , here we need  to extract  subExpr from "UnaryOperator &" 
    */
+
+  /// error out for VLA for now, CodeGen for VLA will get continued
+  /// FIXME: This will crash in partiotion/ reshape for inserting the additional gep
+  /// and will be fixed in 22.2 to cleanup the insertion of gep operation
+  if (expr->getType()->isVariablyModifiedType()) {
+    CGM.getDiags().Report(expr->getExprLoc(), diag::err_xlx_variable_length_array_type_unsupport);
+    return std::make_pair(nullptr, -1);
+  }
+  
   if (isa<UnaryOperator>(expr) &&
       dyn_cast<UnaryOperator>(expr)->getOpcode() == UO_AddrOf) {
     expr = cast<UnaryOperator>(expr)->getSubExpr();
@@ -1562,6 +1679,7 @@ void CodeGenFunction::EmitStableIntrinsic(const XlxStableAttr *A) {
   llvm::Value *V = nullptr;
   Expr *expr = A->getVariable();
   std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
 
   V = port_info.first;
   int64_t port_width = port_info.second;
@@ -1570,21 +1688,7 @@ void CodeGenFunction::EmitStableIntrinsic(const XlxStableAttr *A) {
     V
   };
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back("stable", args);
-
-  auto *stableDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-
-  auto *call = Builder.CreateCall(stableDecl, None, bundleDefs);
-
-  std::pair<unsigned, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  call->setAttributes(attr_list);
-
-  call->setOnlyAccessesInaccessibleMemory();
-  call->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "stable", args, port_width, getPragmaContext(A));
 }
 
 void CodeGenFunction::EmitStableContentIntrinsic(
@@ -1593,6 +1697,8 @@ void CodeGenFunction::EmitStableContentIntrinsic(
   Expr *expr = A->getVariable();
 
   std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
+
 
   int64_t port_width = port_info.second;
   addr = port_info.first;
@@ -1600,20 +1706,7 @@ void CodeGenFunction::EmitStableContentIntrinsic(
       addr,
   };
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back("stable_content", args);
-
-  auto *stableDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *call = Builder.CreateCall(stableDecl, None, bundleDefs);
-
-  std::pair<unsigned, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  call->setAttributes(attr_list);
-
-  call->setOnlyAccessesInaccessibleMemory();
-  call->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "stable_content", args, port_width, getPragmaContext(A));
 }
 
 void CodeGenFunction::EmitSharedIntrinsic(const XlxSharedAttr *A) {
@@ -1621,25 +1714,13 @@ void CodeGenFunction::EmitSharedIntrinsic(const XlxSharedAttr *A) {
   Expr *expr = A->getVariable();
 
   std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
 
   int64_t port_width = port_info.second;
   V = port_info.first;
   llvm::Value *Args[] = {V};
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back("shared", Args);
-
-  auto *SharedDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(SharedDecl, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "shared", Args, port_width, getPragmaContext(A));
 }
 
 void CodeGenFunction::EmitBindStorageIntrinsic( const XlxBindStorageAttr *bindStorage) {
@@ -1647,6 +1728,7 @@ void CodeGenFunction::EmitBindStorageIntrinsic( const XlxBindStorageAttr *bindSt
   Expr *expr = bindStorage->getVariable();
   llvm::Value* pointer = nullptr;
   std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
 
   int64_t port_width = port_info.second;
   pointer = port_info.first;
@@ -1655,36 +1737,12 @@ void CodeGenFunction::EmitBindStorageIntrinsic( const XlxBindStorageAttr *bindSt
       EvaluateInteger(bindStorage->getLatency(), getContext(), /*Default*/ -1);
   auto impl = (platform::PlatformBasic::IMPL_TYPE)EvaluateInteger(
       bindStorage->getImpl(), getContext(), -1);
-  const platform::PlatformBasic *XilinxPlatform =
-      platform::PlatformBasic::getInstance();
-
-  auto range =
-      XilinxPlatform->verifyLatency(platform::PlatformBasic::OP_MEMORY, impl);
-  if (latency != -1 && (latency < range.first || latency > range.second)) {
-    CGM.getDiags().Report(bindStorage->getLocation(),
-                          diag::err_latency_value_is_out_of_range)
-        << latency
-        << "[" + std::to_string(range.first) + ", " +
-               std::to_string(range.second) + "]";
-  }
 
   llvm::Value *Args[] = {pointer,
                          Builder.getInt32(platform::PlatformBasic::OP_MEMORY),
                          Builder.getInt32(impl), Builder.getInt32(latency)};
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back("xlx_bind_storage", Args);
-
-  auto *bindStorageDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(bindStorageDecl, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "xlx_bind_storage", Args, port_width);
 }
 
 // TODO, need good name, applyReqdPipeDepthAttr ?
@@ -1697,6 +1755,8 @@ void CodeGenFunction::EmitReqdPipeDepthIntrinsic(
   Expr *E = stream->getVariable();
 
   std::pair<llvm::Value*, uint64_t> port_info = EmitHLSVariableExpr(E);
+  if (nullptr == port_info.first) return;
+
   V = port_info.first;
   int64_t port_width = port_info.second;
 
@@ -1704,24 +1764,11 @@ void CodeGenFunction::EmitReqdPipeDepthIntrinsic(
   llvm::Value *Args1[] = {V, Builder.getInt32(Depth)};
   llvm::Value *Args2[] = {V, Builder.getInt32(Depth), Builder.getInt32(stream->getType())};
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
   if (stream->getType() > 0) {
-    bundleDefs.emplace_back("xcl_fpga_pipo_depth", Args2);
+    CreateCallSideEffect(CGM, Builder, "xcl_fpga_pipo_depth", Args2, port_width, getPragmaContext(stream));
   } else {
-    bundleDefs.emplace_back(stream->getSpelling(), Args1);
+    CreateCallSideEffect(CGM, Builder, stream->getSpelling(), Args1, port_width, getPragmaContext(stream));
   }
-
-  auto *setStreamDepth = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(setStreamDepth, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
 }
 
 #if 0
@@ -1730,6 +1777,8 @@ void CodeGenFunction::EmitArrayXFormIntrinsic(const XlxArrayXFormAttr *A) {
 
   Expr *expr = A->getVariable();
   std::pair<llvm::Value*, uint64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
+  
   llvm::Value *V = port_info.first;
   int64_t port_width = port_info.second;
 
@@ -1755,20 +1804,7 @@ void CodeGenFunction::EmitArrayXFormIntrinsic(const XlxArrayXFormAttr *A) {
   llvm::Value *Args[] = {V, Builder.getInt32(xtype), EmitScalarExpr(FactorE),
                          EmitScalarExpr(DimE)};
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back(A->getSpelling(), Args);
-
-  auto *arrayXFormDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(arrayXFormDecl, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, A->getSpelling(), Args, port_width);
 }
 #endif
 
@@ -1777,19 +1813,20 @@ void CodeGenFunction::EmitArrayPartitionXFormIntrinsic(const XlxArrayPartitionXF
 
   Expr *expr = A->getVariable();
   std::pair<llvm::Value*, uint64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
+  
   llvm::Value *V = port_info.first;
   int64_t port_width = port_info.second;
 
-  if (!isa<llvm::Argument>(V) && V->getType()->isPointerTy()) { 
-    //TODO, we need delete this ugly code 
-    llvm::Value *const0 = Builder.getInt32(0);
-    llvm::Value *idxs[] = {const0, const0};
-    V = Builder.CreateInBoundsGEP(V, idxs);
-  }
-
   Expr *DimE = A->getDim();
   Expr *FactorE = A->getFactor();
+  int factor = HLSEvaluateInteger(FactorE, -1); 
+  if (factor == -1 ) 
+    return ; 
 
+  int dim = HLSEvaluateInteger(DimE, -1); 
+  if (dim == -1)
+    return; 
   /*
     enum XlxArrayXFromType {
       Cyclic,
@@ -1803,20 +1840,7 @@ void CodeGenFunction::EmitArrayPartitionXFormIntrinsic(const XlxArrayPartitionXF
   llvm::Value *Args[] = {V, Builder.getInt32(xtype), EmitScalarExpr(FactorE),
                          EmitScalarExpr(DimE), Builder.getInt1(Dynamic)};
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back(A->getSpelling(), Args);
-
-  auto *arrayXFormDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(arrayXFormDecl, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, A->getSpelling(), Args, port_width, getPragmaContext(A));
 }
 
 // xlx_array_reshape
@@ -1824,19 +1848,21 @@ void CodeGenFunction::EmitArrayReshapeXFormIntrinsic(const XlxArrayReshapeXFormA
 
   Expr *expr = A->getVariable();
   std::pair<llvm::Value*, uint64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
+  
   llvm::Value *V = port_info.first;
   int64_t port_width = port_info.second;
-
-  if (!isa<llvm::Argument>(V) && V->getType()->isPointerTy()) { 
-    //TODO, we need delete this ugly code 
-    llvm::Value *const0 = Builder.getInt32(0);
-    llvm::Value *idxs[] = {const0, const0};
-    V = Builder.CreateInBoundsGEP(V, idxs);
-  }
 
   Expr *DimE = A->getDim();
   Expr *FactorE = A->getFactor();
 
+  int factor = HLSEvaluateInteger(FactorE, -1); 
+  if (factor == -1 ) 
+    return ; 
+
+  int dim = HLSEvaluateInteger(DimE, -1); 
+  if (dim == -1)
+    return; 
   /*
     enum XlxArrayXFromType {
       Cyclic,
@@ -1849,20 +1875,7 @@ void CodeGenFunction::EmitArrayReshapeXFormIntrinsic(const XlxArrayReshapeXFormA
   llvm::Value *Args[] = {V, Builder.getInt32(xtype), EmitScalarExpr(FactorE),
                          EmitScalarExpr(DimE)};
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back(A->getSpelling(), Args);
-
-  auto *arrayXFormDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(arrayXFormDecl, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, A->getSpelling(), Args, port_width, getPragmaContext(A));
 }
 
 //for TopFunction use CC_FPGAAccel ccalling conversion , this need 
@@ -1870,56 +1883,35 @@ void CodeGenFunction::EmitArrayReshapeXFormIntrinsic(const XlxArrayReshapeXFormA
 void CodeGenFunction::EmitDisaggrIntrinsic(const XlxDisaggrAttr *A) {
   Expr *expr = A->getVariable();
   std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
+  
   llvm::Value *V = port_info.first;
   int64_t port_width = port_info.second;
 
   llvm::Value *Args[] = {V};
-
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back("disaggr", Args);
-
-  auto *DisaggrDecl = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(DisaggrDecl, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "disaggr", Args, port_width, getPragmaContext(A));
 }
 
 void CodeGenFunction::EmitAggregateIntrinsic(const XlxAggregateAttr *A) {
   Expr *expr = A->getVariable();
   std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
+  
   llvm::Value *V = port_info.first;
   int64_t port_width = port_info.second;
 
   auto compact = A->getCompact();
+
   llvm::Value * compact_v = Builder.getInt64(compact);
   llvm::Value *Args[] = {V, compact_v };
-
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back("aggregate", Args);
-
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&(CGM.getModule()),
-                                                   llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "aggregate", Args, port_width, getPragmaContext(A));
 }
 void CodeGenFunction::EmitDataPackIntrinsic(const XlxDataPackAttr* A) 
 {
   Expr *expr = A->getVariable();
   std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+  if (nullptr == port_info.first) return;
+  
   llvm::Value *V = port_info.first;
   int64_t port_width = port_info.second;
 
@@ -1932,35 +1924,13 @@ void CodeGenFunction::EmitDataPackIntrinsic(const XlxDataPackAttr* A)
   llvm::Value * level_v = Builder.getInt64(aggregate_compact);
   llvm::Value *Args[] = {V, level_v };
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back("aggregate", Args);
-
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&(CGM.getModule()),
-                                                   llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
-
+  CreateCallSideEffect(CGM, Builder, "aggregate", Args, port_width, getPragmaContext(A));
 }
 
 void CodeGenFunction::EmitHLSConstIntrinsic(llvm::Value *var) {
   llvm::Value *Args[] = {var};
 
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back("const", Args);
-
-  auto *hls_const = llvm::Intrinsic::getDeclaration(
-      &(CGM.getModule()), llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(hls_const, None, bundleDefs);
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "const", Args);
 }
 
 void CodeGenFunction::EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAttr *attr) { 
@@ -1994,8 +1964,6 @@ void CodeGenFunction::EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAt
   auto dep_type = attr->getType();
   auto dep_direction = attr->getDirection();
   auto dep_distance = HLSEvaluateInteger(attr->getDistance());
-  auto *dependence = llvm::Intrinsic::getDeclaration(
-        CurFn->getParent(), llvm::Intrinsic::sideeffect);
 
   llvm::Value* args[] = {
        addr0,
@@ -2007,12 +1975,8 @@ void CodeGenFunction::EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAt
        Builder.getInt32(dep_type)
   };
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back( "fpga.cross.dependence", args );
-
-  auto* call = Builder.CreateCall(dependence, None, bundleDefs );
-  call->setOnlyAccessesInaccessibleMemory();
-  call->setDoesNotThrow();
+  assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");
+  CreateCallSideEffect(CGM, Builder, "fpga.cross.dependence", args, -1, getPragmaContext(attr));
 }
 
 // this is step 2 , will be commit after step1 that is  clang parser part
@@ -2027,15 +1991,7 @@ void CodeGenFunction::EmitResourceLimitIntrinsic(const FPGAResourceLimitHintAttr
                          Builder.getInt32(LimitInt)
 
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back(resourceLimit->getSpelling(), Args);
-
-  auto *hls_resource_limit = llvm::Intrinsic::getDeclaration(&(CGM.getModule()),
-                                                   llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(hls_resource_limit, None, bundleDefs);
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, resourceLimit->getSpelling(), Args, -1, getPragmaContext(resourceLimit));
 }
 
 void CodeGenFunction::EmitFunctionAllocationIntrinsic(const XlxFunctionAllocationAttr* functionAlloc) 
@@ -2086,15 +2042,7 @@ void CodeGenFunction::EmitFunctionAllocationIntrinsic(const XlxFunctionAllocatio
                          llvm::ConstantDataArray::getString(getLLVMContext(), "function"),
                          Builder.getInt32(LimitInt) 
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back(functionAlloc->getSpelling(), Args);
-
-  auto *hls_func_alloc = llvm::Intrinsic::getDeclaration(&(CGM.getModule()),
-                                                   llvm::Intrinsic::sideeffect);
-
-  auto *CI = Builder.CreateCall(hls_func_alloc, None, bundleDefs);
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, functionAlloc->getSpelling(), Args, -1, getPragmaContext(functionAlloc));
 }
 
 static bool IsFunctionPointer(Expr* port ) 
@@ -2142,6 +2090,8 @@ void CodeGenFunction::EmitSAXILITEOffsetIntrinsic( const SAXILITEOffsetInterface
   }
   else if (IsHLSBurstMaxiType(port->getType())) { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     llvm::Value *V = port_info.first;
     if (V->getType()->isPointerTy()) { 
       CGM.getDiags().Report(interface->getLocation(), diag::err_xlx_invalid_port_expr)
@@ -2155,6 +2105,8 @@ void CodeGenFunction::EmitSAXILITEOffsetIntrinsic( const SAXILITEOffsetInterface
   }
   else { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     port_var = port_info.first;
     port_width = port_info.second;
   }
@@ -2167,18 +2119,7 @@ void CodeGenFunction::EmitSAXILITEOffsetIntrinsic( const SAXILITEOffsetInterface
   auto implName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getImplName(), false);
 
   llvm::Value *Args[] = { port_var, bundName, offset, isRegister, signalName, clockName, implName };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back("xlx_s_axilite", Args);
-
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "xlx_s_axilite", Args, port_width, getPragmaContext(interface));
 }
 
 void CodeGenFunction::EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *interface) 
@@ -2204,6 +2145,8 @@ void CodeGenFunction::EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *inter
   }
   else if (IsHLSBurstMaxiType(port->getType())) { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     llvm::Value *V = port_info.first;
     if (V->getType()->isPointerTy()) { 
       CGM.getDiags().Report(interface->getLocation(), diag::err_xlx_invalid_port_expr)
@@ -2217,11 +2160,16 @@ void CodeGenFunction::EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *inter
   }
   else { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     port_var = port_info.first;
     port_width = port_info.second;
   }
 
   StringRef bundleName = interface->getBundleName();
+  std::string channelID = 
+      cast<StringLiteral>(interface->getChannel())->getString();
+  
   int depth = EvaluateInteger(interface->getDepth(), getContext(), -1);
   StringRef offsetType = MAXIInterfaceAttr::ConvertOffsetModeTypeToStr(interface->getOffsetMode());
   StringRef signalName = interface->getSignalName();
@@ -2242,22 +2190,11 @@ void CodeGenFunction::EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *inter
     Builder.getInt64(max_read_burst_length),
     Builder.getInt64(max_write_burst_length),
     Builder.getInt64(latency),
-    Builder.getInt64(max_widen_bitwidth) 
+    Builder.getInt64(max_widen_bitwidth),
+    llvm::ConstantDataArray::getString(getLLVMContext(), channelID, false),
   };
                     
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back("xlx_m_axi", Args);
-
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
-
+  CreateCallSideEffect(CGM, Builder, "xlx_m_axi", Args, port_width, getPragmaContext(interface));
 }
 
 void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceAttr* interface)
@@ -2274,6 +2211,8 @@ void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceA
   }
   else { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     port_var = port_info.first;
     port_width = port_info.second;
   }
@@ -2292,18 +2231,8 @@ void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceA
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false),
     llvm::ConstantDataArray::getString(getLLVMContext(), bundleName, false)
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back("xlx_axis", Args);
 
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "xlx_axis", Args, port_width, getPragmaContext(interface));
 }
 
 void CodeGenFunction::EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *interface) 
@@ -2320,6 +2249,8 @@ void CodeGenFunction::EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *i
   }
   else {
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     port_var = port_info.first;
     port_width = port_info.second;
   }
@@ -2357,23 +2288,12 @@ void CodeGenFunction::EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *i
     Builder.getInt64(depth),
     llvm::ConstantDataArray::getString(getLLVMContext(), storageTypeStr, false) /* reuse storageTypeStr for recoding */
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  if (interface->getMode() == "ap_memory") { 
-    bundleDefs.emplace_back("xlx_ap_memory", Args);
+
+  if (interface->getMode() != "ap_memory" &&
+      interface->getMode() != "bram") {
+    assert(false && "unexpected");
   }
-  else if (interface->getMode() == "bram"){ 
-    bundleDefs.emplace_back("xlx_bram", Args);
-  }
-
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "xlx_" + interface->getMode().str(), Args, port_width, getPragmaContext(interface));
 }
 
 
@@ -2391,6 +2311,8 @@ void CodeGenFunction::EmitAPFifoInterfaceIntrinsic( const APFifoInterfaceAttr *i
   }
   else { 
     auto port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     port_var = port_info.first;
     port_width = port_info.second;
   }
@@ -2404,18 +2326,8 @@ void CodeGenFunction::EmitAPFifoInterfaceIntrinsic( const APFifoInterfaceAttr *i
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
     Builder.getInt64(depth)
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back("xlx_ap_fifo", Args);
 
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "xlx_ap_fifo", Args, port_width, getPragmaContext(interface));
 }
 
 void CodeGenFunction::EmitAPScalarInterfaceIntrinsic(const APScalarInterfaceAttr *interface) 
@@ -2431,6 +2343,8 @@ void CodeGenFunction::EmitAPScalarInterfaceIntrinsic(const APScalarInterfaceAttr
   }
   else { 
     auto port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     port_var = port_info.first;
     port_width = port_info.second;
   }
@@ -2441,41 +2355,56 @@ void CodeGenFunction::EmitAPScalarInterfaceIntrinsic(const APScalarInterfaceAttr
   llvm::Value* Args[] = { 
     port_var,
     Builder.getInt1(isRegister), 
-    llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
+    llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false)
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  if (interface->getMode() == "ap_none") { 
-    bundleDefs.emplace_back("xlx_ap_none", Args);
+
+  if (interface->getMode() != "ap_none" &&
+      interface->getMode() != "ap_ack" &&
+      //interface->getMode() != "ap_vld" &&
+      interface->getMode() != "ap_ovld" &&
+      //interface->getMode() != "ap_hs" &&
+      interface->getMode() != "ap_stable") {
+    assert(false && "unexpected");
   }
-  else if (interface->getMode() == "ap_ack") { 
-    bundleDefs.emplace_back("xlx_ap_ack", Args);
+
+  CreateCallSideEffect(CGM, Builder, "xlx_" + interface->getMode().str(), Args, port_width, getPragmaContext(interface));
+}
+
+void CodeGenFunction::EmitAPScalarInterruptInterfaceIntrinsic(const APScalarInterruptInterfaceAttr *interface) 
+{
+  if (!CurFuncDecl->hasAttr<SDxKernelAttr>()) { 
+    return ;
   }
-  else if (interface->getMode() == "ap_vld") { 
-    bundleDefs.emplace_back("xlx_ap_vld", Args);
-  }
-  else if (interface->getMode() == "ap_ovld") { 
-    bundleDefs.emplace_back("xlx_ap_ovld", Args);
-  }
-  else if (interface->getMode() == "ap_hs") { 
-    bundleDefs.emplace_back("xlx_ap_hs", Args);
-  }
-  else if (interface->getMode() == "ap_stable") { 
-    bundleDefs.emplace_back("xlx_ap_stable", Args);
+  Expr *port = interface->getPort();
+  llvm::Value* port_var = nullptr;
+  int64_t port_width = 0;
+  if (IsFunctionPointer(port)) { 
+    port_var = llvm::ConstantPointerNull::get(Builder.getInt8Ty()->getPointerTo());
   }
   else { 
-    assert( false && "unexected");
+    auto port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
+    port_var = port_info.first;
+    port_width = port_info.second;
   }
 
+  bool isRegister = interface->getIsRegister();
+  StringRef signalName = interface->getSignalName();
+  int interruptValue = EvaluateInteger(interface->getInterrupt(), getContext());
 
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
+  llvm::Value* Args[] = { 
+    port_var,
+    Builder.getInt1(isRegister), 
+    llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
+    Builder.getInt64(interruptValue)
+  };
 
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  if (interface->getMode() != "ap_vld" &&
+      interface->getMode() != "ap_hs") {
+    assert(false && "unexpected");
+  }
+  CreateCallSideEffect(CGM, Builder, "xlx_" + interface->getMode().str(), Args, port_width, getPragmaContext(interface));
 }
 
 void  CodeGenFunction::EmitFPGAFunctionCtrlInterfaceIntrinsic( const FPGAFunctionCtrlInterfaceAttr *interface)
@@ -2493,26 +2422,29 @@ void  CodeGenFunction::EmitFPGAFunctionCtrlInterfaceIntrinsic( const FPGAFunctio
     llvm::ConstantPointerNull::get(Builder.getInt8Ty()->getPointerTo()),
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  if (interface->getMode() == "ap_ctrl_hs") { 
-    bundleDefs.emplace_back("xlx_ap_ctrl_hs", Args);
+
+  if (interface->getMode() != "ap_ctrl_hs" &&
+      interface->getMode() != "ap_ctrl_none" &&
+      interface->getMode() != "ap_ctrl_chain") {
+    assert(false && "unexpected");
   }
-  else if (interface->getMode() == "ap_ctrl_none" ) { 
-    bundleDefs.emplace_back("xlx_ap_ctrl_none", Args);
-  }
-  else if (interface->getMode() == "ap_ctrl_chain" ) { 
-    bundleDefs.emplace_back("xlx_ap_ctrl_chain", Args);
-  }
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+
+  CreateCallSideEffect(CGM, Builder, "xlx_" + interface->getMode().str(), Args, 1, getPragmaContext(interface));
 }
 
 void CodeGenFunction::EmitResetIntrinsic( const XlxResetIntrinsicAttr* reset)
 {
   int64_t port_width = 0;
   Expr *port = reset->getVariable();
+
+  Expr::EvalResult Eval;
+  if (!port->EvaluateAsLValue(Eval, getContext()) || !Eval.isGlobalLValue()) {
+    CGM.getDiags().Report(port->getExprLoc(), diag::warn_invalid_pragma_variable)
+      << "reset"
+      << "static or global";
+    return;
+  }
+
   llvm::Value* port_var = nullptr;
   if (IsFunctionPointer(port)) { 
     port_var = llvm::ConstantPointerNull::get(Builder.getInt8Ty()->getPointerTo());
@@ -2520,15 +2452,14 @@ void CodeGenFunction::EmitResetIntrinsic( const XlxResetIntrinsicAttr* reset)
   }
   else { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
     port_var = port_info.first;
     port_width = port_info.second;
   }
 
-  if (!isa<llvm::GlobalVariable>(port_var)) {
-    CGM.getDiags().Report(reset->getLocation(), diag::warn_invalid_pragma_variable)
-      << "reset"
-      << "static or global";
-    return;
+  if (isa<llvm::BitCastOperator>(port_var)) { 
+    port_var = cast<llvm::BitCastOperator>(port_var)->getOperand(0);
   }
 
   bool isEnable = reset->getEnabled();
@@ -2536,18 +2467,7 @@ void CodeGenFunction::EmitResetIntrinsic( const XlxResetIntrinsicAttr* reset)
     port_var,
     Builder.getInt1(isEnable)
   };
-  SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-  bundleDefs.emplace_back("xlx_reset", Args);
-
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(&CGM.getModule(), llvm::Intrinsic::sideeffect);
-  auto *CI = Builder.CreateCall(sideeffect, None, bundleDefs);
-
-  std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  CI->setAttributes(attr_list);
-
-  CI->setOnlyAccessesInaccessibleMemory();
-  CI->setDoesNotThrow();
+  CreateCallSideEffect(CGM, Builder, "xlx_reset", Args, port_width, getPragmaContext(reset));
 }
 
 void CodeGenFunction::EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias) { 
@@ -2555,6 +2475,8 @@ void CodeGenFunction::EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias
   llvm::SmallVector<llvm::Value *, 8> args;
   for(auto i = maxi_alias->ports_begin(), e = maxi_alias->ports_end(); i != e; ++i) {
     auto port_info = EmitHLSVariableExpr(*i);
+    if (nullptr == port_info.first) return;
+
     args.push_back(port_info.first);   
   }
 
@@ -2567,14 +2489,47 @@ void CodeGenFunction::EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias
     args.push_back(Builder.getInt32(offset));
   }
 
-  auto *sideeffect = llvm::Intrinsic::getDeclaration(CurFn->getParent(), llvm::Intrinsic::sideeffect);
+  assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");
+  CreateCallSideEffect(CGM, Builder, "fpga.maxi.alias", args, -1, getPragmaContext(maxi_alias));
+}
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back( "fpga.maxi.alias", args );
+void CodeGenFunction::EmitFuncInstantiateIntrinsic( const XlxFuncInstantiateAttr* func_inst) { 
 
-  auto* call = Builder.CreateCall(sideeffect, None, bundleDefs );
-  call->setOnlyAccessesInaccessibleMemory();
-  call->setDoesNotThrow();
+  Expr *E = func_inst->getVariable(); 
+  auto info = EmitHLSVariableExpr(E);  
+  if (nullptr == info.first) return;
+
+  llvm::Value *args[] = {info.first};
+
+  assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");
+  CreateCallSideEffect(CGM, Builder, "fpga.func.instantiate", args, -1, getPragmaContext(func_inst));
+}
+
+void CodeGenFunction::EmitXlxArrayStencilIntrinsic( const XlxArrayStencilAttr* stencil) { 
+  int64_t port_width = 0;
+
+
+  Expr *port = stencil->getVariable();
+  llvm::Value* port_var = nullptr;
+  if (IsFunctionPointer(port)) { 
+    port_var = llvm::ConstantPointerNull::get(Builder.getInt8Ty()->getPointerTo());
+    port_width = 0;
+  }
+  else { 
+    std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+    port_var = port_info.first;
+    port_width = port_info.second;
+  }
+ 
+  bool isEnable = stencil->getEnabled();
+  llvm::Value* args[] = {
+    port_var,
+    Builder.getInt1(isEnable)
+  };
+
+  assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");
+  CreateCallSideEffect(CGM, Builder, "fpga_array_stencil", args, port_width, getPragmaContext(stencil));
 }
 
 void  CodeGenFunction::EmitXlxDependenceIntrinsic( const XlxDependenceAttr*  XLXDependence) {
@@ -2588,6 +2543,8 @@ void  CodeGenFunction::EmitXlxDependenceIntrinsic( const XlxDependenceAttr*  XLX
   
   if (expr && !isa<IntegerLiteral>(expr)) { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+    if (nullptr == port_info.first) return;
+
     addr = port_info.first;
     port_width = port_info.second;
     if (IsHLSBurstMaxiType(expr->getType())) { 
@@ -2616,8 +2573,6 @@ void  CodeGenFunction::EmitXlxDependenceIntrinsic( const XlxDependenceAttr*  XLX
   auto dep_type = XLXDependence->getType();
   auto dep_direction = XLXDependence->getDirection();
   auto dep_distance = HLSEvaluateInteger(XLXDependence->getDistance());
-  auto *dependence = llvm::Intrinsic::getDeclaration(
-        CurFn->getParent(), llvm::Intrinsic::sideeffect);
 
   if (dep_distance > 0 && dep_type ==  XlxDependenceAttr::intra ){
     dep_distance = 0;
@@ -2636,20 +2591,12 @@ void  CodeGenFunction::EmitXlxDependenceIntrinsic( const XlxDependenceAttr*  XLX
        Builder.getInt32(dep_compel), 
        Builder.getInt32(dep_direction -1 ), 
        Builder.getInt32(dep_distance),
-       Builder.getInt32(dep_type)
+       Builder.getInt32(dep_type),
+       Builder.getInt1(true)
   };
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back( "fpga.dependence", args );
-
-  auto* call = Builder.CreateCall(dependence, None, bundleDefs );
-
-  std::pair<unsigned, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  call->setAttributes(attr_list);
-
-  call->setOnlyAccessesInaccessibleMemory();
-  call->setDoesNotThrow();
+  assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");
+  CreateCallSideEffect(CGM, Builder, "fpga.dependence", args, port_width, getPragmaContext(XLXDependence));
 }
 
 void  CodeGenFunction::EmitXCLDependenceIntrinsic( const XCLDependenceAttr*  XLXDependence) {
@@ -2663,6 +2610,8 @@ void  CodeGenFunction::EmitXCLDependenceIntrinsic( const XCLDependenceAttr*  XLX
   
   if (expr && !isa<IntegerLiteral>(expr)) { 
     std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(expr);
+    if (nullptr == port_info.first) return;
+
     addr = port_info.first;
     port_width = port_info.second;
   }
@@ -2676,8 +2625,6 @@ void  CodeGenFunction::EmitXCLDependenceIntrinsic( const XCLDependenceAttr*  XLX
   auto dep_type = XLXDependence->getType();
   auto dep_direction = XLXDependence->getDirection();
   auto dep_distance = HLSEvaluateInteger( XLXDependence->getDistance());
-  auto *dependence = llvm::Intrinsic::getDeclaration(
-        CurFn->getParent(), llvm::Intrinsic::sideeffect);
 
   llvm::Value* args[] = {
        addr,
@@ -2685,18 +2632,10 @@ void  CodeGenFunction::EmitXCLDependenceIntrinsic( const XCLDependenceAttr*  XLX
        Builder.getInt32(dep_compel), 
        Builder.getInt32(dep_direction -1 ), 
        Builder.getInt32(dep_distance),
-       Builder.getInt32(dep_type)
+       Builder.getInt32(dep_type),
+       Builder.getInt1(true)
   };
 
-  SmallVector<llvm::OperandBundleDef, 6> bundleDefs;
-  bundleDefs.emplace_back( "fpga.dependence", args );
-
-  auto* call = Builder.CreateCall(dependence, None, bundleDefs );
-
-  std::pair<unsigned, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
-  llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
-  call->setAttributes(attr_list);
-
-  call->setOnlyAccessesInaccessibleMemory();
-  call->setDoesNotThrow();
+  assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");
+  CreateCallSideEffect(CGM, Builder, "fpga.dependence", args, port_width, getPragmaContext(XLXDependence));
 }

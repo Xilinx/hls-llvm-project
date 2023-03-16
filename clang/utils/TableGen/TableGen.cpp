@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the main function for Clang's TableGen.
@@ -59,7 +64,10 @@ enum ActionType {
   GenDiagDocs,
   GenOptDocs,
   GenDataCollectors,
-  GenTestPragmaAttributeSupportedAttributes
+  GenTestPragmaAttributeSupportedAttributes,
+  GenHLSPragmaParser,  
+  GenHLSPragmaJson,
+  GenHLSPragmaPreprocessor
 };
 
 namespace {
@@ -155,7 +163,13 @@ cl::opt<ActionType> Action(
         clEnumValN(GenTestPragmaAttributeSupportedAttributes,
                    "gen-clang-test-pragma-attribute-supported-attributes",
                    "Generate a list of attributes supported by #pragma clang "
-                   "attribute for testing purposes")));
+                   "attribute for testing purposes"),
+        clEnumValN(GenHLSPragmaParser, "gen-hls-pragma-parser",
+                   "Generate xilinx hls pragma parser code for clang parser"),
+        clEnumValN(GenHLSPragmaJson, "gen-hls-pragma-json",
+                   "Generate xilinx hls pragma tcl json data"),
+        clEnumValN(GenHLSPragmaPreprocessor, "gen-hls-pragma-preprocessor",
+                   "Generate xilinx hls pragma preprocess keyword filter")));
 
 cl::opt<std::string>
 ClangComponent("clang-component",
@@ -276,7 +290,16 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
   case GenTestPragmaAttributeSupportedAttributes:
     EmitTestPragmaAttributeSupportedAttributes(Records, OS);
     break;
-  }
+  case GenHLSPragmaParser:
+    EmitHLSPragmaParser(Records, OS);
+    break;
+  case GenHLSPragmaJson:
+    EmitHLSPragmaJson(Records, OS);
+    break;
+  case GenHLSPragmaPreprocessor:
+    EmitHLSPragmaPreprocessor(Records, OS);
+    break;
+}
 
   return false;
 }

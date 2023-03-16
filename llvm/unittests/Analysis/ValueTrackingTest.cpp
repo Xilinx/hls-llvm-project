@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -592,7 +592,7 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
     //  * x.1 >= 5
     //  * x.2 < x.1
     //
-    // stride = [0, 5)
+    // stride = [0, -1)
     auto M = parseModule(R"(
   declare void @llvm.assume(i1)
 
@@ -607,16 +607,44 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
     Function *F = M->getFunction("test");
 
     AssumptionCache AC(*F);
+    Value *X1 = &*(F->arg_begin());
+    Value *X2 = &*std::next(F->arg_begin());
+
+    Instruction *I = &findInstructionByName(F, "stride.plus.one");
+    ConstantRange CR1 = computeConstantRange(X1, &AC, I);
+    ConstantRange CR2 = computeConstantRange(X2, &AC, I);
+
+    EXPECT_EQ(5, CR1.getLower());
+    EXPECT_EQ(0, CR1.getUpper());
+
+    EXPECT_EQ(0, CR2.getLower());
+    EXPECT_EQ(0xffffffff, CR2.getUpper());
+
+    // Check the depth cutoff results in a conservative result (full set) by
+    // passing Depth == MaxDepth == 6.
+    ConstantRange CR3 = computeConstantRange(X2, &AC, I, 6);
+    EXPECT_TRUE(CR3.isFullSet());
+  }
+  {
+    // Assumptions:
+    //  * x.2 <= x.1
+    auto M = parseModule(R"(
+  declare void @llvm.assume(i1)
+
+  define i32 @test(i32 %x.1, i32 %x.2) {
+    %lt = icmp ule i32 %x.2, %x.1
+    call void @llvm.assume(i1 %lt)
+    %stride.plus.one = add nsw nuw i32 %x.1, 1
+    ret i32 %stride.plus.one
+  })");
+    Function *F = M->getFunction("test");
+
+    AssumptionCache AC(*F);
     Value *X2 = &*std::next(F->arg_begin());
 
     Instruction *I = &findInstructionByName(F, "stride.plus.one");
     ConstantRange CR1 = computeConstantRange(X2, &AC, I);
-    EXPECT_EQ(0, CR1.getLower());
-    EXPECT_EQ(5, CR1.getUpper());
-
-    // Check the depth cutoff results in a conservative result (full set) by
-    // passing Depth == MaxDepth == 6.
-    ConstantRange CR2 = computeConstantRange(X2, &AC, I, 6);
-    EXPECT_TRUE(CR2.isFullSet());
+    // If we don't know the value of x.2, we don't know the value of x.1.
+    EXPECT_TRUE(CR1.isFullSet());
   }
 }

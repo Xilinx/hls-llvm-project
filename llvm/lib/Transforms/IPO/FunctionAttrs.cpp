@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -148,6 +148,11 @@ static bool pointsToArgugmentMemoryOrConstantMemory(const MemoryLocation &Loc,
       }
       for (Value *IncValue : PN->incoming_values())
         Worklist.push_back(IncValue);
+      continue;
+    }
+
+    if (const SeqBeginInst *SBI = dyn_cast<SeqBeginInst>(V)) {
+      Worklist.push_back(SBI->getPointerOperand());
       continue;
     }
 

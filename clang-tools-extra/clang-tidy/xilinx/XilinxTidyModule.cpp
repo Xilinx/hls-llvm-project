@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2021 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -60,8 +60,6 @@ public:
         "xilinx-aggregate-on-apint");
     CheckFactories.registerCheck<ApintLiteralConvertationCheck>(
         "xilinx-apint-literal-convertation");
-    CheckFactories.registerCheck<ConstantarrayParamCheck>(
-        "xilinx-constantarray-param");
     CheckFactories.registerCheck<Directive2pragmaCheck>(
         "xilinx-directive2pragma");
     CheckFactories.registerCheck<DumpOpenclkernelCheck>(

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2319,7 +2319,7 @@ QualType Sema::BuildAPIntType(QualType T, Expr *SizeInBits,
 
     if (typeSize == 0 || APIntType::isSizeTooLarge(typeSize)) {
       Diag(AttrLoc, diag::err_attribute_argument_outof_range)
-          << "'bitwidth'" << 1 << 4096 << SizeInBits->getSourceRange();
+          << "'bitwidth'" << 1 << APIntType::getMaxSizeInBits() << SizeInBits->getSourceRange();
       return QualType();
     }
 

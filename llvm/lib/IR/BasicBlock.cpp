@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the BasicBlock class for the IR library.
@@ -239,6 +244,14 @@ const BasicBlock *BasicBlock::getUniquePredecessor() const {
     // This is OK.
   }
   return PredBB;
+}
+
+bool BasicBlock::hasNPredecessors(unsigned N) const {
+  return hasNItems(pred_begin(this), pred_end(this), N);
+}
+
+bool BasicBlock::hasNPredecessorsOrMore(unsigned N) const {
+  return hasNItemsOrMore(pred_begin(this), pred_end(this), N);
 }
 
 const BasicBlock *BasicBlock::getSingleSuccessor() const {

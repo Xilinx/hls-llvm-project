@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -99,7 +99,7 @@ void LabelAllLoopsCheck::check(const MatchFinder::MatchResult &Result) {
 
     if (const auto *MatchedLoop = Result.Nodes.getNodeAs<Stmt>("loop")) {
         std::string loopLabel = getLoopLabel(Result, MatchedLoop);
-        diag(MatchedLoop->getLocStart(), "Added loop label %0 ")
+        diag(MatchedLoop->getLocStart(), "Added loop label %0 ", DiagnosticIDs::Remark)
             << loopLabel 
             << FixItHint::CreateInsertion(MatchedLoop->getLocStart(), loopLabel);
     }

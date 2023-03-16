@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declarations for all of the Clang TableGen
@@ -81,6 +86,9 @@ void EmitClangDataCollectors(RecordKeeper &Records, raw_ostream &OS);
 void EmitTestPragmaAttributeSupportedAttributes(RecordKeeper &Records,
                                                 raw_ostream &OS);
 
+void EmitHLSPragmaParser(RecordKeeper &Records, raw_ostream &OS);
+void EmitHLSPragmaJson(RecordKeeper &Records, raw_ostream &OS);
+void EmitHLSPragmaPreprocessor(RecordKeeper &Records, raw_ostream &OS);
 } // end namespace clang
 
 #endif

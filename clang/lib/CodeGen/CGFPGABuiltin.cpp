@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2021 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -30,6 +30,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/Support/MathExtras.h"
 #include <cassert>
 
@@ -43,14 +44,27 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
   case FPGA::BI__fpga_fifo_not_empty:
   case FPGA::BI__fpga_fifo_not_full:
     return EmitBuiltinFPGAFifoStatus(BuiltinID, E);
+  case FPGA::BI__fpga_fifo_size:
+  case FPGA::BI__fpga_fifo_capacity:
+    return EmitBuiltinFPGAFifoLength(BuiltinID, E);
   case FPGA::BI__fpga_fifo_pop:
   case FPGA::BI__fpga_fifo_push:
     return EmitBuiltinFPGAFifoBlocking(BuiltinID, E);
   case FPGA::BI__fpga_fifo_nb_pop:
   case FPGA::BI__fpga_fifo_nb_push:
     return EmitBuiltinFPGAFifoNonBlocking(BuiltinID, E);
+  case FPGA::BI__fpga_pipo_not_empty:
+  case FPGA::BI__fpga_pipo_not_full:
+    return EmitBuiltinFPGAPipoStatus(BuiltinID, E);
+  case FPGA::BI__fpga_pipo_pop_acquire:
+  case FPGA::BI__fpga_pipo_pop_release:
+  case FPGA::BI__fpga_pipo_push_acquire:
+  case FPGA::BI__fpga_pipo_push_release:
+    return EmitBuiltinFPGAPipoBlocking(BuiltinID, E);
   case FPGA::BI__fpga_set_stream_depth:
     return EmitBuiltinFPGASetStreamDepth(BuiltinID, E);
+  case FPGA::BI__fpga_set_stream_of_blocks_depth:
+    return EmitBuiltinFPGASetStreamOfBlocksDepth(BuiltinID, E);
   case FPGA::BI__fpga_maxi_read_req:
   case FPGA::BI__fpga_maxi_read:
   case FPGA::BI__fpga_maxi_write_req:
@@ -61,6 +75,12 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
     return EmitBuiltinFPGAAddTask(BuiltinID, E);
   case FPGA::BI__fpga_add_infinite_task:
     return EmitBuiltinFPGAAddInfiniteTask(BuiltinID, E);
+  case FPGA::BI__fpga_nport_channel:
+    return EmitBuiltinFPGANPortChannel(E);
+  case FPGA::BI__fpga_ip:
+    return EmitBuiltinFPGAIP(E);
+  case FPGA::BI__fpga_fence:
+    return EmitBuiltinFPGAFence(E);
   }
   return nullptr;
 }
@@ -178,12 +198,49 @@ Value *CodeGenFunction::EmitBuiltinFPGASetStreamDepth(unsigned BuiltinID,
   return Builder.CreateCall(F, {streamId, depth});
 }
 
+Value *CodeGenFunction::EmitBuiltinFPGASetStreamOfBlocksDepth(unsigned BuiltinID,
+                                                              const CallExpr *E) {
+
+  auto *streamIdAst = E->getArg(0);
+  auto *streamId = EmitScalarExpr(streamIdAst);
+  auto *depthAst = E->getArg(1);
+  auto *depth = EmitScalarExpr(depthAst);
+  auto *valType = streamId->getType()->getPointerElementType();
+  uint64_t bitSize = CGM.getDataLayout().getTypeAllocSizeInBits(valType);
+
+  auto *F = llvm::Intrinsic::getDeclaration(CurFn->getParent(),
+                                            llvm::Intrinsic::sideeffect);
+  llvm::Value *args[] = {streamId, depth};
+  SmallVector<llvm::OperandBundleDef, 2> bundleDefs;
+  bundleDefs.emplace_back(StreamOfBlocksPragmaInst::BundleTagName, args);
+  auto* call = Builder.CreateCall(F, None, bundleDefs);
+
+  std::pair<unsigned, llvm::Attribute> attrs = {
+    llvm::AttributeList::FunctionIndex,
+    llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(bitSize))};
+  llvm::AttributeList attr_list = llvm::AttributeList::get(getLLVMContext(),
+                                                           attrs);
+  call->setAttributes(attr_list);
+  call->setOnlyAccessesInaccessibleMemory();
+  call->setDoesNotThrow();
+
+  return call;
+
+  return PragmaInst::Create<StreamOfBlocksPragmaInst>({streamId, depth},
+                                                      &*Builder.GetInsertPoint(),
+                                                      nullptr, bitSize);
+}
+
 static Intrinsic::ID getFIFOIntrID(unsigned BI) {
   switch (BI) {
   case FPGA::BI__fpga_fifo_not_empty:
     return Intrinsic::fpga_fifo_not_empty;
   case FPGA::BI__fpga_fifo_not_full:
     return Intrinsic::fpga_fifo_not_full;
+  case FPGA::BI__fpga_fifo_size:
+    return Intrinsic::fpga_fifo_size;
+  case FPGA::BI__fpga_fifo_capacity:
+    return Intrinsic::fpga_fifo_capacity;
   case FPGA::BI__fpga_fifo_pop:
     return Intrinsic::fpga_fifo_pop;
   case FPGA::BI__fpga_fifo_push:
@@ -202,6 +259,21 @@ Value *CodeGenFunction::EmitBuiltinFPGAFifoStatus(unsigned BuiltinID,
   assert((BuiltinID == FPGA::BI__fpga_fifo_not_empty ||
           BuiltinID == FPGA::BI__fpga_fifo_not_full) &&
          "Not a FIFO status intrinsics?");
+
+  auto *FIFOAst = E->getArg(0);
+  auto *FIFO = EmitScalarExpr(FIFOAst);
+
+  auto *F = Intrinsic::getDeclaration(
+      &CGM.getModule(), getFIFOIntrID(BuiltinID), {FIFO->getType()});
+
+  return Builder.CreateCall(F, {FIFO});
+}
+
+Value *CodeGenFunction::EmitBuiltinFPGAFifoLength(unsigned BuiltinID,
+                                                const CallExpr *E) {
+  assert((BuiltinID == FPGA::BI__fpga_fifo_size ||
+          BuiltinID == FPGA::BI__fpga_fifo_capacity) &&
+         "Not a FIFO size intrinsics?");
 
   auto *FIFOAst = E->getArg(0);
   auto *FIFO = EmitScalarExpr(FIFOAst);
@@ -276,6 +348,57 @@ Value *CodeGenFunction::EmitBuiltinFPGAFifoNonBlocking(unsigned BuiltinID,
   default:
     llvm_unreachable("Unsupported intrinsics?");
   }
+}
+
+static Intrinsic::ID getPIPOIntrID(unsigned BI) {
+  switch (BI) {
+  case FPGA::BI__fpga_pipo_not_empty:
+    return Intrinsic::fpga_pipo_not_empty;
+  case FPGA::BI__fpga_pipo_not_full:
+    return Intrinsic::fpga_pipo_not_full;
+  case FPGA::BI__fpga_pipo_pop_acquire:
+    return Intrinsic::fpga_pipo_pop_acquire;
+  case FPGA::BI__fpga_pipo_pop_release:
+    return Intrinsic::fpga_pipo_pop_release;
+  case FPGA::BI__fpga_pipo_push_acquire:
+    return Intrinsic::fpga_pipo_push_acquire;
+  case FPGA::BI__fpga_pipo_push_release:
+    return Intrinsic::fpga_pipo_push_release;
+  default:
+    return Intrinsic::not_intrinsic;
+  }
+}
+
+Value *CodeGenFunction::EmitBuiltinFPGAPipoStatus(unsigned BuiltinID,
+                                                  const CallExpr *E) {
+  assert((BuiltinID == FPGA::BI__fpga_pipo_not_empty ||
+          BuiltinID == FPGA::BI__fpga_pipo_not_full) &&
+         "Not a PIPO status intrinsics?");
+
+  auto *PIPOAst = E->getArg(0);
+  auto *PIPO = EmitScalarExpr(PIPOAst);
+
+  auto *F = Intrinsic::getDeclaration(
+      &CGM.getModule(), getPIPOIntrID(BuiltinID), {PIPO->getType()});
+
+  return Builder.CreateCall(F, {PIPO});
+}
+
+Value *CodeGenFunction::EmitBuiltinFPGAPipoBlocking(unsigned BuiltinID,
+                                                    const CallExpr *E) {
+  assert((BuiltinID == FPGA::BI__fpga_pipo_pop_acquire ||
+          BuiltinID == FPGA::BI__fpga_pipo_pop_release ||
+          BuiltinID == FPGA::BI__fpga_pipo_push_acquire ||
+          BuiltinID == FPGA::BI__fpga_pipo_push_release) &&
+         "Not a PIPO blocking intrinsics?");
+
+  auto *PIPOAst = E->getArg(0);
+  auto *PIPO = EmitScalarExpr(PIPOAst);
+
+  auto *F = Intrinsic::getDeclaration(
+      &CGM.getModule(), getPIPOIntrID(BuiltinID), {PIPO->getType()});
+
+  return Builder.CreateCall(F, {PIPO});
 }
 
 RValue CodeGenFunction::EmitBuiltinOCLPipeReadWrite(unsigned BuiltinID,
@@ -1019,3 +1142,140 @@ RValue CodeGenFunction::EmitBuiltinBitNXorReduce(const CallExpr *E) {
   Result = Builder.CreateIntCast(Result, DestTy, false, "cast");
   return RValue::get(Result);
 }
+
+Value* CodeGenFunction::EmitBuiltinFPGANPortChannel(const CallExpr* E) { 
+  Value* inPort = EmitPointerWithAlignment(E->getArg(0)).getPointer();
+  Value* outPort = EmitPointerWithAlignment(E->getArg(1)).getPointer();
+  Value* inPortNum = EmitScalarExpr(E->getArg(2));
+  Value* outPortNum = EmitScalarExpr(E->getArg(3));
+  Value* depth = EmitScalarExpr(E->getArg(4));
+  Value* Alg = EmitScalarExpr(E->getArg(5));
+  Value* depth_1 = EmitScalarExpr(E->getArg(6));
+
+  auto *sideeffect = llvm::Intrinsic::getDeclaration(
+        CurFn->getParent(), llvm::Intrinsic::sideeffect);
+
+  llvm::Value* args[] = {
+    inPort,
+    outPort,
+    inPortNum,
+    outPortNum, 
+    depth, 
+    Alg,
+    depth_1
+  };
+
+  SmallVector<llvm::OperandBundleDef, 7> bundleDefs;
+  bundleDefs.emplace_back( "nport_channel", args );
+
+  auto* call = Builder.CreateCall(sideeffect, None, bundleDefs );
+
+  //std::pair<unsigned, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, llvm::Attribute::get(getLLVMContext(), "xlx.port.bitwidth", std::to_string(port_width))) };
+  //llvm::AttributeList attr_list = llvm::AttributeList::get( getLLVMContext(), attrs);
+  //call->setAttributes(attr_list);
+
+  call->setOnlyAccessesInaccessibleMemory();
+  call->setDoesNotThrow();
+  return call;
+}
+
+Value* CodeGenFunction::EmitBuiltinFPGAIP(const CallExpr* E) {
+  unsigned ArgNum = E->getNumArgs();
+  if (ArgNum % 2 != 1) {
+    CGM.Error(E->getExprLoc(),
+              "Argument number mismatch: need IP name followed by pairs of parameter name and value");
+    return nullptr;
+  }
+
+  SmallVector<Value *, 8> args;
+
+  const StringLiteral *Literal = dyn_cast<StringLiteral>(E->getArg(0));
+  if (!Literal) {
+    CGM.Error(E->getArg(0)->getExprLoc(),
+              "This argument should be string literal");
+    return nullptr;
+  }
+  StringRef name = Literal->getString();
+
+  auto xilinxPlatform = platform::PlatformBasic::getInstance();
+  auto op = xilinxPlatform->getOpFromName("vivado_ip");
+  auto impl = xilinxPlatform->getImplFromName(name);
+  if (impl == -1) {
+    CGM.Error(E->getArg(0)->getExprLoc(),
+              "There is no such IP");
+    return nullptr;
+  }
+
+  args.push_back(Builder.getInt64(op));
+  args.push_back(Builder.getInt64(impl));
+
+  for (unsigned i = 1; i < ArgNum; i++) {
+    const Expr *Arg = E->getArg(i);
+    Value *Ptr = Arg->getType()->isArrayType() ?
+                     EmitLValue(Arg).getPointer() :
+                     EmitScalarExpr(Arg);
+    if (auto v = dyn_cast<ConstantInt>(Ptr)) {
+      if (v->getBitWidth() == 1) {
+        Ptr = Builder.getInt32(v->getZExtValue());
+      }
+    }
+    args.push_back(Ptr);
+  }
+
+  auto *decl = Intrinsic::getDeclaration(
+        CurFn->getParent(), Intrinsic::sideeffect);
+  auto *call = Builder.CreateCall(decl, None, OperandBundleDef(XlxIPInst::BundleTagName, args));
+
+  call->setOnlyAccessesInaccessibleMemory();
+  call->setDoesNotThrow();
+
+  return call;
+}
+
+Value* CodeGenFunction::EmitBuiltinFPGAFence(const CallExpr* E) { 
+  std::vector<llvm::Value *> args;
+  unsigned ArgNum = E->getNumArgs();
+  assert(ArgNum >= 2);
+
+  llvm::ConstantInt *BeforeNumC = 
+      cast<llvm::ConstantInt>(EmitScalarExpr(E->getArg(0)));
+  llvm::ConstantInt *AfterNumC = 
+      cast<llvm::ConstantInt>(EmitScalarExpr(E->getArg(1)));
+  unsigned BeforeNum = BeforeNumC->getZExtValue();
+  unsigned AfterNum = AfterNumC->getZExtValue();
+  if (BeforeNum + AfterNum != ArgNum - 2) {
+    if (BeforeNum + AfterNum > ArgNum - 2) {
+      CGM.Error(E->getExprLoc(),
+                "Argument number mismatch: too less pointer arguments passed to __fpga_fence");
+    } else { 
+      CGM.Error(E->getExprLoc(),
+                "Argument number mismatch: too many pointer arguments passed to __fpga_fence");
+    }
+    return nullptr;
+  }
+
+  for (unsigned i = 0; i < BeforeNum; i++) {
+    const Expr *Arg = E->getArg(i+2);
+    llvm::Value *Ptr = Arg->getType()->isPointerType() ? 
+                           EmitScalarExpr(Arg) :
+                           EmitLValue(Arg).getPointer();
+    args.push_back(Ptr);
+  }
+
+  args.push_back(Builder.getInt32(-1));
+
+  for (unsigned i = 0; i < AfterNum; i++) {
+    const Expr *Arg = E->getArg(i+BeforeNum+2);
+    llvm::Value *Ptr = Arg->getType()->isPointerType() ? 
+                           EmitScalarExpr(Arg) :
+                           EmitLValue(Arg).getPointer();
+    args.push_back(Ptr);
+  }
+
+  auto *fence = llvm::Intrinsic::getDeclaration(
+        CurFn->getParent(), Intrinsic::fpga_fence);
+  
+  auto *call = Builder.CreateCall(fence, args);
+  return call;
+}
+

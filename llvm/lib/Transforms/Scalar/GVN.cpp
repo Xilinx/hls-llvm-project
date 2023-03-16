@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -103,6 +103,8 @@ extern cl::opt<bool> HLS;
 // HLS BEGIN
 // Disable PRE since it will split critical edges. This behavior may change
 // the loop structure when the critical edge is loop backedge.
+// Disable PRE since it will convert loop indvar into non-loop-indvar so that
+// other analysis dependent on scalar evolution cannot work
 static cl::opt<bool> EnablePRE("enable-pre",
                                cl::init(false), cl::Hidden);
 static cl::opt<bool> EnableIndVarPRE("enable-indvar-pre",
@@ -851,7 +853,7 @@ static bool isLifetimeStart(const Instruction *Inst) {
 /// \brief Try to locate the three instruction involved in a missed
 /// load-elimination case that is due to an intervening store.
 static void reportMayClobberedLoad(LoadInst *LI, MemDepResult DepInfo,
-                                   DominatorTree *DT,
+                                   OrderedInstructions *OI,
                                    OptimizationRemarkEmitter *ORE) {
   using namespace ore;
 
@@ -863,7 +865,7 @@ static void reportMayClobberedLoad(LoadInst *LI, MemDepResult DepInfo,
 
   for (auto *U : LI->getPointerOperand()->users())
     if (U != LI && (isa<LoadInst>(U) || isa<StoreInst>(U)) &&
-        DT->dominates(cast<Instruction>(U), LI)) {
+        OI->dominates(cast<Instruction>(U), LI)) {
       // FIXME: for now give up if there are multiple memory accesses that
       // dominate the load.  We need further analysis to decide which one is
       // that we're forwarding from.
@@ -943,9 +945,9 @@ bool GVN::AnalyzeLoadAvailability(LoadInst *LI, MemDepResult DepInfo,
       LI->printAsOperand(dbgs());
       Instruction *I = DepInfo.getInst();
       dbgs() << " is clobbered by " << *I << '\n';
-    );
     if (ORE->allowExtraAnalysis(DEBUG_TYPE))
-      reportMayClobberedLoad(LI, DepInfo, DT, ORE);
+      reportMayClobberedLoad(LI, DepInfo, OI, ORE);
+    );
 
     return false;
   }
@@ -1351,13 +1353,15 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
     return false;
   }
 
-  // If this load follows a GEP, see if we can PRE the indices before analyzing.
-  if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(LI->getOperand(0))) {
-    for (GetElementPtrInst::op_iterator OI = GEP->idx_begin(),
-                                        OE = GEP->idx_end();
-         OI != OE; ++OI)
-      if (Instruction *I = dyn_cast<Instruction>(OI->get()))
-        performScalarPRE(I);
+  if (EnablePRE) {
+    // If this load follows a GEP, see if we can PRE the indices before analyzing.
+    if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(LI->getOperand(0))) {
+      for (GetElementPtrInst::op_iterator OI = GEP->idx_begin(),
+          OE = GEP->idx_end();
+          OI != OE; ++OI)
+        if (Instruction *I = dyn_cast<Instruction>(OI->get()))
+          performScalarPRE(I);
+    }
   }
 
   // Step 2: Analyze the availability of the load
@@ -1399,7 +1403,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
       MD->invalidateCachedPointerInfo(V);
     markInstructionForDeletion(LI);
     ++NumGVNLoad;
-    reportLoadElim(LI, V, ORE);
+    DEBUG(reportLoadElim(LI, V, ORE));
     return true;
   }
 
@@ -1551,7 +1555,7 @@ bool GVN::processLoad(LoadInst *L) {
     patchAndReplaceAllUsesWith(L, AvailableValue);
     markInstructionForDeletion(L);
     ++NumGVNLoad;
-    reportLoadElim(L, AvailableValue, ORE);
+    DEBUG(reportLoadElim(L, AvailableValue, ORE));
     // Tell MDA to rexamine the reused pointer since we might have more
     // information after forwarding it.
     if (MD && AvailableValue->getType()->isPtrOrPtrVectorTy())

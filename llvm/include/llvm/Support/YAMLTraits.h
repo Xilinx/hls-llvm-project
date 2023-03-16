@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_SUPPORT_YAMLTRAITS_H
@@ -498,7 +503,8 @@ inline bool isNull(StringRef S) {
 
 inline bool isBool(StringRef S) {
   return S.equals("true") || S.equals("True") || S.equals("TRUE") ||
-         S.equals("false") || S.equals("False") || S.equals("FALSE");
+         S.equals("false") || S.equals("False") || S.equals("FALSE") ||
+	 S.equals("Y") || S.equals("y") || S.equals("N") || S.equals("n");
 }
 
 // 5.1. Character Set

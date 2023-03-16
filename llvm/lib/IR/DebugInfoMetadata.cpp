@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the debug info Metadata classes.
@@ -507,7 +512,7 @@ bool DISubprogram::describes(const Function *F) const {
   StringRef Name = getLinkageName();
   if (Name.empty())
     Name = getName();
-  return F->getName() == Name;
+  return F->getName().split(".").first == Name;
 }
 
 DILexicalBlock *DILexicalBlock::getImpl(LLVMContext &Context, Metadata *Scope,

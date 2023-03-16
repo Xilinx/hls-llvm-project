@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -215,6 +215,7 @@ void ClangTidyContext::setDiagnosticsEngine(DiagnosticsEngine *Engine) {
 
 void ClangTidyContext::setSourceManager(SourceManager *SourceMgr) {
   DiagEngine->setSourceManager(SourceMgr);
+  this->SourceMgr = SourceMgr; 
 }
 
 void ClangTidyContext::setCurrentFile(StringRef File) {
@@ -228,6 +229,7 @@ void ClangTidyContext::setCurrentFile(StringRef File) {
 void ClangTidyContext::setASTContext(ASTContext *Context) {
   DiagEngine->SetArgToStringFn(&FormatASTNodeDiagnosticArgument, Context);
   LangOpts = Context->getLangOpts();
+  this->astContext = Context; 
 }
 
 const ClangTidyGlobalOptions &ClangTidyContext::getGlobalOptions() const {

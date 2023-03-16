@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -4216,4 +4216,15 @@ llvm::DebugLoc CGDebugInfo::SourceLocToDebugLoc(SourceLocation Loc) {
   llvm::MDNode *Scope = LexicalBlockStack.back();
   return llvm::DebugLoc::get(
           getLineNumber(Loc), getColumnNumber(Loc), Scope);
+}
+
+llvm::DebugLoc CGDebugInfo::PragmaSourceLocToDebugLoc(SourceLocation Loc, bool IsAutoPragma) {
+  if (LexicalBlockStack.empty())
+    return llvm::DebugLoc();
+  setLocation( Loc ); 
+  if (CurLoc.isInvalid() || CurLoc.isMacroID())
+    return llvm::DebugLoc();
+
+  llvm::MDNode *Scope = LexicalBlockStack.back();
+  return llvm::DebugLoc::get(getLineNumber(CurLoc), getColumnNumber(CurLoc), Scope, CurInlinedAt) ;
 }

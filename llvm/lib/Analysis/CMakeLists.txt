@@ -33,6 +33,7 @@ add_llvm_library(LLVMAnalysis
   DominanceFrontier.cpp
   EHPersonalities.cpp
   GlobalsModRef.cpp
+  IVDescriptors.cpp
   IVUsers.cpp
   IndirectCallPromotionAnalysis.cpp
   InlineCost.cpp

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass implements a simple loop unroller.  It works best when loops have
@@ -669,8 +674,8 @@ static bool HasRuntimeUnrollDisablePragma(const Loop *L) {
 static unsigned UnrollCountPragmaValue(const Loop *L) {
   MDNode *MD = GetUnrollMetadataForLoop(L, "llvm.loop.unroll.count");
   if (MD) {
-    assert(MD->getNumOperands() == 2 &&
-           "Unroll count hint metadata should have two operands.");
+    assert(MD->getNumOperands() >= 3 &&
+           "Unroll count hint metadata should have 2 operands.");
     unsigned Count =
         mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
     assert(Count >= 1 && "Unroll count must be positive.");

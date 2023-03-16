@@ -1,4 +1,4 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -38,6 +38,8 @@
 
 namespace llvm {
 
+StringRef getPragmaSourceFromMDNode(MDNode *MD);
+
 class MallocInst : public CallInst {
 public:
   MallocInst() = delete;
@@ -54,6 +56,33 @@ public:
 
   static bool classof(const Value *V) {
     return isa<CallInst>(V) && classof(cast<CallInst>(V));
+  }
+
+  Value *getSize() const {
+    return getArgOperand(0);
+  }
+
+  bool hasConstantSize() const {
+    return isa<ConstantInt>(getSize());
+  }
+
+  uint64_t getConstantSize() const {
+    if (!hasConstantSize())
+      return 0;
+    auto Size = cast<ConstantInt>(getSize());
+    return Size->getZExtValue();
+  }
+};
+
+/// This represents the fpga_smod
+class SModInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_smod;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 };
 
@@ -92,11 +121,20 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 
-  /// \brief Return the source from which we select part, without bitcast
-  Value *getRawSrc() const;
+  /// \brief Return the return type
+  IntegerType *getRetTy() const;
 
   /// \brief Return the source from which we select part
   Value *getSrc() const;
+
+  /// \brief Return the type of the source
+  IntegerType *getSrcTy() const;
+
+  /// \brief Return the offset starting at which we select part
+  Value *getOffset() const;
+
+  /// \brief Return the type of the offset
+  IntegerType *getOffsetTy() const;
 };
 
 /// This represent the fpga_legacy_part_select
@@ -110,11 +148,14 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 
+  /// \brief Return the return type
+  IntegerType *getRetTy() const;
+
   /// \brief Return the source from which we select part
   Value *getSrc() const;
 
   /// \brief Return the type of source from which we select part
-  Type *getSrcTy() const;
+  IntegerType *getSrcTy() const;
 
   /// \brief Return the Lo from which we select part
   Value *getLo() const;
@@ -501,6 +542,27 @@ public:
   static inline bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
+
+  /// \brief Return the return type
+  IntegerType *getRetTy() const;
+
+  /// \brief Return the source into which we set part
+  Value *getSrc() const;
+
+  /// \brief Return the type of the source into which we set part
+  IntegerType *getSrcTy() const;
+
+  /// \brief Return the replacement from which we get part
+  Value *getRep() const;
+
+  /// \brief Return the type of the replacement from which we get part
+  IntegerType *getRepTy() const;
+
+  /// \brief Return the offset at which we start the replacement
+  Value *getOffset() const;
+
+  /// \brief Return the type of the offset
+  IntegerType *getOffsetTy() const;
 };
 
 /// This represent the fpga_legacy_part_set
@@ -514,17 +576,20 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 
-  /// \brief Return the source from which we set part
+  /// \brief Return the return type
+  IntegerType *getRetTy() const;
+
+  /// \brief Return the source into which we set part
   Value *getSrc() const;
 
-  /// \brief Return the type of source from which we set part
-  Type *getSrcTy() const;
+  /// \brief Return the type of source into which we set part
+  IntegerType *getSrcTy() const;
 
-  /// \brief Return the Rep from which we set part
+  /// \brief Return the replacement from which we get part
   Value *getRep() const;
 
-  /// \brief Return the type of Rep from which we set part
-  Type *getRepTy() const;
+  /// \brief Return the type of the replacement from which we get part
+  IntegerType *getRepTy() const;
 
   /// \brief Return the Lo from which we set part
   Value *getLo() const;
@@ -708,6 +773,9 @@ struct BRAMStoreInst : public FPGAStoreInst {
 //  |- FPGAFIFOStatusInst
 //  |  |- FPGAFIFONotEmptyInst
 //  |  `- FPGAFIFONotFullInst
+//  |- FPGAFIFOLengthInst
+//  |  |- FPGAFIFOSizeInst
+//  |  `- FPGAFIFOCapacityInst
 //  |- FPGAFIFOBlockingInst
 //  |  |- FPGAFIFOPopInst
 //  |  `- FPGAFIFOPushInst
@@ -722,6 +790,8 @@ public:
   static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::fpga_fifo_not_empty ||
            I->getIntrinsicID() == Intrinsic::fpga_fifo_not_full ||
+           I->getIntrinsicID() == Intrinsic::fpga_fifo_size ||
+           I->getIntrinsicID() == Intrinsic::fpga_fifo_capacity ||
            I->getIntrinsicID() == Intrinsic::fpga_fifo_pop ||
            I->getIntrinsicID() == Intrinsic::fpga_fifo_push ||
            I->getIntrinsicID() == Intrinsic::fpga_fifo_nb_pop ||
@@ -791,6 +861,40 @@ public:
 
   static inline bool classof(const Value *V) {
     return isa<FPGAFIFOStatusInst>(V) && classof(cast<FPGAFIFOStatusInst>(V));
+  }
+};
+
+class FPGAFIFOLengthInst : public FPGAFIFOInst {
+public:
+  static inline bool classof(const FPGAFIFOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_fifo_size ||
+           I->getIntrinsicID() == Intrinsic::fpga_fifo_capacity;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAFIFOInst>(V) && classof(cast<FPGAFIFOInst>(V));
+  }
+};
+
+class FPGAFIFOSizeInst : public FPGAFIFOLengthInst {
+public:
+  static inline bool classof(const FPGAFIFOLengthInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_fifo_size;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAFIFOLengthInst>(V) && classof(cast<FPGAFIFOLengthInst>(V));
+  }
+};
+
+class FPGAFIFOCapacityInst : public FPGAFIFOLengthInst {
+public:
+  static inline bool classof(const FPGAFIFOLengthInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_fifo_capacity;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAFIFOLengthInst>(V) && classof(cast<FPGAFIFOLengthInst>(V));
   }
 };
 
@@ -1052,6 +1156,172 @@ public:
   }
 };
 
+//===---
+//
+//  PIPO Intrinsics
+//
+//  Inheritance diagram (only leaves are actual instrinsics):
+//
+//  FPGAPIPOInst
+//  |- FPGAPIPOStatusInst
+//  |  |- FPGAPIPONotEmptyInst
+//  |  `- FPGAPIPONotFullInst
+//  |- FPGAPIPOAcquireInst
+//  |  |- FPGAPIPOPopAcquireInst
+//  |  |- FPGAPIPOPushAcquireInst
+//  `- FPGAPIPOReleaseInst
+//     |- FPGAPIPOPopReleaseInst
+//     `- FPGAPIPOPushReleaseInst
+//
+//===---
+
+class FPGAPIPOInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_not_empty ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_not_full ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_pop_acquire ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_pop_release ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_push_acquire ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_push_release;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  Value *getPIPOOperand() { return getArgOperand(0); }
+  const Value *getPIPOOperand() const { return getArgOperand(0); }
+
+  PointerType *getPIPOType() const {
+    return cast<PointerType>(getPIPOOperand()->getType());
+  }
+
+  bool isConsumerSide() const {
+    switch (getIntrinsicID()) {
+    case Intrinsic::fpga_pipo_not_empty:
+    case Intrinsic::fpga_pipo_pop_acquire:
+    case Intrinsic::fpga_pipo_pop_release:
+      return true;
+    case Intrinsic::fpga_pipo_not_full:
+    case Intrinsic::fpga_pipo_push_acquire:
+    case Intrinsic::fpga_pipo_push_release:
+      return false;
+    default:
+      llvm_unreachable("Forgot to handle a PIPO intrinsic?");
+    }
+  }
+  bool isProducerSide() const { return !isConsumerSide(); }
+};
+
+class FPGAPIPOStatusInst : public FPGAPIPOInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_not_empty ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_not_full;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPONotEmptyInst : public FPGAPIPOStatusInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_not_empty;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPONotFullInst : public FPGAPIPOStatusInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_not_full;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPOAcquireInst : public FPGAPIPOInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_pop_acquire ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_push_acquire;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPOPopAcquireInst : public FPGAPIPOAcquireInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_pop_acquire;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPOPushAcquireInst : public FPGAPIPOAcquireInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_push_acquire;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPOReleaseInst : public FPGAPIPOInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_pop_release ||
+           I->getIntrinsicID() == Intrinsic::fpga_pipo_push_release;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPOPopReleaseInst : public FPGAPIPOReleaseInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_pop_release;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+class FPGAPIPOPushReleaseInst : public FPGAPIPOReleaseInst {
+public:
+  static inline bool classof(const FPGAPIPOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_pipo_push_release;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGAPIPOInst>(V) && classof(cast<FPGAPIPOInst>(V));
+  }
+};
+
+//===---
+//
+// M-AXI Intrinsics
+//
+//===---
+
 class MAXIIOInst : public IntrinsicInst {
 public:
   static inline bool classof(const IntrinsicInst *I) {
@@ -1196,6 +1466,30 @@ public:
       return nullptr;
     return dyn_cast<T>(Attr[i]);
   }
+
+  StringRef getPragmaSource(StringRef pragmaName) const {
+    MDNode *md = getMetadata("pragma.location");
+    if (!md) { 
+      return StringRef();
+    }
+
+    assert(isa<MDString>(md->getOperand(0)) && "unexpected"); 
+    assert(cast<MDString>(md->getOperand(0))->getString() == pragmaName && "unexpected"); 
+    return getPragmaSourceFromMDNode(md);
+  }
+
+  DILocation *getPragmaLoc(StringRef pragmaName) const {
+    MDNode *md = getMetadata("pragma.location");
+    if (!md) { 
+      return nullptr;
+    }
+
+    assert(isa<MDString>(md->getOperand(0)) && "unexpected"); 
+    assert(cast<MDString>(md->getOperand(0))->getString() == pragmaName && "unexpected"); 
+    assert(isa<DILocation>(md->getOperand(md->getNumOperands() - 1)) && "unexpected"); 
+    return cast<DILocation>(md->getOperand(md->getNumOperands() - 1));
+  }
+
 };
 
 class DirectiveScopeExit : public IntrinsicInst {
@@ -1237,6 +1531,14 @@ public:
       return dyn_cast<T>(Attr[i]);                                             \
     }                                                                          \
                                                                                \
+    StringRef getPragmaSrc() const {                                           \
+      return getPragmaSource(#Tag);                                            \
+    }                                                                          \
+                                                                               \
+    DebugLoc getPragmaDebugLoc( ) const {                                      \
+      return getPragmaLoc( #Tag );                                             \
+    }                                                                          \
+                                                                               \
     static Name##Exit *Build##Name(Instruction &Entry, Instruction &Exit,      \
                                    ArrayRef<Value *> Operands = None) {        \
       return cast<Name##Exit>(DirectiveScopeEntry::BuildDirectiveScope(        \
@@ -1247,6 +1549,7 @@ public:
       return D.getTag() == #Tag;                                               \
     }                                                                          \
     static const char *tag() { return #Tag; }                                  \
+                                                                               \
   };                                                                           \
                                                                                \
   class Name##Exit : public DirectiveScopeExit {                               \
@@ -1276,6 +1579,7 @@ DEFINE_DIRECTIVE_SCOPE(GlobalIdULTRegion, global_id_ult)
 DEFINE_DIRECTIVE_SCOPE(PipelineStage, pipeline_stage)
 DEFINE_DIRECTIVE_SCOPE(OutlineRegion, xcl_outline)
 DEFINE_DIRECTIVE_SCOPE(LatencyRegion, xcl_latency)
+DEFINE_DIRECTIVE_SCOPE(PerformanceRegion, xlx_performance)
 DEFINE_DIRECTIVE_SCOPE(ExprBalanceRegion, xlx_expr_balance)
 DEFINE_DIRECTIVE_SCOPE(InlineRegion, xcl_inline)
 DEFINE_DIRECTIVE_SCOPE(OccurrenceRegion, xlx_occurrence)
@@ -1298,6 +1602,28 @@ public:
 
   Value *getValue() const { return getArgOperand(0); }
   void fold() { replaceAllUsesWith(getValue()); }
+};
+
+class FPGAAnyInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_any;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  static CallInst* Create(Instruction *InsertBefore = nullptr, Module *M = nullptr) {
+    Function *FpgaAnyFunc = Intrinsic::getDeclaration(
+        M ? M : InsertBefore->getParent()->getParent()->getParent(),
+        Intrinsic::fpga_any);
+
+    CallInst *Call = CallInst::Create(
+        FpgaAnyFunc, None,
+        "", InsertBefore);
+    return Call;
+  }
 };
 
 #define DEFINE_SSA_ATTRIBUTE(Name, Tag)                                        \
@@ -1356,6 +1682,31 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 
+  static void setAttributesForCall(LLVMContext &Ctx, CallInst *Call,
+                                   int64_t TypeSize = -1,
+                                   StringRef Source = "infer-from-design") {
+    AttrBuilder builder;
+    if (TypeSize >= 0) {
+      builder.addAttribute("xlx.port.bitwidth", std::to_string(TypeSize));
+    }
+    if (Source != "") {
+      builder.addAttribute("xlx.source", Source);
+    }
+    if (builder.hasAttributes()) {
+      AttributeList attr_list = AttributeList::get(Ctx, AttributeList::FunctionIndex, builder);
+      Call->setAttributes(attr_list);
+    }
+
+    Call->setOnlyAccessesInaccessibleMemory();
+    Call->setDoesNotThrow();
+  }
+ 
+  void setAttributesForPragma(int64_t TypeSize = -1,
+                              StringRef Source = "infer-from-design") {
+    auto F = this->getParent()->getParent();
+    setAttributesForCall(F->getContext(), this, TypeSize, Source);
+  }
+
   // Create a PragmaInst and insert it before InsertBefore.
   // If InsertBefore is null, create PragmaInst but don't insert it. In this
   // case, Module M is necessary because we need it to get sideeffect
@@ -1364,26 +1715,27 @@ public:
   static PragmaInstType *Create(ArrayRef<Value *> Options,
                                 Instruction *InsertBefore = nullptr,
                                 Module *M = nullptr,
-                                int64_t TypeSize = -1) {
+                                int64_t TypeSize = -1,
+                                StringRef Source = "infer-from-design") {
+    return Create<PragmaInstType>(OperandBundleDef(PragmaInstType::BundleTagName, Options),
+                                  InsertBefore, M, TypeSize, Source);
+  }
+
+  template <typename PragmaInstType>
+  static PragmaInstType *Create(ArrayRef<OperandBundleDef> OpBundles,
+                                Instruction *InsertBefore = nullptr,
+                                Module *M = nullptr, int64_t TypeSize = -1,
+                                StringRef Source = "infer-from-design") {
     Function *SideEffectF = Intrinsic::getDeclaration(
         M ? M : InsertBefore->getParent()->getParent()->getParent(),
         Intrinsic::sideeffect);
+    assert(SideEffectF && "can't find llvm::Intrinsic::sideeffect");
 
-    CallInst *Call = CallInst::Create(
-        SideEffectF, None,
-        OperandBundleDef(PragmaInstType::BundleTagName, Options), "",
-        InsertBefore);
+    CallInst *Call =
+        CallInst::Create(SideEffectF, None, OpBundles, "", InsertBefore);
 
-    // attribute "xlx.port.bitwidth"
-    if (TypeSize >= 0 && SideEffectF) {
-      std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, 
-              llvm::Attribute::get(SideEffectF->getContext(), "xlx.port.bitwidth", std::to_string(TypeSize))) };
-      llvm::AttributeList attr_list = llvm::AttributeList::get( SideEffectF->getContext(), attrs);
-      Call->setAttributes(attr_list);
-    }
+    setAttributesForCall(SideEffectF->getContext(), Call, TypeSize, Source);
 
-    Call->setOnlyAccessesInaccessibleMemory();
-    Call->setDoesNotThrow();
     // metadata
     if (InsertBefore)
       Call->setDebugLoc(InsertBefore->getDebugLoc());
@@ -1393,25 +1745,19 @@ public:
   template <typename PragmaInstType>
   static PragmaInstType *Create(ArrayRef<Value *> Options,
                                 BasicBlock *InsertAtEnd,
-                                int64_t TypeSize = -1) {
+                                int64_t TypeSize = -1,
+                                StringRef Source = "infer-from-design") {
     Function *SideEffectF = Intrinsic::getDeclaration(
         InsertAtEnd->getParent()->getParent(), Intrinsic::sideeffect);
+    assert(SideEffectF && "can't find llvm::Intrinsic::sideeffect");
 
     CallInst *Call = CallInst::Create(
         SideEffectF, None,
         OperandBundleDef(PragmaInstType::BundleTagName, Options), "",
         InsertAtEnd);
 
-    // attribute "xlx.port.bitwidth"
-    if (TypeSize >= 0 && SideEffectF) {
-      std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, 
-              llvm::Attribute::get(SideEffectF->getContext(), "xlx.port.bitwidth", std::to_string(TypeSize))) };
-      llvm::AttributeList attr_list = llvm::AttributeList::get( SideEffectF->getContext(), attrs);
-      Call->setAttributes(attr_list);
-    }
+    setAttributesForCall(SideEffectF->getContext(), Call, TypeSize, Source);
 
-    Call->setOnlyAccessesInaccessibleMemory();
-    Call->setDoesNotThrow();
     return cast<PragmaInstType>(Call);
   }
 
@@ -1513,6 +1859,11 @@ public:
       return false;
   }
 
+  StringRef getPragmaSource() const {
+    auto result = getAttributes().getAttribute(llvm::AttributeList::FunctionIndex, "xlx.source");
+    return result.getValueAsString();
+  }
+
 protected:
   template <typename ValueT, typename PragmaInstType>
   static void get(ValueT *V, SetVector<PragmaInstType *> &PSet,
@@ -1596,7 +1947,7 @@ public:
     return V->getType()->isPointerTy() ? V : nullptr;
   }
 
-  int64_t getClass() const {
+  int32_t getClass() const {
     // class option
     // 0: No class set; 1: Array; 2: Pointer
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
@@ -1621,7 +1972,7 @@ public:
     return static_cast<Direction>(DirCode);
   }
 
-  int64_t getDistance() const {
+  int32_t getDistance() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
     assert(Bundle && "Illegal dependence intrinsic");
     return cast<ConstantInt>(Bundle.getValue().Inputs[4])->getSExtValue();
@@ -1637,12 +1988,89 @@ public:
     return static_cast<DepType>(DepTypeCode);
   }
 
+  bool isUserPragma() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal dependence intrinsic");
+    return !cast<ConstantInt>(Bundle.getValue().Inputs[6])->isZero();
+  }
+
   static DependenceInst *get(Value *V) {
     return PragmaInst::get<DependenceInst>(V, true);
   }
 
   static const DependenceInst *get(const Value *V) {
     return PragmaInst::get<DependenceInst>(V, true);
+  }
+
+  static void get(Value *V, SetVector<DependenceInst *> &PSet) {
+    return PragmaInst::get(V, PSet, true);
+  }
+
+  static void get(const Value *V,
+                  SetVector<const DependenceInst *> &PSet) {
+    return PragmaInst::get(V, PSet, true);
+  }
+
+};
+
+class FuncInstantiateInst : public PragmaInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  static FuncInstantiateInst *get(Value *V) {
+    return PragmaInst::get<FuncInstantiateInst>(V, true);
+  }
+
+  static const FuncInstantiateInst *get(const Value *V) {
+    return PragmaInst::get<FuncInstantiateInst>(V, true);
+  }
+};
+
+class ArrayStencilInst : public PragmaInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  static ArrayStencilInst *get(Value *V) {
+    return PragmaInst::get<ArrayStencilInst>(V, true);
+  }
+
+  static const  ArrayStencilInst *get(const Value *V) {
+    return PragmaInst::get<ArrayStencilInst>(V, true);
+  }
+
+  bool isEnabled() const {
+    if (!isValidInst())
+      assert(0 && "Illegal array_stencil intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    auto *Enabled = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
+    return Enabled->isOne();
+  }
+
+private:
+  unsigned getNumArgs() const {
+    return 2;
+  }
+
+  bool isValidInst() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    if (Bundle && Bundle.getValue().Inputs.size() == getNumArgs())
+      return true;
+    else
+      return false;
   }
 };
 
@@ -1947,7 +2375,8 @@ public:
 // TODO: allow more than one variable in the same operand bundle
 template <class SpecificXFromInst> class ArrayXFormInst : public PragmaInst {
 public:
-  enum XFormMode { Cyclic = 0, Block = 1, Complete = 2 };
+  enum XFormMode { AlreadyTouched = 998, Off = 999,
+                   Cyclic = 0, Block = 1, Complete = 2 };
 
   static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::sideeffect &&
@@ -1964,6 +2393,10 @@ public:
     assert(Bundle && "Illegal array transform intrinsic");
     ConstantInt *Type = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
     switch (Type->getZExtValue()) {
+    case AlreadyTouched:
+      return "already_touched";
+    case Off:
+      return "off";
     case Cyclic:
       return "cyclic";
     case Block:
@@ -2088,6 +2521,27 @@ public:
   static const StreamPragmaInst *get(const Value *V) {
     return PragmaInst::get<StreamPragmaInst>(V, false);
   }
+};
+
+class StreamOfBlocksPragmaInst : public PragmaInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  int32_t getDepth() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Operand bundle not found");
+    ConstantInt *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
+    return (int32_t)Depth->getSExtValue();
+  }
+
+  Value *getStream() const { return getVariable(); }
 };
 
 class PipoPragmaInst : public PragmaInst {
@@ -2318,11 +2772,24 @@ public:
   static inline bool classof(const Value *V) {
     return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
   }
-  Function* getFunction() const{ 
+  // return the function in tag 'xlx_function_allocation'
+  Function *getFunction() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    assert( Bundle && "Illegal ConstSpec intrinsic" );
-    Function* func = dyn_cast<Function>(Bundle.getValue().Inputs[0]);
+    assert(Bundle && "Illegal ConstSpec intrinsic");
+    Function *func = dyn_cast<Function>(Bundle.getValue().Inputs[0]);
     return func;
+  }
+
+  // collect all functions in this intrinsic
+  void getFunctions(SetVector<Function *> &Set) const {
+    SmallVector<OperandBundleDef, 2> Bundles;
+    this->getOperandBundlesAsDefs(Bundles);
+    assert(Bundles.size() >= 1 && "No operand bundle?!");
+    Set.insert(this->getFunction());
+    if (Bundles.size() == 1)
+      return;
+    for (auto *V : Bundles[1].inputs())
+      Set.insert(cast<Function>(V));
   }
 
   StringRef getFunctionString() const{
@@ -2342,6 +2809,33 @@ public:
     ConstantInt* limit = dyn_cast<ConstantInt>( Bundle.getValue().Inputs[2]);
     return limit->getSExtValue();
   }
+  // create allocation intrinsic based on \p OldAllocationIntr
+  static XlxFunctionAllocationInst *
+  Create(ArrayRef<Function *> Fns,
+         XlxFunctionAllocationInst *OldAllocationIntr) {
+    auto Source = OldAllocationIntr->getPragmaSource();
+
+    SmallVector<OperandBundleDef, 2> Bundles;
+    OldAllocationIntr->getOperandBundlesAsDefs(Bundles);
+    SmallVector<Value *, 3> NewBundleVals(Bundles[0].input_begin() + 1,
+                                          Bundles[0].input_end());
+    NewBundleVals.insert(NewBundleVals.begin(), Fns[0]);
+    SmallVector<OperandBundleDef, 2> NewBundles;
+    NewBundles.emplace_back(Bundles[0].getTag(), NewBundleVals);
+
+    if (1 == Fns.size())
+      return PragmaInst::Create<XlxFunctionAllocationInst>(NewBundles,
+                                                           OldAllocationIntr,
+                                                           nullptr, -1, Source);
+    // 2 operand bundles
+    NewBundleVals.clear();
+    for (unsigned i = 1; i < Fns.size(); i++)
+      NewBundleVals.push_back(Fns[i]);
+    NewBundles.emplace_back("allocation_dup_list", NewBundleVals);
+    return PragmaInst::Create<XlxFunctionAllocationInst>(NewBundles,
+                                                         OldAllocationIntr,
+                                                         nullptr, -1, Source);
+  }
 
   static XlxFunctionAllocationInst *get(Value *V) {
     return PragmaInst::get<XlxFunctionAllocationInst>(V, false);
@@ -2351,22 +2845,45 @@ public:
     return PragmaInst::get<XlxFunctionAllocationInst>(V, false);
   }
 
-  static void getAll( Function *fn, SmallVectorImpl<XlxFunctionAllocationInst*>  &AllocPragmas) ; 
+  // collect allocation pragmas (in corresponding region if it's specified)
+  static void getAll(Function *F,
+                     SmallVectorImpl<XlxFunctionAllocationInst *> &Allocations,
+                     Function *RegionF = nullptr);
 };
 
-class StreamLabelInst : public PragmaInst {
-public:
-  static const std::string BundleTagName;
-  static bool classof(const PragmaInst *I) {
-    return I->getOperandBundle(BundleTagName).hasValue();
-  }
+#define DEFINE_LABEL(Name)                                                     \
+  class Name##LabelInst : public PragmaInst {                                  \
+   public:                                                                     \
+    static const std::string BundleTagName;                                    \
+    static bool classof(const PragmaInst *I) {                                 \
+      return I->getOperandBundle(BundleTagName).hasValue();                    \
+    }                                                                          \
+                                                                               \
+    static inline bool classof(const Value *V) {                               \
+      return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));               \
+    }                                                                          \
+                                                                               \
+    static Name##LabelInst *get(Value *V, bool Indirect = true) {              \
+      return PragmaInst::get<Name##LabelInst>(V, Indirect);                    \
+    }                                                                          \
+                                                                               \
+    static const Name##LabelInst *get(const Value *V, bool Indirect = true) {  \
+      return PragmaInst::get<Name##LabelInst>(V, Indirect);                    \
+    }                                                                          \
+                                                                               \
+    int getDim() const {                                                       \
+      Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);     \
+      assert(Bundle && "Illegal label intrinsic");                             \
+      if (Bundle.getValue().Inputs.size() <= 1)                                \
+        return 0;                                                              \
+      ConstantInt *dim = cast<ConstantInt>(Bundle.getValue().Inputs[1]);       \
+      return dim->getZExtValue();                                              \
+    }                                                                          \
+  };
 
-  static inline bool classof(const Value *V) {
-    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
-  }
-
-private:
-};
+DEFINE_LABEL(Stream)
+DEFINE_LABEL(StreamOfBlocks)
+DEFINE_LABEL(ShiftReg)
 
 // pre-declare
 class SAXIInst;
@@ -2748,6 +3265,23 @@ public:
     this->setOperand(10, newV);
   }
 
+  StringRef getChannelID() const {
+    if (!isValidInst())
+      assert(0 && "Illegal m_axi intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    Value *V = Bundle.getValue().Inputs[11];
+    if (isa<GlobalVariable>(V))
+      V = cast<GlobalVariable>(V)->getInitializer();
+    if (isa<ConstantAggregateZero>(V))
+      return "";
+    else
+      return cast<ConstantDataSequential>(V)->getRawDataValues();
+  }
+
+  void setChannelID(StringRef ID) {
+    auto newV = ConstantDataArray::getString(getContext(), ID, false);
+    setOperand(11, newV);
+  }
 
   // get call intrinsic from root value
   static void get(Value *V, SetVector<MaxiInst *> &PSet, bool Indirect = true) {
@@ -2770,7 +3304,7 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 11;
+    return 12;
   }
 
   bool isValidInst() const {
@@ -2831,6 +3365,12 @@ public:
       return "";
     else
       return cast<ConstantDataSequential>(V)->getRawDataValues();
+  }
+
+  void setDepth(int64_t Depth) {
+    auto I64T = Type::getInt64Ty(this->getContext());
+    auto newV = ConstantInt::getSigned(I64T, Depth);
+    this->setOperand(3, newV);
   }
 
   void setBundle(StringRef Bundle) {
@@ -3323,6 +3863,14 @@ public:
   }
 #endif
 
+  int64_t getInterrupt() const {
+    if (!isValidInst())
+      assert(0 && "Illegal ap_vld intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    auto *V = cast<ConstantInt>(Bundle.getValue().Inputs[3]);
+    return V->getSExtValue();
+  }
+
   // get call intrinsic from root value
   static void get(Value *V, SetVector<ApVldInst *> &PSet, bool Indirect = true) {
     return PragmaInst::get(V, PSet, Indirect);
@@ -3344,7 +3892,7 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 3;
+    return 4;
   }
 
   bool isValidInst() const {
@@ -3430,6 +3978,14 @@ public:
   }
 #endif
 
+  int64_t getInterrupt() const {
+    if (!isValidInst())
+      assert(0 && "Illegal ap_hs intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    auto *V = cast<ConstantInt>(Bundle.getValue().Inputs[3]);
+    return V->getSExtValue();
+  }
+
   // get call intrinsic from root value
   static void get(Value *V, SetVector<ApHsInst *> &PSet, bool Indirect = true) {
     return PragmaInst::get(V, PSet, Indirect);
@@ -3450,7 +4006,7 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 3;
+    return 4;
   }
 
   bool isValidInst() const {
@@ -3569,6 +4125,108 @@ private:
       return true;
     else
       return false;
+  }
+};
+
+class NPortChannelInst : public PragmaInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  void getOptions(SmallVectorImpl<Value *> &Opts) const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal dependence intrinsic");
+    for (Value *V : Bundle.getValue().Inputs) 
+      Opts.push_back(V);
+  }
+};
+
+class XlxIPInst : public PragmaInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  void getOptions(SmallVectorImpl<Value *> &Opts) const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal xlx_ip intrinsic");
+    for (Value *V : Bundle.getValue().Inputs) 
+      Opts.push_back(V);
+  }
+
+  platform::PlatformBasic::OP_TYPE getOp() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal xlx_ip intrinsic");
+    ConstantInt *Op = cast<ConstantInt>(Bundle.getValue().Inputs[0]);
+    return (platform::PlatformBasic::OP_TYPE)Op->getSExtValue();
+  }
+
+  platform::PlatformBasic::IMPL_TYPE getImpl() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal xlx_ip intrinsic");
+    ConstantInt *Impl = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
+    return (platform::PlatformBasic::IMPL_TYPE)Impl->getSExtValue();
+  }
+};
+
+/// This represents the fpga_fence
+class FPGAFenceInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_fence;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  void getBeforeObjects(SmallVectorImpl<Value *> &BeforeObjs) {
+    SmallVector<Value *, 4> AfterObjs;
+    getBeforeAfterObjects(BeforeObjs, AfterObjs);
+  }
+
+  void getAfterObjects(SmallVectorImpl<Value *> &AfterObjs) {
+    SmallVector<Value *, 4> BeforeObjs;
+    getBeforeAfterObjects(BeforeObjs, AfterObjs);
+  }
+
+  unsigned getNumBeforeObjects() {
+    SmallVector<Value *, 4> BeforeObjs;
+    getBeforeObjects(BeforeObjs);
+    return BeforeObjs.size();
+  }
+
+  unsigned getNumAfterObjects() {
+    SmallVector<Value *, 4> AfterObjs;
+    getAfterObjects(AfterObjs);
+    return AfterObjs.size();
+  }
+
+  void getBeforeAfterObjects(SmallVectorImpl<Value *> &BeforeObjs,
+                             SmallVectorImpl<Value *> &AfterObjs) {
+    bool IsBefore = true;
+    for (Value *Arg : arg_operands()) {
+      if (Arg->getType()->isPointerTy()) {
+        if (IsBefore)
+          BeforeObjs.push_back(Arg);
+        else
+          AfterObjs.push_back(Arg);
+      } else if (ConstantInt *C = dyn_cast<ConstantInt>(Arg)) {
+        if (-1 == (int)C->getSExtValue())
+          IsBefore = false;     
+      }
+    }
   }
 };
 

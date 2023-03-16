@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 ///
 /// \file
@@ -579,6 +584,15 @@ void ASTStmtWriter::VisitOMPArraySectionExpr(OMPArraySectionExpr *E) {
   Record.AddSourceLocation(E->getRBracketLoc());
   Code = serialization::EXPR_OMP_ARRAY_SECTION;
 }
+
+void ASTStmtWriter::VisitHLSWholeArrayExpr(HLSWholeArrayExpr *E) {
+  VisitExpr(E);
+  Record.AddStmt(E->getBase());
+  Record.AddSourceLocation(E->getStarLoc());
+  Record.AddSourceLocation(E->getRBracketLoc());
+  Code = serialization::EXPR_HLS_WHOLE_ARRAY;
+}
+
 
 void ASTStmtWriter::VisitCallExpr(CallExpr *E) {
   VisitExpr(E);

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines the MemoryDependenceAnalysis analysis pass.
@@ -22,6 +27,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
+#include "llvm/Analysis/OrderedBasicBlock.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PassManager.h"
@@ -357,12 +363,16 @@ private:
   const TargetLibraryInfo &TLI;
   DominatorTree &DT;
   PredIteratorCache PredCache;
-
+  /// Used to check dominance for instructions in same basic block.
+  mutable DenseMap<const BasicBlock *, std::unique_ptr<OrderedBasicBlock>>
+      OrderedBB;
 public:
   MemoryDependenceResults(AliasAnalysis &AA, AssumptionCache &AC,
                           const TargetLibraryInfo &TLI,
                           DominatorTree &DT)
       : AA(AA), AC(AC), TLI(TLI), DT(DT) {}
+
+  OrderedBasicBlock* getOrderedBasicBlock(const BasicBlock *BB);
 
   /// Handle invalidation in the new PM.
   bool invalidate(Function &F, const PreservedAnalyses &PA,

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3059,6 +3059,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case ParenExprClass:
   case ArraySubscriptExprClass:
   case OMPArraySectionExprClass:
+  case HLSWholeArrayExprClass:
   case MemberExprClass:
   case ConditionalOperatorClass:
   case BinaryConditionalOperatorClass:
@@ -4112,3 +4113,36 @@ QualType OMPArraySectionExpr::getBaseOriginalType(const Expr *Base) {
   }
   return OriginalTy;
 }
+
+
+QualType HLSWholeArrayExpr::getBaseOriginalType(const Expr *Base) {
+
+  unsigned WholeArrayCount = 0;
+  while (auto *HWAE = dyn_cast<HLSWholeArrayExpr>(Base->IgnoreParens())) {
+    Base = HWAE->getBase();
+    ++WholeArrayCount;
+  }
+
+  while (auto *ASE =
+             dyn_cast<ArraySubscriptExpr>(Base->IgnoreParenImpCasts())) {
+    Base = ASE->getBase();
+    ++WholeArrayCount;
+  }
+
+  Base = Base->IgnoreParenImpCasts();
+  auto OriginalTy = Base->getType();
+  if (auto *DRE = dyn_cast<DeclRefExpr>(Base))
+    if (auto *PVD = dyn_cast<ParmVarDecl>(DRE->getDecl()))
+      OriginalTy = PVD->getOriginalType().getNonReferenceType();
+
+  for (unsigned Cnt = 0; Cnt < WholeArrayCount; ++Cnt) {
+    if (OriginalTy->isAnyPointerType())
+      OriginalTy = OriginalTy->getPointeeType();
+    else {
+      assert (OriginalTy->isArrayType());
+      OriginalTy = OriginalTy->castAsArrayTypeUnsafe()->getElementType();
+    }
+  }
+  return OriginalTy;
+}
+

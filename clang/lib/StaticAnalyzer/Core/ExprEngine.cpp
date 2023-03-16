@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines a meta-engine for path-sensitive dataflow analysis that
@@ -1108,6 +1113,10 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
       Bldr.addNodes(Dst);
       break;
     }
+
+    case Stmt::HLSWholeArrayExprClass:
+      llvm_unreachable("Support for HLSWholeArrayExpr is not implemented.");
+      break;
 
     case Stmt::CXXDefaultArgExprClass:
     case Stmt::CXXDefaultInitExprClass: {

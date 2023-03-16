@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -5066,6 +5066,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
       return cxstring::createRef("ArraySubscriptExpr");
   case CXCursor_OMPArraySectionExpr:
       return cxstring::createRef("OMPArraySectionExpr");
+  case CXCursor_HLSWholeArrayExpr:
+      return cxstring::createRef("HLSWholeArrayExpr");
   case CXCursor_BinaryOperator:
       return cxstring::createRef("BinaryOperator");
   case CXCursor_CompoundAssignOperator:

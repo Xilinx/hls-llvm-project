@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -300,7 +300,7 @@ bool IPCP::runOnModule(Module &M) {
   while (LocalChange) {
     LocalChange = false;
     for (Function &F : M)
-      if (!F.isDeclaration() && !isIPCore(&F)) {
+      if (!F.isDeclaration() && !HasVivadoIP(&F)) {
         // Delete any klingons.
         F.removeDeadConstantUsers();
         if (F.hasLocalLinkage())

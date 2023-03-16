@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2294,6 +2294,7 @@ void EmitClangAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
     OS << "  A->Inherited = Inherited;\n";
     OS << "  A->IsPackExpansion = IsPackExpansion;\n";
     OS << "  A->Implicit = Implicit;\n";
+    OS << "  A->pragmaContext = pragmaContext;\n"; 
     OS << "  return A;\n}\n\n";
 
     writePrettyPrintFunction(R, Args, OS);

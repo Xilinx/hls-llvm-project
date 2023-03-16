@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -55,6 +55,13 @@ bool stripDebugInfo(Function &F);
 ///      that's reachable from the CU debug info.
 ///   All debug type metadata nodes are unreachable and garbage collected.
 bool stripNonLineTableDebugInfo(Module &M);
+
+/// Update the debug locations contained within the MD_loop metadata attached
+/// to the instruction \p I, if one exists. \p Updater is applied to Metadata
+/// operand in the MD_loop metadata: the returned value is included in the
+/// updated loop metadata node if it is non-null.
+void updateLoopMetadataDebugLocations(
+     Instruction &I, function_ref<Metadata *(Metadata *)> Updater);
 
 /// Return Debug Info Metadata Version by checking module flags.
 unsigned getDebugMetadataVersionFromModule(const Module &M);
