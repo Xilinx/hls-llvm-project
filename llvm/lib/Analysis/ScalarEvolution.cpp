@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -5446,17 +5447,20 @@ uint32_t ScalarEvolution::GetMinTrailingZeros(const SCEV *S) {
 
 /// HINT_RANGE_UNSIGNED (resp. HINT_RANGE_SIGNED) then getRange prefers ranges
 /// with a "cleaner" unsigned (resp. signed) representation.
-const ConstantRange &
+ConstantRange 
 ScalarEvolution::getRangeRef(const SCEV *S,
-                             ScalarEvolution::RangeSignHint SignHint) {
+                             ScalarEvolution::RangeSignHint SignHint,
+                             const Instruction *CtxI) {
   DenseMap<const SCEV *, ConstantRange> &Cache =
       SignHint == ScalarEvolution::HINT_RANGE_UNSIGNED ? UnsignedRanges
                                                        : SignedRanges;
 
-  // See if we've computed this range already.
-  DenseMap<const SCEV *, ConstantRange>::iterator I = Cache.find(S);
-  if (I != Cache.end())
-    return I->second;
+  if (!CtxI) { 
+    // See if we've computed this range already.
+    DenseMap<const SCEV *, ConstantRange>::iterator I = Cache.find(S);
+    if (I != Cache.end())
+      return I->second;
+  }
 
   if (const SCEVConstant *C = dyn_cast<SCEVConstant>(S))
     return setRange(C, SignHint, ConstantRange(C->getAPInt()));
@@ -5479,56 +5483,68 @@ ScalarEvolution::getRangeRef(const SCEV *S,
   }
 
   if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(S)) {
-    ConstantRange X = getRangeRef(Add->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(Add->getOperand(0), SignHint, CtxI);
     for (unsigned i = 1, e = Add->getNumOperands(); i != e; ++i)
-      X = X.add(getRangeRef(Add->getOperand(i), SignHint));
-    return setRange(Add, SignHint, ConservativeResult.intersectWith(X));
+      X = X.add(getRangeRef(Add->getOperand(i), SignHint, CtxI));
+    ConservativeResult = ConservativeResult.intersectWith(X);
+    return CtxI ? ConservativeResult :
+                  setRange(Add, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(S)) {
-    ConstantRange X = getRangeRef(Mul->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(Mul->getOperand(0), SignHint, CtxI);
     for (unsigned i = 1, e = Mul->getNumOperands(); i != e; ++i)
-      X = X.multiply(getRangeRef(Mul->getOperand(i), SignHint));
-    return setRange(Mul, SignHint, ConservativeResult.intersectWith(X));
+      X = X.multiply(getRangeRef(Mul->getOperand(i), SignHint, CtxI));
+    ConservativeResult = ConservativeResult.intersectWith(X);
+    return CtxI ? ConservativeResult :
+                  setRange(Mul, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVSMaxExpr *SMax = dyn_cast<SCEVSMaxExpr>(S)) {
-    ConstantRange X = getRangeRef(SMax->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(SMax->getOperand(0), SignHint, CtxI);
     for (unsigned i = 1, e = SMax->getNumOperands(); i != e; ++i)
-      X = X.smax(getRangeRef(SMax->getOperand(i), SignHint));
-    return setRange(SMax, SignHint, ConservativeResult.intersectWith(X));
+      X = X.smax(getRangeRef(SMax->getOperand(i), SignHint, CtxI));
+    ConservativeResult = ConservativeResult.intersectWith(X);
+    return CtxI ? ConservativeResult :
+                  setRange(SMax, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVUMaxExpr *UMax = dyn_cast<SCEVUMaxExpr>(S)) {
-    ConstantRange X = getRangeRef(UMax->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(UMax->getOperand(0), SignHint, CtxI);
     for (unsigned i = 1, e = UMax->getNumOperands(); i != e; ++i)
-      X = X.umax(getRangeRef(UMax->getOperand(i), SignHint));
-    return setRange(UMax, SignHint, ConservativeResult.intersectWith(X));
+      X = X.umax(getRangeRef(UMax->getOperand(i), SignHint, CtxI));
+    ConservativeResult = ConservativeResult.intersectWith(X);
+    return CtxI ? ConservativeResult :
+                  setRange(UMax, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVUDivExpr *UDiv = dyn_cast<SCEVUDivExpr>(S)) {
-    ConstantRange X = getRangeRef(UDiv->getLHS(), SignHint);
-    ConstantRange Y = getRangeRef(UDiv->getRHS(), SignHint);
-    return setRange(UDiv, SignHint,
-                    ConservativeResult.intersectWith(X.udiv(Y)));
+    ConstantRange X = getRangeRef(UDiv->getLHS(), SignHint, CtxI);
+    ConstantRange Y = getRangeRef(UDiv->getRHS(), SignHint, CtxI);
+    ConservativeResult = ConservativeResult.intersectWith(X.udiv(Y));
+    return CtxI ? ConservativeResult :
+                  setRange(UDiv, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVZeroExtendExpr *ZExt = dyn_cast<SCEVZeroExtendExpr>(S)) {
-    ConstantRange X = getRangeRef(ZExt->getOperand(), SignHint);
-    return setRange(ZExt, SignHint,
-                    ConservativeResult.intersectWith(X.zeroExtend(BitWidth)));
+    ConstantRange X = getRangeRef(ZExt->getOperand(), SignHint, CtxI);
+    ConservativeResult = ConservativeResult.intersectWith(X.zeroExtend(BitWidth));
+    return CtxI ? ConservativeResult :
+                  setRange(ZExt, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVSignExtendExpr *SExt = dyn_cast<SCEVSignExtendExpr>(S)) {
-    ConstantRange X = getRangeRef(SExt->getOperand(), SignHint);
-    return setRange(SExt, SignHint,
-                    ConservativeResult.intersectWith(X.signExtend(BitWidth)));
+    ConstantRange X = getRangeRef(SExt->getOperand(), SignHint, CtxI);
+    ConservativeResult = ConservativeResult.intersectWith(X.signExtend(BitWidth));
+    return CtxI ? ConservativeResult :
+                  setRange(SExt, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVTruncateExpr *Trunc = dyn_cast<SCEVTruncateExpr>(S)) {
-    ConstantRange X = getRangeRef(Trunc->getOperand(), SignHint);
-    return setRange(Trunc, SignHint,
-                    ConservativeResult.intersectWith(X.truncate(BitWidth)));
+    ConstantRange X = getRangeRef(Trunc->getOperand(), SignHint, CtxI);
+    ConservativeResult = ConservativeResult.intersectWith(X.truncate(BitWidth));
+    return CtxI ? ConservativeResult :
+                  setRange(Trunc, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVAddRecExpr *AddRec = dyn_cast<SCEVAddRecExpr>(S)) {
@@ -5566,21 +5582,21 @@ ScalarEvolution::getRangeRef(const SCEV *S,
           getTypeSizeInBits(MaxBECount->getType()) <= BitWidth) {
         auto RangeFromAffine = getRangeForAffineAR(
             AddRec->getStart(), AddRec->getStepRecurrence(*this), MaxBECount,
-            BitWidth);
+            BitWidth, CtxI);
         if (!RangeFromAffine.isFullSet())
           ConservativeResult =
               ConservativeResult.intersectWith(RangeFromAffine);
 
         auto RangeFromFactoring = getRangeViaFactoring(
             AddRec->getStart(), AddRec->getStepRecurrence(*this), MaxBECount,
-            BitWidth);
+            BitWidth, CtxI);
         if (!RangeFromFactoring.isFullSet())
           ConservativeResult =
               ConservativeResult.intersectWith(RangeFromFactoring);
       }
     }
-
-    return setRange(AddRec, SignHint, std::move(ConservativeResult));
+    return CtxI ? ConservativeResult :
+                  setRange(AddRec, SignHint, std::move(ConservativeResult));
   }
 
   if (const SCEVUnknown *U = dyn_cast<SCEVUnknown>(S)) {
@@ -5591,12 +5607,13 @@ ScalarEvolution::getRangeRef(const SCEV *S,
     ConservativeResult =
         ConservativeResult.intersectWith(
             computeConstantRangeIncludingKnownBits(
-                U->getValue(), BitWidth, ForSigned, DL, 0, &AC, nullptr, &DT));
-
-    return setRange(U, SignHint, std::move(ConservativeResult));
+                U->getValue(), BitWidth, ForSigned, DL, 0, &AC, CtxI, &DT));
+    return CtxI ? ConservativeResult :
+                  setRange(U, SignHint, std::move(ConservativeResult));
   }
 
-  return setRange(S, SignHint, std::move(ConservativeResult));
+  return CtxI ? ConservativeResult :
+                setRange(S, SignHint, std::move(ConservativeResult));
 }
 
 // Given a StartRange, Step and MaxBECount for an expression compute a range of
@@ -5670,17 +5687,18 @@ static ConstantRange getRangeForAffineARHelper(APInt Step,
 ConstantRange ScalarEvolution::getRangeForAffineAR(const SCEV *Start,
                                                    const SCEV *Step,
                                                    const SCEV *MaxBECount,
-                                                   unsigned BitWidth) {
+                                                   unsigned BitWidth,
+                                                   const Instruction *CtxI) {
   assert(!isa<SCEVCouldNotCompute>(MaxBECount) &&
          getTypeSizeInBits(MaxBECount->getType()) <= BitWidth &&
          "Precondition!");
 
   MaxBECount = getNoopOrZeroExtend(MaxBECount, Start->getType());
-  APInt MaxBECountValue = getUnsignedRangeMax(MaxBECount);
+  APInt MaxBECountValue = getUnsignedRangeMax(MaxBECount, CtxI);
 
   // First, consider step signed.
-  ConstantRange StartSRange = getSignedRange(Start);
-  ConstantRange StepSRange = getSignedRange(Step);
+  ConstantRange StartSRange = getSignedRange(Start, CtxI);
+  ConstantRange StepSRange = getSignedRange(Step, CtxI);
 
   // If Step can be both positive and negative, we need to find ranges for the
   // maximum absolute step values in both directions and union them.
@@ -5693,7 +5711,7 @@ ConstantRange ScalarEvolution::getRangeForAffineAR(const SCEV *Start,
 
   // Next, consider step unsigned.
   ConstantRange UR = getRangeForAffineARHelper(
-      getUnsignedRangeMax(Step), getUnsignedRange(Start),
+      getUnsignedRangeMax(Step, CtxI), getUnsignedRange(Start, CtxI),
       MaxBECountValue, BitWidth, /* Signed = */ false);
 
   // Finally, intersect signed and unsigned ranges.
@@ -5703,7 +5721,8 @@ ConstantRange ScalarEvolution::getRangeForAffineAR(const SCEV *Start,
 ConstantRange ScalarEvolution::getRangeViaFactoring(const SCEV *Start,
                                                     const SCEV *Step,
                                                     const SCEV *MaxBECount,
-                                                    unsigned BitWidth) {
+                                                    unsigned BitWidth,
+                                                    const Instruction *CtxI) {
   //    RangeOf({C?A:B,+,C?P:Q}) == RangeOf(C?{A,+,P}:{B,+,Q})
   // == RangeOf({A,+,P}) union RangeOf({B,+,Q})
 
@@ -5808,9 +5827,9 @@ ConstantRange ScalarEvolution::getRangeViaFactoring(const SCEV *Start,
   const SCEV *FalseStep = this->getConstant(StepPattern.FalseValue);
 
   ConstantRange TrueRange =
-      this->getRangeForAffineAR(TrueStart, TrueStep, MaxBECount, BitWidth);
+      this->getRangeForAffineAR(TrueStart, TrueStep, MaxBECount, BitWidth, CtxI);
   ConstantRange FalseRange =
-      this->getRangeForAffineAR(FalseStart, FalseStep, MaxBECount, BitWidth);
+      this->getRangeForAffineAR(FalseStart, FalseStep, MaxBECount, BitWidth, CtxI);
 
   return TrueRange.unionWith(FalseRange);
 }
@@ -6363,6 +6382,8 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
   case Instruction::Call:
     if (Value *RV = CallSite(U).getReturnedArgOperand())
       return getSCEV(RV);
+    else if (isa<SSAKeepInst>(U))
+      return getSCEV(cast<SSAKeepInst>(U)->getValue());
     if (auto BitC = dyn_cast<BitConcatInst>(U)) {
       IntegerType *RetTy = BitC->getType();
       APInt Coefficient(RetTy->getBitWidth(), 1);  

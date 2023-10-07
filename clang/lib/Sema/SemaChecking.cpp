@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -831,7 +832,7 @@ static bool SemaBuiltinShiftRegShift(Sema &S, CallExpr *Call) {
   const auto *Pred = Call->getArg(2);
   QualType PredTy = Pred->getType();
   if (!PredTy->isBooleanType()) {
-    return S.Diag(Ptr->getLocStart(), diag::err_builtin_expected_type)
+    return S.Diag(Pred->getLocStart(), diag::err_builtin_expected_type)
            << "bool" << PredTy << Pred->getSourceRange();
   }
 

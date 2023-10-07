@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -715,6 +716,24 @@ APInt llvm::APIntOps::GreatestCommonDivisor(APInt A, APInt B) {
   }
 
   return A;
+}
+
+APInt llvm::APIntOps::LeastCommonMultiple(APInt A, APInt B) {
+  auto BW = A.getBitWidth();
+  assert(BW == B.getBitWidth() && "Expect same bitwidth operands for LCM!");
+
+  // Fast-path a common case.
+  if (A == B) return A;
+
+  // Corner cases: if either operand is zero, the result is zero.
+  if (!A || !B)
+    return APInt(BW, 0u);
+
+  APInt Max(BW, 0u);
+  Max.setAllBits();
+  assert(A.udiv(GreatestCommonDivisor(A, B)).ule(Max.udiv(B))
+         && "LCM overflow!");
+  return A.udiv(GreatestCommonDivisor(A, B)) * B;
 }
 
 APInt llvm::APIntOps::RoundDoubleToAPInt(double Double, unsigned width) {

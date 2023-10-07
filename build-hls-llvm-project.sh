@@ -36,7 +36,7 @@ cmake "$llvm_srcroot/llvm" \
         -DLLVM_BUILD_DOCS=OFF \
         -DOPEN_SQLITE_LIB_FILE=$sqlitelib \
         -DOPEN_SQLITE_INCLUDE_DIR=`dirname $sqliteheader`  \
-        -DCMAKE_BUILD_TYPE="Debug"
+        -DCMAKE_BUILD_TYPE="Debug" 
 
 #NOTE: Use 'ninja' if you have it!:-)
 make -j $(nproc)

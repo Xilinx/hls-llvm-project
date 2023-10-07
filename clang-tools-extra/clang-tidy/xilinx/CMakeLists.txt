@@ -9,7 +9,6 @@ add_clang_library(clangTidyXilinxModule
   DumpOpenclkernelCheck.cpp
   LabelAllLoopsCheck.cpp
   LoopBraceBracketCheck.cpp
-  RemoveAssertCheck.cpp
   SsdmIntrinsicsArgumentsCheck.cpp
   SsdmIntrinsicsScopeCheck.cpp
   StreamInStructCheck.cpp

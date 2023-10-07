@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the stickier parts of the SymbolTableListTraits class,
@@ -20,6 +25,11 @@
 #include "llvm/IR/ValueSymbolTable.h"
 
 namespace llvm {
+
+/// Notify basic blocks when an instruction is inserted.
+template <typename ParentClass>
+inline void invalidateParentIListOrdering(ParentClass *Parent) {}
+template <> void invalidateParentIListOrdering(BasicBlock *BB);
 
 /// setSymTabObject - This is called when (f.e.) the parent of a basic block
 /// changes.  This requires us to remove all the instruction symtab entries from
@@ -65,6 +75,7 @@ void SymbolTableListTraits<ValueSubClass>::addNodeToList(ValueSubClass *V) {
   assert(!V->getParent() && "Value already in a container!!");
   ItemParentClass *Owner = getListOwner();
   V->setParent(Owner);
+  invalidateParentIListOrdering(Owner);
   if (V->hasName())
     if (ValueSymbolTable *ST = getSymTab(Owner))
       ST->reinsertValue(V);
@@ -82,9 +93,15 @@ void SymbolTableListTraits<ValueSubClass>::removeNodeFromList(
 template <typename ValueSubClass>
 void SymbolTableListTraits<ValueSubClass>::transferNodesFromList(
     SymbolTableListTraits &L2, iterator first, iterator last) {
-  // We only have to do work here if transferring instructions between BBs
-  ItemParentClass *NewIP = getListOwner(), *OldIP = L2.getListOwner();
-  assert(NewIP != OldIP && "Expected different list owners");
+  // Transfering nodes, even within the same BB, invalidates the ordering. The
+  // list that we removed the nodes from still has a valid ordering.
+  ItemParentClass *NewIP = getListOwner();
+  invalidateParentIListOrdering(NewIP);
+
+  // Nothing else needs to be done if we're reording nodes within the same list.
+  ItemParentClass *OldIP = L2.getListOwner();
+  if (NewIP == OldIP)
+    return;
 
   // We only have to update symbol table entries if we are transferring the
   // instructions to a different symtab object...

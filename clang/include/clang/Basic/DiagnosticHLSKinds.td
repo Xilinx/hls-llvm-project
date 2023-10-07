@@ -1,6 +1,7 @@
 //==--- DiagnosticHLSKinds.td -----HLS related diagnostics ----------------===//
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -88,7 +89,7 @@ def warn_confilict_pragma_parameter : Warning<
   InGroup<InvalidXlxPragmas>;
 
 def err_performance_at_least_one_parameter_required : Error<
-  "performance pragma requires at least one of 'target_ti'|'target_tl'|'assume_ti'|'assume_tl' be specified"
+  "performance pragma requires at least one of 'target_ti'|'target_tl' to be specified"
 >;
 
 def err_resource_pragma_xpm_memory_option_conflict : Error<
@@ -216,18 +217,23 @@ def err_attribute_unexpected_value
 def warn_xlx_expr_not_ice : Warning<
   "expression is not an %select{integer|integral}0 constant expression">, 
   InGroup<IgnoredXlxPragmas>;
-def warn_xlx_loop_tripcount_ignored: Warning<
-  "%0, the pragma LOOP_TRIPCOUNT is ignored">, 
-  InGroup<IgnoredXlxPragmas>;
+
 
 def err_xlx_expr_not_ice : Error<
-  "unexpected, expression is not constant integer">;
+  "The expression must be a constant integer">;
+ 
+ def err_xlx_option_not_ice: Error< 
+ "The option '%0' in pragma '%1' must be an integral constant expression">; 
 
 def err_xlx_expr_not_dce : Error<
-  "unexpected, expression is not constant floating number">;
+  "The expression must be a constant floating number">;
 
 def warn_allocation_conflict: Warning<
   "ALLOCATION pragma conflicts with %0, and will be ignored">,
+  InGroup<IgnoredXlxPragmas>;
+
+def warn_xlx_loop_tripcount_ignored: Warning<
+  "%0, the pragma LOOP_TRIPCOUNT is ignored">, 
   InGroup<IgnoredXlxPragmas>;
 
 def err_xlx_attribute_invalid_option_and_because
@@ -345,6 +351,13 @@ def err_xlx_float2int_failed : Error<
 
 def warn_xlx_float2int_inexact: Warning<
   "Convert floating number into integer causes fractional truncation">;
+
+def err_xlx_set_directive_fail: Error< 
+  "%1" > ; 
+def err_xlx_pragma_if_cond_init_var: Error< 
+  "the init-statement is not expected in if-cond clause in the pramga"> ; 
+def err_xlx_pragma_if_cond_constexpr: Error< 
+  "if-cond clause is not 'constexpr' in the pragma "> ; 
 
 }
 

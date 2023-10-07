@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -100,6 +101,7 @@ public:
 
   Module *getModule() const { return GetInsertBlock()->getModule(); }
 
+  static Type *StripPadding(Type *T, const DataLayout &DL);
   Value *twoStepsBitCast(Value *V);
   Value *twoStepsBitCast(Value *V, Type *DstTy);
 
@@ -145,6 +147,10 @@ public:
 
   /// \brief Create Call to fpga.mux
   Value *CreateMux(Value *Cond, ArrayRef<Value *> Args, const Twine &Name = "");
+
+  /// \brief Create Call to fpga.sparse.mux
+  Value *CreateSparseMux(Value *Cond, ArrayRef<Value *> Args,
+                         const Twine &Name = "");
 
   Value *GatherElements(MutableArrayRef<Value *> Elts);
   Constant *GatherElements(MutableArrayRef<Constant *> Elts);
@@ -194,6 +200,11 @@ public:
   Value *CreatePIPOPopRelease(Value *Pipo);
   Value *CreatePIPOPushAcquire(Value *Pipo);
   Value *CreatePIPOPushRelease(Value *Pipo);
+
+  //===--------------------------------------------------------------------===//
+  // Shift Register intrinsics
+  Value *CreateShiftRegPeek(Value *ShiftReg, Value *Idx);
+  Value *CreateShiftRegShift(Value *ShiftReg, Value *In, Value *Pred = nullptr);
 
   //===--------------------------------------------------------------------===//
   /// Memory related
@@ -285,7 +296,8 @@ public:
   Value *CreateShiftRegLabelInst(Value *V, int32_t Dim = 0, int64_t BitSize = -1);
   Value *CreateStreamOfBlocksLabelInst(Value *V, int32_t Dim = 0, int64_t BitSize = -1);
   Value *CreateStreamPragmaInst(Value *V, int32_t Depth, int64_t BitSize = -1);
-  Value *CreatePipoPragmaInst(Value *V, int32_t Depth, int32_t Type, int64_t BitSize = -1);
+  Value *CreatePipoPragmaInst(Value *V, int32_t Depth, int32_t Type, int64_t BitSize = -1,
+                              StringRef Source = "");
   Value *CreateSAXIPragmaInst(Value *V, StringRef Bundle, uint64_t Offset,
                               bool HasRegister, StringRef SignalName, StringRef ClockName,
                               StringRef ImplName,

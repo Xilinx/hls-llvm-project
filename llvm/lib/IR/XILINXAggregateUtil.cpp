@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -69,7 +70,7 @@ uint64_t getAggregatedBitwidth(const DataLayout &DL, Type *Ty,
   case AggregateType::Byte:
     return getAggregatedBitwidthInByteLevel(DL, Ty);
   case AggregateType::NoCompact:
-    return DL.getTypeAllocSizeInBits(Ty);
+    return DL.getTypeSizeInBits(Ty);
   default:
     llvm_unreachable("Get aggregate bitwidth for NoSpec?!");
   }

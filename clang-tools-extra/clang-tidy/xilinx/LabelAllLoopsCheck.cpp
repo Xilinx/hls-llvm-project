@@ -1,4 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
+// (c) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -87,10 +88,10 @@ void LabelAllLoopsCheck::registerMatchers(MatchFinder *Finder) {
     auto noLabeledParent = unless(hasParent(attHasLabel));
     auto loop = anyOf(forStmt(), cxxForRangeStmt(), doStmt(), whileStmt());
 
-    // Label those loops that are not not already labeled and are not implicit loops
-    // created by the compiler.
-    auto unlabeledLoops = allOf(loop, noLabeledParent, 
-                                noImplicitLoop, noConstExpr);
+    // Label those loops that are not not already labeled and are not implicit
+    // loops created by the compiler.
+    auto unlabeledLoops =
+        allOf(loop, noLabeledParent, noImplicitLoop, noConstExpr);
 
     Finder->addMatcher(stmt(unlabeledLoops).bind("loop"), this);
 }

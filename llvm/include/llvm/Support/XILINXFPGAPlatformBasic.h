@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -723,6 +724,9 @@ private:
     std::map<std::string, MEMORY_TYPE> mMemTypeStr2Enum;
     std::map<MEMORY_IMPL, std::string> mMemImplEnum2Str;
     std::map<std::string, MEMORY_IMPL> mMemImplStr2Enum;
+
+    std::string mLibraryName;
+    bool isVersal();
 
     void checkEnumEncode();
 

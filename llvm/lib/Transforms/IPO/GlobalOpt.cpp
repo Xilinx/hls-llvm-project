@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -75,7 +76,6 @@
 #include <vector>
 
 using namespace llvm;
-
 #define DEBUG_TYPE "globalopt"
 
 STATISTIC(NumMarked    , "Number of globals marked constant");
@@ -94,6 +94,7 @@ STATISTIC(NumAliasesResolved, "Number of global aliases resolved");
 STATISTIC(NumAliasesRemoved, "Number of global aliases eliminated");
 STATISTIC(NumCXXDtorsRemoved, "Number of global C++ destructors removed");
 
+extern cl::opt<bool> HLS;
 /// Is this global variable possibly used by a leak checker as a root?  If so,
 /// we might not really want to eliminate the stores to it.
 static bool isLeakCheckerRoot(GlobalVariable *GV) {
@@ -2001,7 +2002,7 @@ static bool processInternalGlobal(
   }
   if (!GV->getInitializer()->getType()->isSingleValueType()) {
     const DataLayout &DL = GV->getParent()->getDataLayout();
-    if (SRAGlobal(GV, DL))
+    if (!HLS && SRAGlobal(GV, DL))
       return true;
   }
   if (GS.StoredType == GlobalStatus::StoredOnce && GS.StoredOnceValue) {

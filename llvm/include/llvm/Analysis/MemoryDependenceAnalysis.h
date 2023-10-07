@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -27,7 +28,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
-#include "llvm/Analysis/OrderedBasicBlock.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PassManager.h"
@@ -363,16 +363,11 @@ private:
   const TargetLibraryInfo &TLI;
   DominatorTree &DT;
   PredIteratorCache PredCache;
-  /// Used to check dominance for instructions in same basic block.
-  mutable DenseMap<const BasicBlock *, std::unique_ptr<OrderedBasicBlock>>
-      OrderedBB;
 public:
   MemoryDependenceResults(AliasAnalysis &AA, AssumptionCache &AC,
                           const TargetLibraryInfo &TLI,
                           DominatorTree &DT)
       : AA(AA), AC(AC), TLI(TLI), DT(DT) {}
-
-  OrderedBasicBlock* getOrderedBasicBlock(const BasicBlock *BB);
 
   /// Handle invalidation in the new PM.
   bool invalidate(Function &F, const PreservedAnalyses &PA,
@@ -485,10 +480,12 @@ public:
   /// Release memory in caches.
   void releaseMemory();
 
-private:
   MemDepResult getCallSiteDependencyFrom(CallSite C, bool isReadOnlyCall,
                                          BasicBlock::iterator ScanIt,
                                          BasicBlock *BB);
+
+private:
+
   bool getNonLocalPointerDepFromBB(Instruction *QueryInst,
                                    const PHITransAddr &Pointer,
                                    const MemoryLocation &Loc, bool isLoad,

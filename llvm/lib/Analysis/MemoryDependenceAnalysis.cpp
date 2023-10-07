@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -29,7 +30,6 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/MemoryLocation.h"
-#include "llvm/Analysis/OrderedBasicBlock.h"
 #include "llvm/Analysis/PHITransAddr.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -441,12 +441,6 @@ MemoryDependenceResults::getInvariantGroupPointerDependency(LoadInst *LI,
   return MemDepResult::getNonLocal();
 }
 
-OrderedBasicBlock* MemoryDependenceResults::getOrderedBasicBlock(const BasicBlock *BB) {
-  if (OrderedBB.count(BB) <= 0)
-    OrderedBB.insert({BB, make_unique<OrderedBasicBlock>(BB)});
-  return OrderedBB[BB].get();
-}
-
 MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
     const MemoryLocation &MemLoc, bool isLoad, BasicBlock::iterator ScanIt,
     BasicBlock *BB, Instruction *QueryInst, unsigned *Limit) {
@@ -497,12 +491,6 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
   }
 
   const DataLayout &DL = BB->getModule()->getDataLayout();
-
-  // Create a numbered basic block to lazily compute and cache instruction
-  // positions inside a BB. This is used to provide fast queries for relative
-  // position between two instructions in a BB and can be used by
-  // AliasAnalysis::callCapturesBefore.
-  OrderedBasicBlock *OBB = getOrderedBasicBlock(BB);
 
   // Return "true" if and only if the instruction I is either a non-simple
   // load or a non-simple store.
@@ -693,7 +681,7 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
     ModRefInfo MR = AA.getModRefInfo(Inst, MemLoc);
     // If necessary, perform additional analysis.
     if (isModAndRefSet(MR))
-      MR = AA.callCapturesBefore(Inst, MemLoc, &DT, OBB);
+      MR = AA.callCapturesBefore(Inst, MemLoc, &DT);
     switch (clearMust(MR)) {
     case ModRefInfo::NoModRef:
       // If the call has no effect on the queried pointer, just ignore it.
@@ -1663,8 +1651,6 @@ void MemoryDependenceResults::removeInstruction(Instruction *RemInst) {
 
   assert(!NonLocalDeps.count(RemInst) && "RemInst got reinserted?");
   DEBUG(verifyRemoved(RemInst));
-
-  OrderedBB.erase(RemInst->getParent());
 }
 
 /// Verify that the specified instruction does not occur in our internal data

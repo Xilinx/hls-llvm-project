@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Collect the sequence of machine instructions for a basic block.
@@ -129,8 +134,12 @@ void ilist_traits<MachineInstr>::transferNodesFromList(ilist_traits &FromList,
                                                        instr_iterator First,
                                                        instr_iterator Last) {
   assert(Parent->getParent() == FromList.Parent->getParent() &&
-        "MachineInstr parent mismatch!");
-  assert(this != &FromList && "Called without a real transfer...");
+         "cannot transfer MachineInstrs between MachineFunctions");
+
+  // If it's within the same BB, there's nothing to do.
+  if (this == &FromList)
+    return;
+
   assert(Parent != FromList.Parent && "Two lists have the same parent?");
 
   // If splicing between two blocks within the same function, just update the

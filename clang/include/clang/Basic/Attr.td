@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2939,6 +2940,14 @@ def XCLFlattenLoop : StmtAttr {
   let Args = [DefaultBoolArgument<"Enable", 1>];
 }
 
+def XlxFlattenLoop : StmtAttr {
+  let Spellings = [GNU<"xlx_flatten_loop">];
+  let LangOpts = [HLSExt];
+  let Documentation = [Undocumented];
+  let Args = [DefaultBoolArgument<"Enable", 1>];
+}
+
+
 def XlxMergeLoop : InheritableAttr {
   let Spellings = [GNU<"xlx_merge_loop">];
   let Subjects = SubjectList<[Function], ErrorDiag>;
@@ -3211,7 +3220,7 @@ def XCLRegionName : StmtAttr {
 }
 
 def FPGAResourceHint : InheritableAttr {
-  let Spellings = [XLXPragma<"fpga_resource_hint">];
+  let Spellings = [GNU<"fpga_resource_hint">];
   let LangOpts = [HLSExt];
   let Documentation = [Undocumented];
   let Args = [StringArgument<"Core">,
@@ -3375,7 +3384,7 @@ def XlxFuncInstantiate : Attr {
 }
 
 def XlxOccurrence : InheritableAttr {
-  let Spellings = [XLXPragma<"xlx_occurrence">];
+  let Spellings = [GNU<"xlx_occurrence">];
   let LangOpts = [HLSExt];
   let Documentation = [Undocumented];
   let Args = [ExprArgument<"Cycle", 1>];
@@ -3413,7 +3422,7 @@ def XlxResetIntrinsic: InheritableAttr{
 }
 
 def XCLLatency : InheritableAttr {
-  let Spellings = [XLXPragma<"xcl_latency">];
+  let Spellings = [GNU<"xcl_latency">];
   let Subjects = SubjectList<[Function], ErrorDiag>;
   let LangOpts = [HLSExt];
   let TemplateDependent = 1;
@@ -3736,6 +3745,26 @@ def FPGAMaxiWtBurstLen: InheritableAttr {
   let Documentation = [Undocumented];
   let Args = [ExprArgument<"WtBurstLen">];
   let TemplateDependent = 1;
+}
+
+def XlxCache: Attr { 
+  let Spellings = [GNU<"xlx_cache">];
+  let LangOpts = [HLSExt];
+  let TemplateDependent = 1;
+  let Documentation = [Undocumented];
+  let Args = [
+              ExprArgument<"Port">,
+              ExprArgument<"Lines">,
+              ExprArgument<"Depth">,
+              ExprArgument<"Ways">,
+              ExprArgument<"Users">,
+              EnumArgument<"Burst", "BurstMode",
+                           ["off", "on"/*, "adaptive"*/],
+                           ["Off", "On"/*, "Adaptive"*/], 1>,
+              EnumArgument<"Write", "WriteMode",
+                           ["write_back", "write_through"],
+                           ["Write_back", "Write_through"], 1>
+             ];
 }
 
 def CodeGenType : InheritableAttr {

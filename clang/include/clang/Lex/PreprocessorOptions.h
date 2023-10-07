@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_LEX_PREPROCESSOROPTIONS_H_
@@ -45,6 +50,8 @@ public:
   std::vector<std::pair<std::string, bool/*isUndef*/>> Macros;
   std::vector<std::string> Includes;
   std::vector<std::string> MacroIncludes;
+
+  std::string HLSDirectiveFileName; 
 
   /// \brief Initialize the preprocessor with the compiler and target specific
   /// predefines.
@@ -189,6 +196,9 @@ public:
     RetainRemappedFileBuffers = true;
     PrecompiledPreambleBytes.first = 0;
     PrecompiledPreambleBytes.second = false;
+  }
+  std::string getHLSDirectiveFileName(){ 
+    return HLSDirectiveFileName; 
   }
 };
 

@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1332,11 +1333,6 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
       attrs.push_back(attr);
     }
     LowerBindOpScope(Body, attrs);
-  
-    if(auto Method = dyn_cast<CXXMethodDecl>(FD)) {
-        if(Method->isVirtual()) 
-            CGM.getDiags().Report(FD->getLocStart(), diag::err_unsupported_virt_fuc);
-    }
   }
 
   // Initialize helper which will detect jumps which can cause invalid lifetime

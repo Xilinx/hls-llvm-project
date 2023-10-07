@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the clang::InitializePreprocessor function.
@@ -465,6 +470,17 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("__ASSEMBLER__");
   if (LangOpts.CUDA)
     Builder.defineMacro("__CUDA__");
+
+  if (LangOpts.HLSExt) {
+    if (LangOpts.Bool)
+      Builder.defineMacro("__HLS_BUILTIN_ASSUME__(Pred)",
+                          "({ bool _AssertPred = Pred; "
+                          "__builtin_assume(_AssertPred); })");
+    else
+      Builder.defineMacro("__HLS_BUILTIN_ASSUME__(Pred)",
+                          "({ int _AssertPred = Pred; "
+                          "__builtin_assume(_AssertPred); })");
+  }
 }
 
 /// Initialize the predefined C++ language feature test macros defined in

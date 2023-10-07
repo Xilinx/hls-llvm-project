@@ -1,4 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -21,6 +22,7 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_XILINX_DIRECTIVE2PRAGMA_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_XILINX_DIRECTIVE2PRAGMA_H
 
+#include "clang/Basic/HLSDirective.h"
 #include "../ClangTidy.h"
 #include "llvm/ADT/MapVector.h"
 
@@ -33,43 +35,6 @@ namespace xilinx {
 /// For the user-facing documentation see:
 /// http://clang.llvm.org/extra/clang-tidy/checks/xilinx-directive2pragma.html
 
-/// \brief structure for directive option list. These options are read from
-/// directive file.
-struct OptionHandle {
-  std::string Name;
-  std::string Value;
-  std::string PositionalBoolean; // optional
-
-  // check if option is variable/port
-  bool hasVariableorPort();
-  // check if variable/port is this pointer
-  bool isthisPointer();
-};
-struct PragmaHandle {
-  std::string Name;
-  std::vector<struct OptionHandle> OptionList; // optional
-};
-struct DirectiveHandle {
-  std::string FunctionName;
-  std::string Label;
-  std::string FunctionLabel;
-  std::string SourceFile;
-  std::string SourceLine;
-  std::string Id;
-  std::string Location; 
-  struct PragmaHandle PragmaItem; //  1 on 1 map
-  bool  FromSLX; 
-};
-typedef std::vector<struct DirectiveHandle> DirectiveLists;
-struct SrcDirectiveHandle {
-  std::string Name;
-  DirectiveLists DirectiveList; // optional
-};
-
-typedef std::vector<struct SrcDirectiveHandle> SrcDirectiveHandles;
-struct SrcHandle {
-  SrcDirectiveHandles SrcDirectiveList;
-};
 
 enum ValidVariableKind {
   VAR_None,
@@ -129,81 +94,81 @@ public:
   enum ErrorType Type;
   SourceLocation ErrLoc;
   enum PargmaVariableKind Kind;
-  std::string CoreName;
   FunctionDecl *FunDecl;
   LabelDecl *LabDecl;
   SourceLocation TmpLoc;
   ASTContext *Context;
   SourceManager *SM;
   VariableInfo *VarInfo;
-  StringRef Location; 
   StringRef FromSLX; 
 };
 
 class Directive2pragmaCheck : public ClangTidyCheck {
 public:
   Directive2pragmaCheck(StringRef Name, ClangTidyContext *Context)
-      : ClangTidyCheck(Name, Context),
-        FileName(Context->getOptions().ImportDirective) {}
+      : ClangTidyCheck(Name, Context) { 
+    if (auto fileOpt = Context->getOptions().ImportDirective ) { 
+      FileName = fileOpt.getValue(); 
+    }
+  }
   ast_matchers::DeclarationMatcher
   FieldMatchers(ast_matchers::MatchFinder *Finder, std::string Fieldname,
                 std::string Recordname);
   void AssignMatchers(ast_matchers::MatchFinder *Finder,
                       ast_matchers::DeclarationMatcher &vardecl,
-                      DirectiveHandle *Directived);
+                      DirectiveDesc *Directived);
   void registerMatchers(ast_matchers::MatchFinder *Finder) override;
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
   // void onStartOfTranslationUnit() override;
   void onEndOfTranslationUnit() override;
-  SrcDirectiveHandles &getSrcHandle() { return SrcDirective; };
   void eliminateDirective();
-  ValidVariableKind checkVariableValidity(DirectiveHandle *Directived,
+  ValidVariableKind checkVariableValidity(DirectiveDesc *Directived,
                                           const FunctionDecl *FuncDecl,
                                           std::string &Name);
-  void SetPragma(DirectiveHandle *Directived, SourceLocation Loc,
+  void SetPragma(DirectiveDesc *Directived, SourceLocation Loc,
                  SourceManager *SM, ASTContext *Context, StringRef Name,
                  bool before = false);
-  void SetPragmawithResource(DirectiveHandle *Directived, DirectiveInfo *DInfo);
+  void SetPragmawithResource(DirectiveDesc *Directived, DirectiveInfo *DInfo);
   void insertPragmaWithVar();
-  bool hasPragmaOptionCore(DirectiveHandle *Directived, std::string &core);
-  void collectVarInfo(DirectiveHandle *Directived, ASTContext *Context,
+  bool hasPragmaOptionCore(DirectiveDesc *Directived, std::string &core);
+  void collectVarInfo(DirectiveDesc *Directived, ASTContext *Context,
                       const NamedDecl *VariableDecl,
                       const DeclStmt *VariableDeclStmt, const Stmt *AssignStmt);
   bool hasInvalidDataMember(std::string OrignalName,
                             const VarDecl *VariableDecl,
-                            DirectiveHandle *Directived);
-  void collectFunctionInfo(DirectiveHandle *Directived, SourceManager *SM,
+                            DirectiveDesc *Directived);
+  void collectFunctionInfo(DirectiveDesc *Directived, SourceManager *SM,
                            ASTContext *Context,
                            const FunctionDecl *MatchedFunction,
                            const LabelDecl *MatchedLabel, SourceLocation &Loc);
   int insertPragmaintoFunction(
-      DirectiveHandle *Directived, const FunctionDecl *MatchedFunction,
+      DirectiveDesc *Directived, const FunctionDecl *MatchedFunction,
       const ast_matchers::MatchFinder::MatchResult &Result);
   int insertPragmaintoLabel(
-      DirectiveHandle *Directived, const LabelDecl *MatchedLabel,
+      DirectiveDesc *Directived, const LabelDecl *MatchedLabel,
       const ast_matchers::MatchFinder::MatchResult &Result);
   bool containGotoStmt(Stmt *stmt);
   Stmt *
   needInsertIntoBrace(Stmt *stmt,
                       const ast_matchers::MatchFinder::MatchResult &Result,
                       SourceLocation &Loc);
-  std::string dumpSetDirectiveLineNo(DirectiveHandle *Directived);
-  std::string dumpPragma(DirectiveHandle *Directived);
-  void setDiagMsg(DirectiveHandle *Pragma, DirectiveInfo *Info);
+  std::string dumpSetDirectiveLineNo(DirectiveDesc *Directived);
+  std::string dumpPragma(DirectiveDesc *Directived);
+  void setDiagMsg(DirectiveDesc *Pragma, DirectiveInfo *Info);
 
 private:
   bool tryReadDirectiveFile();
   std::error_code parseDirective(StringRef DirectiveBuff);
 
-  llvm::Optional<std::string> FileName;
-  SrcDirectiveHandles SrcDirective;
+  std::string FileName;
+  std::vector<DirectiveDesc> DirectiveList;
 
   // store default func unit;
   std::vector<std::string> ListCore;
   // DirectiveLists index  map to successful inserted pragma for each tu
-  llvm::MapVector<DirectiveHandle *, std::string> InsertedPragma;
+  llvm::MapVector<DirectiveDesc *, std::string> InsertedPragma;
   // for each directive collect info
-  llvm::MapVector<DirectiveHandle *, DirectiveInfo *> PragmaInfo;
+  llvm::MapVector<DirectiveDesc *, DirectiveInfo *> PragmaInfo;
 };
 
 } // namespace xilinx

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file contains routines that help determine which pointers are captured.
@@ -20,7 +25,6 @@ namespace llvm {
   class Use;
   class Instruction;
   class DominatorTree;
-  class OrderedBasicBlock;
 
   /// PointerMayBeCaptured - Return true if this pointer value may be captured
   /// by the enclosing function (which is required to exist).  This routine can
@@ -42,12 +46,10 @@ namespace llvm {
   /// it or not.  The boolean StoreCaptures specified whether storing the value
   /// (or part of it) into memory anywhere automatically counts as capturing it
   /// or not. Captures by the provided instruction are considered if the
-  /// final parameter is true. An ordered basic block in \p OBB could be used
-  /// to speed up capture-tracker queries.
+  /// final parameter is true.
   bool PointerMayBeCapturedBefore(const Value *V, bool ReturnCaptures,
                                   bool StoreCaptures, const Instruction *I,
-                                  DominatorTree *DT, bool IncludeI = false,
-                                  OrderedBasicBlock *OBB = nullptr);
+                                  DominatorTree *DT, bool IncludeI = false);
 
   /// This callback is used in conjunction with PointerMayBeCaptured. In
   /// addition to the interface here, you'll need to provide your own getters

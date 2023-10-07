@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -63,7 +63,9 @@ protected:
   unsigned IsLateParsed : 1;
   unsigned InheritEvenIfAlreadyPresent : 1;
 
+  // HLS specifial staff
   IdentifierInfo* pragmaContext; 
+  Expr* HLSIfCond; 
 
   void *operator new(size_t bytes) noexcept {
     llvm_unreachable("Attrs cannot be allocated with regular 'new'.");
@@ -87,7 +89,7 @@ protected:
        bool IsLateParsed)
     : Range(R), AttrKind(AK), SpellingListIndex(SpellingListIndex),
       Inherited(false), IsPackExpansion(false), Implicit(false),
-      IsLateParsed(IsLateParsed), InheritEvenIfAlreadyPresent(false), pragmaContext(nullptr) {}
+      IsLateParsed(IsLateParsed), InheritEvenIfAlreadyPresent(false), pragmaContext(nullptr), HLSIfCond(nullptr) {}
 
 public:
 
@@ -121,6 +123,14 @@ public:
 
   void setPragmaContext(IdentifierInfo *pragmaContext) { 
     this->pragmaContext = pragmaContext; 
+  }
+
+  Expr* getHLSIfCond() const{ 
+    return HLSIfCond; 
+  }
+
+  void setHLSIfCond( Expr* cond) { 
+    HLSIfCond = cond; 
   }
 
 

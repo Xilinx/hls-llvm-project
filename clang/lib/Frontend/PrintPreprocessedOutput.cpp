@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -20,19 +20,31 @@
 #include "clang/Frontend/Utils.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/PreprocessorOutputOptions.h"
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Pragma.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Lex/TokenConcatenation.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/YAMLTraits.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/FormatVariadic.h"
+#include "clang/Basic/HLSDirective.h"
+
+
 #include "clang/Basic/HLSPragmaPreprocessor.inc"
+#define DEBUG_TYPE "preprocess"
+
 #include <cstdio>
 using namespace clang;
 
@@ -81,6 +93,20 @@ static void PrintMacroDefinition(const IdentifierInfo &II, const MacroInfo &MI,
 //===----------------------------------------------------------------------===//
 // Preprocessed token printer
 //===----------------------------------------------------------------------===//
+//
+struct HLSDirective{ 
+  unsigned  directive_id; 
+  bool slx; 
+  std::string directive_source_file; 
+  unsigned directive_source_line; 
+  std::string filename; 
+  std::string insert_position; 
+  unsigned line; 
+  unsigned column; 
+  std::string pragma; 
+  bool success; 
+  HLSDirective() : success( false ){ } 
+}; 
 
 namespace {
 class PrintPPOutputPPCallbacks : public PPCallbacks {
@@ -88,6 +114,10 @@ class PrintPPOutputPPCallbacks : public PPCallbacks {
   SourceManager &SM;
   TokenConcatenation ConcatInfo;
 public:
+
+  std::vector<DirectiveDesc> DirectiveList ; // this is ugly 
+  std::vector<struct HLSDirective> HLSDirectives; 
+  SmallVector<int, 4>  WillInsertedDirectives; 
   raw_ostream &OS;
 private:
   unsigned CurLine;
@@ -185,6 +215,10 @@ public:
 
   void BeginModule(const Module *M);
   void EndModule(const Module *M);
+  void InitializeHLSDirectives( const std::string HLSDirectiveFileName); 
+  unsigned getCurLine() const { return CurLine ; }
+  StringRef getCurFilename() const { return CurFilename.str(); }
+  void FinalizeHLSDirectives(const std::string success_hls_diretive_ids); 
 };
 }  // end anonymous namespace
 
@@ -272,12 +306,16 @@ void PrintPPOutputPPCallbacks::FileChanged(SourceLocation Loc,
   if (UserLoc.isInvalid())
     return;
   
+  const char* NewFileName = UserLoc.getFilename(); 
+  
   unsigned NewLine = UserLoc.getLine();
 
   if (Reason == PPCallbacks::EnterFile) {
     SourceLocation IncludeLoc = UserLoc.getIncludeLoc();
     if (IncludeLoc.isValid())
       MoveToLine(IncludeLoc);
+
+
   } else if (Reason == PPCallbacks::SystemHeaderPragma) {
     // GCC emits the # directive for this directive on the line AFTER the
     // directive and emits a bunch of spaces that aren't needed. This is because
@@ -292,6 +330,18 @@ void PrintPPOutputPPCallbacks::FileChanged(SourceLocation Loc,
   CurFilename.clear();
   CurFilename += UserLoc.getFilename();
   FileType = NewFileType;
+
+  SmallString<128> CanonicalNameBuf(NewFileName); 
+  StringRef new_file_name = clang::make_canonical(CanonicalNameBuf);
+  int i = 0; 
+  WillInsertedDirectives.clear(); 
+  for ( i = 0; i < HLSDirectives.size(); i++ ) { 
+    HLSDirective &directive = HLSDirectives[i]; 
+    if (new_file_name.equals(directive.filename)) { 
+      DEBUG(llvm::dbgs() << "match the directive source file " << directive.filename << "\n";); 
+      WillInsertedDirectives.push_back(i); 
+    }
+  }
 
   if (DisableLineMarkers) {
     startNewLineIfNeeded(/*ShouldUpdateCurrentLine=*/false);
@@ -584,6 +634,7 @@ bool PrintPPOutputPPCallbacks::HandleFirstTokOnLine(Token &Tok) {
   if (!MoveToLine(Tok.getLocation()))
     return false;
 
+
   // Print out space characters so that the first token on a line is
   // indented for easy reading.
   unsigned ColNo = SM.getExpansionColumnNumber(Tok.getLocation());
@@ -633,6 +684,136 @@ void PrintPPOutputPPCallbacks::HandleNewlinesInToken(const char *TokStr,
   if (NumNewlines == 0) return;
 
   CurLine += NumNewlines;
+}
+
+
+
+void PrintPPOutputPPCallbacks::InitializeHLSDirectives( const std::string HLSDirectiveFileName)
+{
+  if (HLSDirectiveFileName.empty())
+    return ; 
+  bool isFile = false ; 
+  llvm::sys::fs::is_regular_file(Twine(HLSDirectiveFileName), isFile);
+  if (!isFile){ 
+    PP.getDiagnostics().Report( diag::err_xlx_set_directive_fail ) 
+      << " internal error, the json file generated by tcl 'set_directive' command is invalid file"; 
+    return ; 
+  }
+
+  // Skip empty files
+
+
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileContent =
+      llvm::MemoryBuffer::getFile(HLSDirectiveFileName);
+  if (std::error_code ret_error = fileContent.getError()) {
+    PP.getDiagnostics().Report( diag::err_xlx_set_directive_fail ) 
+      << " internal error, can not open the json file generated by tcl 'set_directive' command"; 
+    return ;
+  }
+  StringRef buffer = fileContent.get()->getBuffer(); 
+  
+  if (buffer.empty()) { 
+    return ; 
+  }
+
+
+  ParseDirectiveList( buffer, DirectiveList); 
+
+  for (int i = 0; i < DirectiveList.size(); i++) { 
+
+    HLSDirective directive; 
+    DirectiveDesc &handle = DirectiveList[i]; 
+    if (handle.InsertPosition.empty()) { 
+      continue; 
+    }
+
+    StringRef pos(handle.InsertPosition); 
+    SmallVector<StringRef, 3> subs; 
+    pos.split(subs, ":"); 
+    int line; 
+    int column; 
+    subs[1].getAsInteger(10, line); 
+    subs[2].getAsInteger(10, column); 
+    directive.filename  = subs[0]; 
+    directive.line = line; 
+    directive.column = column; 
+
+    SmallString<128> nameBuffer(directive.filename); 
+    StringRef nameStrRef = make_canonical( nameBuffer); 
+    directive.filename = nameStrRef.str(); 
+
+    SmallString<128> TargetCanonicalNameBuf(directive.filename);
+    directive.filename = clang::make_canonical(TargetCanonicalNameBuf).str();
+    //directive.line --; 
+
+    directive.directive_id = handle.Id; 
+    directive.slx = handle.FromSLX; 
+    directive.directive_source_file = handle.SourceFile; 
+    directive.directive_source_line = handle.SourceLine; 
+    directive.success = handle.success; 
+
+    std::string pragmaStr; 
+    if (handle.FromSLX ) { 
+      pragmaStr = "#pragma SLXDIRECTIVE ";
+
+    }
+    else { 
+      pragmaStr = "#pragma HLSDIRECTIVE ";
+    }
+    if (!handle.IfCond.empty()) { 
+      pragmaStr += "if( " + handle.IfCond + " ) "; 
+    }
+    pragmaStr += handle.PragmaItem.Name  + " " ; 
+    for ( int i = 0; i < handle.PragmaItem.OptionList.size(); i++ ) { 
+      OptionDesc &option = handle.PragmaItem.OptionList[i]; 
+      if (option.Value.empty()) { 
+        pragmaStr += option.Name + " "; 
+      }
+      else { 
+        pragmaStr += option.Name + "=" + option.Value + " "; 
+      }
+
+    }
+    
+    directive.pragma = pragmaStr; 
+    HLSDirectives.push_back(directive); 
+
+    DEBUG(llvm::dbgs() << "================= get directive ============\n"; ); 
+    DEBUG(llvm::dbgs() << directive.filename << "\n"; ); 
+    DEBUG(llvm::dbgs() << directive.line << "\n"; ); 
+    DEBUG(llvm::dbgs() << directive.column << "\n"; ); 
+    DEBUG(llvm::dbgs() << directive.pragma << "\n"; ); 
+
+  }
+}
+
+void PrintPPOutputPPCallbacks::FinalizeHLSDirectives( const std::string  HLSDirectiveFileName) 
+{
+
+  if (HLSDirectiveFileName.empty())
+    return ; 
+  bool isFile = false ; 
+  llvm::sys::fs::is_regular_file(Twine(HLSDirectiveFileName), isFile);
+  if (!isFile){ 
+    PP.getDiagnostics().Report( diag::err_xlx_set_directive_fail ) 
+      << " internal error, the json file generated by tcl 'set_directive' command is invalid file"; 
+    return ; 
+  }
+
+  // Skip empty files
+
+  std::error_code EC;
+  llvm::raw_fd_ostream os(HLSDirectiveFileName, EC, llvm::sys::fs::F_None); 
+
+  for( int i = 0; i < HLSDirectives.size(); i++) { 
+    for (int j = 0; j < DirectiveList.size(); j++) { 
+      if ( HLSDirectives[i].directive_id == DirectiveList[j].Id) { 
+        DirectiveList[j].success = HLSDirectives[i].success; 
+        break; 
+      }
+    }
+  }
+  DumpDirectiveList(os, DirectiveList); 
 }
 
 
@@ -745,6 +926,11 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
   Token PrevPrevTok, PrevTok;
   PrevPrevTok.startToken();
   PrevTok.startToken();
+  SmallVector<int, 4> directive_idxs; 
+  unsigned prevLine = 0; 
+
+  DEBUG(llvm::dbgs() << "--------------- start  preprocessor output dump ------------------\n";  ); 
+
   while (1) {
     if (Callbacks->hasEmittedDirectiveOnThisLine()) {
       Callbacks->startNewLineIfNeeded();
@@ -753,7 +939,7 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
 
     // If this token is at the start of a line, emit newlines if needed.
     if (Tok.isAtStartOfLine() && Callbacks->HandleFirstTokOnLine(Tok)) {
-      // done.
+      //done
     } else if (Tok.hasLeadingSpace() ||
                // If we haven't emitted a token on this line yet, PrevTok isn't
                // useful to look at and no concatenation could happen anyway.
@@ -762,6 +948,57 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
                 Callbacks->AvoidConcat(PrevPrevTok, PrevTok, Tok))) {
       OS << ' ';
     }
+
+
+    if (Tok.isAtStartOfLine()) { 
+      DEBUG(llvm::dbgs() << "check " << Callbacks->getCurFilename() << " at line: " << Callbacks->getCurLine() << "\n";  ); 
+      for( auto idx: directive_idxs) { 
+        DEBUG(llvm::dbgs() << "one left 'directive' that will be dump:  " ); 
+        HLSDirective *directive = &Callbacks->HLSDirectives[idx]; 
+        OS << "\n#  " << directive->directive_source_line << " \"" << directive->directive_source_file << "\" 1\n"; 
+        OS << directive->pragma << "\n"; 
+        OS << "#  " << Callbacks->getCurLine() << " \"" << Callbacks->getCurFilename() << "\" 2\n"; 
+        DEBUG(llvm::dbgs() << "finish one directive " << directive->pragma  << " at line: " << directive->line << "\n"; ); 
+        directive->success = true; 
+        // replace current 'idx' with last 'idx', and resize 
+      }
+      directive_idxs.clear();
+      if (!Callbacks->WillInsertedDirectives.empty()) { 
+        for( auto idx : Callbacks->WillInsertedDirectives) { 
+          if (Callbacks->HLSDirectives[idx].line == Callbacks->getCurLine()) { 
+            directive_idxs.push_back(idx); 
+            DEBUG(llvm::dbgs() << "be ready to insert pragma  at line " << Callbacks->getCurLine() << " : " << Callbacks->HLSDirectives[idx].pragma ); 
+          }
+        }
+      }
+    }
+
+
+    for( int i = 0; i < directive_idxs.size(); /*do nothing */ ) { 
+      int idx = directive_idxs[i]; 
+      HLSDirective *directive = &Callbacks->HLSDirectives[idx]; 
+      SourceLocation Loc = Tok.getLocation(); 
+      FullSourceLoc fullLoc = FullSourceLoc(Loc, PP.getSourceManager()); 
+      int column  = fullLoc.getExpansionColumnNumber(); 
+      if (column >= directive->column) { 
+        DEBUG(llvm::dbgs() << "will insert HLS directive " << directive->pragma << " into " << Callbacks->getCurFilename() << "\n"; ); 
+        OS << "\n# " << directive->directive_source_line << " \"" << directive->directive_source_file << "\" 1\n"; 
+        OS << directive->pragma << "\n"; 
+        OS << "# " << Callbacks->getCurLine() << " \"" << Callbacks->getCurFilename() << "\" 2\n"; 
+        // replace current 'idx' with last 'idx', and resize 
+        unsigned size = directive_idxs.size(); 
+        directive_idxs[i] = directive_idxs.back(); 
+        directive_idxs.resize(size -1); 
+        directive->success = true; 
+        DEBUG(llvm::dbgs() << "finish one directive " << directive->pragma  << " at line: " << directive->line << "\n"; ); 
+      }
+      else {
+        i++;
+      }
+    }
+
+
+
 
     if (DropComments && Tok.is(tok::comment)) {
       // Skip comments. Normally the preprocessor does not generate
@@ -875,6 +1112,7 @@ void clang::DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
     DoPrintMacros(PP, OS);
     return;
   }
+  std::string hls_directive_file_name = PP.getPreprocessorOpts().getHLSDirectiveFileName(); 
 
   // Inform the preprocessor whether we want it to retain comments or not, due
   // to -C or -CC.
@@ -883,6 +1121,8 @@ void clang::DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
   PrintPPOutputPPCallbacks *Callbacks = new PrintPPOutputPPCallbacks(
       PP, *OS, !Opts.ShowLineMarkers, Opts.ShowMacros,
       Opts.ShowIncludeDirectives, Opts.UseLineDirectives);
+
+  Callbacks->InitializeHLSDirectives(hls_directive_file_name); 
 
   // Expand macros in pragmas with -fms-extensions.  The assumption is that
   // the majority of pragmas in such a file will be Microsoft pragmas.
@@ -999,4 +1239,6 @@ void clang::DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
   for (auto &Entry : HLSPragmaHandlers) {
     PP.RemovePragmaHandler(Entry.first(), Entry.second.get());
   }
+  Callbacks->FinalizeHLSDirectives(hls_directive_file_name); 
 }
+

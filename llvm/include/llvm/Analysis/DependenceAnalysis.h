@@ -139,7 +139,7 @@ template <typename T> class ArrayRef;
     /// isLoopIndependent - Returns true if this is a loop-independent
     /// dependence.
     virtual bool isLoopIndependent() const { return true; }
-
+    
     /// isConfused - Returns true if this dependence is confused
     /// (the compiler understands nothing and makes worst-case
     /// assumptions).
@@ -156,6 +156,8 @@ template <typename T> class ArrayRef;
     /// getDirection - Returns the direction associated with a particular
     /// level.
     virtual unsigned getDirection(unsigned Level) const { return DVEntry::ALL; }
+
+    virtual void setDirection(unsigned Level, unsigned Dir) { }
 
     /// getDistance - Returns the distance (or NULL) associated with a
     /// particular level.
@@ -237,6 +239,8 @@ template <typename T> class ArrayRef;
     /// getDirection - Returns the direction associated with a particular
     /// level.
     unsigned getDirection(unsigned Level) const override;
+
+    void setDirection(unsigned Level, unsigned Dir) override;
 
     /// getDistance - Returns the distance (or NULL) associated with a
     /// particular level.

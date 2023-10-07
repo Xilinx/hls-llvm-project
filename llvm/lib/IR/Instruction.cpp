@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -101,6 +102,15 @@ void Instruction::moveBefore(BasicBlock &BB,
                              SymbolTableList<Instruction>::iterator I) {
   assert(I == BB.end() || I->getParent() == &BB);
   BB.getInstList().splice(I, getParent()->getInstList(), getIterator());
+}
+
+bool Instruction::comesBefore(const Instruction *Other) const {
+  assert(Parent && Other->Parent &&
+         "instructions without BB parents have no order");
+  assert(Parent == Other->Parent && "cross-BB instruction order comparison");
+  if (!Parent->isInstrOrderValid())
+    Parent->renumberInstructions();
+  return Order < Other->Order;
 }
 
 void Instruction::setHasNoUnsignedWrap(bool b) {

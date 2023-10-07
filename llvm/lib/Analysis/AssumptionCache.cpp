@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -196,6 +197,7 @@ void AssumptionCache::registerAssumption(CallInst *CI) {
   assert(&F == CI->getParent()->getParent() &&
          "Cannot register @llvm.assume call not in this function");
 
+#ifdef EXPENSIVE_CHECKS
   // We expect the number of assumptions to be small, so in an asserts build
   // check that we don't accumulate duplicates and that all assumptions point
   // to the same function.
@@ -211,6 +213,7 @@ void AssumptionCache::registerAssumption(CallInst *CI) {
     assert(AssumptionSet.insert(VH).second &&
            "Cache contains multiple copies of a call!");
   }
+#endif
 #endif
 
   updateAffectedValues(CI);

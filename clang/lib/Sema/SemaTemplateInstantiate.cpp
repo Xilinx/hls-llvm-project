@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
@@ -879,6 +880,14 @@ namespace {
 
       Attr * retAttr = instantiateTemplateAttribute(AT, SemaRef.getASTContext(), SemaRef,
                                           TemplateArgs); 
+      Expr *ifCond = getDerived().TransformExpr(AT->getHLSIfCond()).get();
+      if (ifCond != AT->getHLSIfCond()) { 
+        Sema::ConditionResult Cond = getDerived().TransformCondition(ifCond->getExprLoc(), 
+            nullptr,  ifCond, Sema::ConditionKind::ConstexprIf); 
+        ifCond = Cond.get().second; 
+
+        retAttr->setHLSIfCond(ifCond); 
+      }
       retAttr->setPragmaContext(AT->getPragmaContext()); 
       return retAttr; 
     }
@@ -1304,8 +1313,8 @@ TemplateInstantiator::TransformXCLLatencyAttr(const XCLLatencyAttr *A) {
   Sema &S = getSema();
   Expr *MinExpr = getDerived().TransformExpr(A->getMin()).get();
   Expr *MaxExpr = getDerived().TransformExpr(A->getMax()).get();
-
-  if (MinExpr == A->getMin() && MaxExpr == A->getMax())
+  Expr *ifCond = getDerived().TransformExpr(A->getHLSIfCond()).get();
+  if (MinExpr == A->getMin() && MaxExpr == A->getMax() && ifCond == A->getHLSIfCond())
     return A;
 
   if (getSema().CheckXCLLatencyExprs(MinExpr, MaxExpr, A->getLocation(),
@@ -1313,8 +1322,16 @@ TemplateInstantiator::TransformXCLLatencyAttr(const XCLLatencyAttr *A) {
     return A;
   }
 
-  return (::new (S.Context) XCLLatencyAttr(A->getRange(), S.Context, MinExpr,
+  XCLLatencyAttr *retAttr =  (::new (S.Context) XCLLatencyAttr(A->getRange(), S.Context, MinExpr,
                                            MaxExpr, A->getSpellingListIndex()));
+  if (ifCond != A->getHLSIfCond()) { 
+       Sema::ConditionResult Cond = getDerived().TransformCondition(ifCond->getExprLoc(), 
+           nullptr,  ifCond, Sema::ConditionKind::ConstexprIf); 
+       ifCond = Cond.get().second; 
+
+       retAttr->setHLSIfCond(ifCond); 
+  }
+  return retAttr; 
 }
 
 const OpenCLUnrollHintAttr *

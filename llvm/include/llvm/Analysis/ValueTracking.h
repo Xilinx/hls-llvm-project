@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2021 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -435,7 +436,8 @@ class Value;
   ConstantRange computeConstantRange(const Value *V,
                                      AssumptionCache *AC = nullptr,
                                      const Instruction *CtxI = nullptr,
-                                     unsigned Depth = 0);
+                                     unsigned Depth = 0,
+                                     const DominatorTree *DT = nullptr);
 
   /// Return true if this function can prove that the instruction I will
   /// always transfer execution to one of its successors (including the next

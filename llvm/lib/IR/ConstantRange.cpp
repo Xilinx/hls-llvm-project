@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -281,6 +282,7 @@ ConstantRange::makeGuaranteedNoWrapRegion(Instruction::BinaryOps BinOp,
                           APInt::getSignedMinValue(BitWidth) + SignedMin));
     }
     return Result;
+
   case Instruction::Mul: {
     if (NoWrapKind == (OBO::NoSignedWrap | OBO::NoUnsignedWrap)) {
       return SubsetIntersect(
@@ -338,6 +340,33 @@ ConstantRange::makeGuaranteedNoWrapRegion(Instruction::BinaryOps BinOp,
 
     return SubsetIntersect(makeSingleValueRegion(Other.getSignedMin()),
                            makeSingleValueRegion(Other.getSignedMax()));
+  }
+
+  case Instruction::Shl: {
+    // For given range of shift amounts, if we ignore all illegal shift amounts
+    // (that always produce poison), what shift amount range is left?
+    const bool Unsigned = NoWrapKind == OBO::NoUnsignedWrap;
+    ConstantRange ShAmt = Other.intersectWith(
+        ConstantRange(APInt(BitWidth, 0), APInt(BitWidth, BitWidth)));
+    auto V = ShAmt.getSingleElement();
+    if (ShAmt.isEmptySet() || (V && V->isNullValue())) {
+      // If the entire range of shift amounts is already poison-producing,
+      // then we can freely add more poison-producing flags ontop of that.
+      return ConstantRange(BitWidth, true);
+    }
+    // There are some legal shift amounts, we can compute conservatively-correct
+    // range of no-wrap inputs. Note that by now we have clamped the ShAmtUMax
+    // to be at most bitwidth-1, which results in most conservative range.
+    APInt ShAmtUMax = ShAmt.getUnsignedMax();
+    if (Unsigned)
+      return SubsetIntersect(
+          Result,
+          ConstantRange(APInt::getNullValue(BitWidth),
+                        APInt::getMaxValue(BitWidth).lshr(ShAmtUMax) + 1));
+    return SubsetIntersect(
+        Result,
+        ConstantRange(APInt::getSignedMinValue(BitWidth).ashr(ShAmtUMax),
+                      APInt::getSignedMaxValue(BitWidth).ashr(ShAmtUMax) + 1));
   }
   }
 }

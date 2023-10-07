@@ -1,4 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -38,7 +39,8 @@
 #include "clang/Basic/HLSDiagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
-
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/XILINXFPGAPlatformBasic.h"
 
 using namespace clang;
@@ -721,6 +723,24 @@ static Attr *handleXCLDataFlowAttr(Sema &S, Stmt *St, const AttributeList &A,
   return ::new (S.Context) XCLDataFlowAttr(A.getRange(), S.Context, Type,
                                            A.getAttributeSpellingListIndex());
 }
+static Attr *handleXlxFlattenLoopAttr(Sema &S, Stmt *St, const AttributeList &A,
+                                      SourceRange Range) {
+  if (A.getNumArgs() > 1) {
+    S.Diag(A.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << A.getName() << 1;
+    return nullptr;
+  }
+
+  llvm::Optional<int64_t> Off;
+  if (A.getNumArgs() == 1)
+    Off = ExtractInteger(S, A, 0, /*LB*/ 0, /*UB*/ 1);
+  // reverse Off for Enabled
+  uint32_t Enabled = Off.getValueOr(0) ? 0 : 1;
+
+  return ::new (S.Context) XlxFlattenLoopAttr(
+      A.getRange(), S.Context, Enabled, A.getAttributeSpellingListIndex());
+}
+
 
 static Attr *handleXCLFlattenLoopAttr(Sema &S, Stmt *St, const AttributeList &A,
                                       SourceRange Range) {
@@ -2040,6 +2060,95 @@ Attr* handleMemoryInterface(Sema &S, Stmt* stmt, const AttributeList &A, SourceR
   return new (S.Context) MemoryInterfaceAttr(A.getRange(), S.Context, port, mode, storage_type, latency, signal_name, depth, A.getAttributeSpellingListIndex());
 }
 
+static int64_t must_be_integer(Expr *expr, const char *option, Sema &S)
+{
+  llvm::APSInt Int(32);
+  if (S.HLSVerifyIntegerConstantExpression(expr, &Int).isInvalid()) {
+    S.Diag(expr->getLocStart(), diag::err_xlx_attribute_invalid_option_and_because)
+        << StringRef(llvm::formatv("'{0}'", option))
+        << StringRef(llvm::formatv("valid '{0}' must be integer", option));
+  }
+  return Int.getSExtValue();
+}
+
+static void must_be_power_of_2(Expr *expr, const char *option, Sema &S)
+{
+
+  int64_t n = must_be_integer(expr, option, S);
+  if (n == 0 || (n & ~(n-1)) != n) {
+    S.Diag(expr->getLocStart(), diag::err_xlx_attribute_invalid_option_and_because)
+        << StringRef(llvm::formatv("'{0}'", option))
+        << StringRef(llvm::formatv("valid '{0}' must be power of 2", option));
+  }
+}
+
+Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange range) 
+{
+  Expr *port = A.getArgAsExpr(0);
+
+  Expr *lines = nullptr;
+  if (A.getArg(1)) {
+    lines = A.getArgAsExpr(1);
+    must_be_power_of_2(lines, "lines", S);
+  }
+  else { 
+    lines = createIntegerLiteral(1, S, SourceLocation());
+  }
+
+  Expr *depth = nullptr;
+  if (A.getArg(2)) {
+    depth = A.getArgAsExpr(2);
+    must_be_power_of_2(depth, "depth", S);
+  }
+  else { 
+    depth = createIntegerLiteral(0, S, SourceLocation());
+  }
+
+  Expr *ways = nullptr;
+  if (A.getArg(3)) {
+    ways = A.getArgAsExpr(3);
+  }
+  else {
+    ways = createIntegerLiteral(1, S, SourceLocation());
+  }
+
+  Expr *users = nullptr;
+  if (A.getArg(4)) {
+    users = A.getArgAsExpr(4);
+  }
+  else {
+    users = createIntegerLiteral(1, S, SourceLocation());
+  }
+
+  XlxCacheAttr::BurstMode burst;
+  if (A.getArg(5)) {
+    auto id = A.getArgAsIdent(5);
+    if (!XlxCacheAttr::ConvertStrToBurstMode(id->Ident->getName(), burst)) {
+      S.Diag(id->Loc, diag::err_xlx_attribute_invalid_option_and_because)
+          <<"'burst'"
+          << "valid 'burst' value is [off, on]";
+//        << "valid 'burst' value is [off, on, adaptive]";
+    }
+  }
+  else {
+    XlxCacheAttr::ConvertStrToBurstMode("on", burst);
+  }
+
+  XlxCacheAttr::WriteMode write;
+  if (A.getArg(6)) {
+    auto id = A.getArgAsIdent(6);
+    if (!XlxCacheAttr::ConvertStrToWriteMode(id->Ident->getName(), write)) {
+      S.Diag(id->Loc, diag::err_xlx_attribute_invalid_option_and_because)
+          <<"'write_mode'"
+          << "valid 'write_mode' value is [write_back, write_through]";
+    }
+  }
+
+  return new (S.Context)XlxCacheAttr(A.getRange(), S.Context, 
+    port, lines, depth, ways, users, burst, write,
+    A.getAttributeSpellingListIndex());
+}
+
 Attr *handleXlxTask(Sema &S, Stmt*stmt, const AttributeList &A, SourceRange range)
 {
   return new (S.Context) XlxTaskAttr( A.getRange(), S.Context, A.getArgAsExpr(0), A.getAttributeSpellingListIndex());
@@ -2088,6 +2197,8 @@ Attr *Sema::ProcessXlxStmtAttributes(Stmt *S, const AttributeList &A,
     return handleXCLDataFlowAttr(*this, S, A, Range);
   case AttributeList::AT_XCLFlattenLoop:
     return handleXCLFlattenLoopAttr(*this, S, A, Range);
+  case AttributeList::AT_XlxFlattenLoop: 
+    return handleXlxFlattenLoopAttr(*this, S, A, Range); 
   case AttributeList::AT_XCLLoopTripCount:
     return handleXCLLoopTripCountAttr(*this, S, A, Range);
   case AttributeList::AT_XlxLoopTripCount:
@@ -2174,6 +2285,9 @@ Attr *Sema::ProcessXlxStmtAttributes(Stmt *S, const AttributeList &A,
 
   case AttributeList::AT_APScalarInterruptInterface: 
     return handleAPScalarInterruptInterface(*this, S, A, Range);
+
+  case AttributeList::AT_XlxCache:
+    return handleXlxCache(*this, S, A, Range);
 
   case AttributeList::AT_XlxTask:
     return handleXlxTask(*this, S, A, Range);
@@ -3320,6 +3434,54 @@ static const Type *getOriginalType(Expr *expr) {
   return type;
 }
 
+//get the loop statement 'for/while/do-while' , if there is no such loop statement return nullptr; 
+//becaues , hls support 'if-conditional pragma' , so if the pragma is in the if statment , return nullptr; 
+//then, caller can report warning message  and ignore the pragma 
+static Stmt * getParentLoopStmt(SmallVectorImpl<Stmt*> &parents) 
+{
+  //parents[0] is function body statement 
+  //parents.back() is the HLSAttributedStmt
+  //for/while /do loop statement is  between the 'function body stement' and 'HLSAttributedStmt' 
+  //so, we expect there are at leas 3 parent statements
+  //
+  if (parents.size() < 3 ) 
+    return nullptr; 
+
+  int parent_index = parents.size() - 2; 
+
+  //skip LabelStmt
+  while (isa<LabelStmt>(parents[parent_index])){ 
+    parent_index --; 
+  }
+  Stmt *parentStmt = parents[parent_index - 1] ; 
+
+  if(isa<ForStmt>(parentStmt) || isa<WhileStmt>(parentStmt) ||
+     isa<DoStmt>(parentStmt) || isa<CXXForRangeStmt>(parentStmt)) {
+    return parentStmt; 
+  }
+  else 
+    return nullptr; 
+}
+
+static bool isInFunctionBodyStmt(SmallVectorImpl<Stmt*> &parents) 
+{
+  //parents[0] is function body statement 
+  //parents.back() is the HLSAttributedStmt
+  //so, at least , there are parents.size is 2
+  if (parents.size() < 2 ) 
+    return false; 
+
+  int parent_index = parents.size() - 2; 
+  //skip LabelStmt
+  while (isa<LabelStmt>(parents[parent_index])){ 
+    parent_index --; 
+  }
+  if (parent_index == 0) 
+    return true; 
+  else 
+    return false; 
+}
+
 static Stmt *hoistXlxAttrs(
     SmallVector<Stmt *, 8> &parents,
     llvm::DenseMap<Stmt *, SmallVector<const Attr *, 4>> &hoistedAttrs,
@@ -3389,31 +3551,18 @@ static Stmt *hoistXlxAttrs(
           hoistedAttrs[parents[parent_size - off]].push_back(attr);
         }
       } else if (isa<XlxPipelineAttr>(attr)) {
-        Stmt *parent_1 = parents[parent_size - 1];
-        // XlxPipeline apply in fuction body, if parent_2 is nullptr
-        Stmt *parent_2 = nullptr;
-        if (parent_size >= 2) {
-          parent_2 = parents[parent_size - 2];
-        }
-
-        if (!isa<CompoundStmt>(parent_1)) {
-          llvm_unreachable(
-              "unexpected, HLS attributed stmt must be in CompoundStmt");
-        }
-
         const XlxPipelineAttr *pipeline_attr = dyn_cast<XlxPipelineAttr>(attr);
-        if (parent_2 && (isa<ForStmt>(parent_2) || isa<WhileStmt>(parent_2) ||
-                         isa<DoStmt>(parent_2)|| isa<CXXForRangeStmt>(parent_2))) {
+        Stmt *loop_stmt = getParentLoopStmt(parents); 
+        bool isInFunctionBody = false; 
+        if (!loop_stmt ) { 
+          if (isInFunctionBodyStmt(parents)) { 
+            isInFunctionBody = true; 
+          }
+        }
+        if (loop_stmt ) { 
           // hoist  pipeline to loop
-          hoistedAttrs[parent_2].push_back(attr);
-        } else if (parent_2) {
-          // parent_2 is not do/while/for stmt, it is not valid
-          Diags.Report(attr->getRange().getBegin(),
-                       diag::warn_xlx_attr_wrong_stmt_target)
-              << "pipeline "
-              << "for/while/do" << FixItHint::CreateRemoval(attr->getRange());
-          // during emit stmt,  stmt's XlxPiepline would be ignored
-        } else if (!parent_2) {
+          hoistedAttrs[loop_stmt].push_back(attr);
+        } else if (isInFunctionBody) {
           // llvm::dbgs() << "hoist pipeline attr to function decl\n";
           // hoistedAttrs[nullptr] meanse , the attribute will hoisted to
           // function decl
@@ -3422,33 +3571,37 @@ static Stmt *hoistXlxAttrs(
           // action will be ignored
           if (pipeline_attr->getRewind())
             Diags.Report(attr->getLocation(),
-                         diag::warn_pragma_unsupported_action)
-                << "HLS Pipeline"
+                         diag::warn_pragma_limited_option)
+                << "loop pipeline"
                 << "rewind";
         } else {
-          llvm_unreachable("unexpected xlx_pipeline attribute , can not hoist");
+          // loop_stmt is not do/while/for stmt, it is not valid
+          Diags.Report(attr->getRange().getBegin(),
+                       diag::warn_xlx_attr_wrong_stmt_target)
+              << "pipeline"
+              << "for/while/do loop or function body" << FixItHint::CreateRemoval(attr->getRange());
+          // during emit stmt,  stmt's XlxPiepline would be ignored
         }
       } else if (isa<XCLDataFlowAttr>(attr)) {
         Stmt *parent_1 = parents[parent_size - 1];
-        // XCLDataflow apply in fuction body, if parent_2 is nullptr
-        Stmt *parent_2 = nullptr;
-        if (parent_size >= 2) {
-          parent_2 = parents[parent_size - 2];
+        // XCLDataflow apply in fuction body, if loop_stmt is nullptr
+        Stmt *loop_stmt = getParentLoopStmt(parents); 
+        bool isInFunctionBody = false; 
+        if (!loop_stmt ) { 
+          if (isInFunctionBodyStmt(parents)) { 
+            isInFunctionBody = true; 
+          }
         }
 
-        if (parent_2) {
-          if (isa<ForStmt>(parent_2)) {
-            assert(
-                isa<CompoundStmt>(parent_1) &&
-                "unexpected , data flow pragma doesn't locate in CompoundStmt");
-            hoistedAttrs[parent_2].push_back(attr);
-          } else {
-            Diags.Report(attr->getRange().getBegin(),
-                         diag::warn_xcl_dataflow_attr_wrong_target)
-                << FixItHint::CreateRemoval(attr->getRange());
-          }
-        } else if (!parent_2) {
+        if (loop_stmt && isa<ForStmt>(loop_stmt)) {
+            hoistedAttrs[loop_stmt].push_back(attr);
+        } else if (isInFunctionBody) {
           hoistedAttrs[nullptr].push_back(attr);
+        } else { 
+          Diags.Report(attr->getRange().getBegin(),
+                       diag::warn_xlx_attr_wrong_stmt_target)
+              << "dataflow"
+              << "'for' loop or function body" << FixItHint::CreateRemoval(attr->getRange());
         }
       } else if (isa<XlxReqdPipeDepthAttr>(attr)) {
         auto pipeDepth = cast<XlxReqdPipeDepthAttr>(attr);
@@ -3584,6 +3737,14 @@ static Stmt *hoistXlxAttrs(
           continue;
         }
         left.push_back(attr);
+      } else if (isa<XlxFlattenLoopAttr>(attr)) { 
+        Stmt * loopStmt = getParentLoopStmt(parents); 
+        if (loopStmt){
+          hoistedAttrs[loopStmt].push_back(attr);
+        } else { 
+          Diags.Report(attr->getRange().getBegin(), diag::warn_xlx_pragma_applied_in_wrong_scope)
+            << "loop_flatten" << 1;
+        }
       } else if (isa<XlxLoopTripCountAttr>(attr)) {
         // Check the semantic of the tripcount attribute.
         // If AvgExpr is nullptr, we will create the AvgExpr during the check.
@@ -3593,7 +3754,7 @@ static Stmt *hoistXlxAttrs(
         Expr *MaxExpr = trip_count->getMax();
         Expr *AvgExpr = trip_count->getAvg();
 
-        Stmt *parent_2 = parents[parent_size - 2];
+        Stmt *loopStmt = getParentLoopStmt(parents); 
 
         // during Xlxhoist, template
         if (!S.CheckXCLLoopTripCountExprs(MinExpr, MaxExpr, AvgExpr,
@@ -3602,34 +3763,22 @@ static Stmt *hoistXlxAttrs(
           Diags.Report(attr->getRange().getBegin(),
                        diag::warn_xlx_loop_tripcount_ignored)
               << "because option is invalid";
-        } else if (parent_2 &&
-                   (isa<ForStmt>(parent_2) || isa<WhileStmt>(parent_2) ||
-                    isa<DoStmt>(parent_2))) {
-          hoistedAttrs[parent_2].push_back(attr);
+        } 
+        
+        if (loopStmt){ 
+          hoistedAttrs[loopStmt].push_back(attr);
         } else {
-          Diags.Report(attr->getRange().getBegin(),
-                       diag::warn_xcl_loop_attr_wrong_target)
-              << "loop_tripcount" << FixItHint::CreateRemoval(attr->getRange());
+          Diags.Report(attr->getRange().getBegin(), diag::warn_xlx_pragma_applied_in_wrong_scope)
+              << "loop_tripcount" << 1; 
         }
       } else if (isa<XlxUnrollHintAttr>(attr)) {
         const XlxUnrollHintAttr *unroll_hint =
             dyn_cast<XlxUnrollHintAttr>(attr);
-        Stmt *parent_2 = nullptr;
-        if (parent_size > 2) {
-          parent_2 = parents[parent_size - 2];
-        } else {
-          Diags.Report(attr->getRange().getBegin(),
-                       diag::warn_xcl_loop_attr_wrong_target)
-              << "Unroll " << FixItHint::CreateRemoval(attr->getRange());
-          continue;
-        }
+        Stmt *loopStmt = getParentLoopStmt(parents); 
 
-        if (!isa<ForStmt>(parent_2) && !isa<WhileStmt>(parent_2) &&
-            !isa<DoStmt>(parent_2)) {
-          Diags.Report(attr->getRange().getBegin(),
-                       diag::warn_xcl_loop_attr_wrong_target)
-              << "Unroll " << FixItHint::CreateRemoval(attr->getRange());
-          continue;
+        if (!loopStmt ) { 
+          Diags.Report(attr->getRange().getBegin(), diag::warn_xlx_pragma_applied_in_wrong_scope)
+              << "unroll" << 1; 
         }
 
         if (!unroll_hint->getIsDefaultFactor()) {
@@ -3657,7 +3806,7 @@ static Stmt *hoistXlxAttrs(
           }
         }
 
-        hoistedAttrs[parent_2].push_back(attr);
+        hoistedAttrs[loopStmt].push_back(attr);
       } 
       else if (isa<XlxBindOpAttr>(attr)) {
         auto bindOp = cast<XlxBindOpAttr>(attr);
@@ -3695,11 +3844,11 @@ static Stmt *hoistXlxAttrs(
         */
         if (platform::PlatformBasic::FIFO_MEMORY <= impl_enum && impl_enum <= platform::PlatformBasic::FIFO_URAM) { 
           // FIFO core only work on hls::stream
-          bool IsStream = IsHLSStreamType(bindStorage->getVariable());
-          if (!IsStream) {
+          Expr* var = bindStorage->getVariable();
+          if (!IsHLSStreamType(var) && !IsStreamable(var)){ 
             S.Diag(bindStorage->getVariable()->getExprLoc(), diag::warn_implicit_hls_stream) 
                  << "bind_storage"
-                 << "hls::stream";
+                 << "hls::stream or array";
             continue;
           }
         }
@@ -3825,6 +3974,9 @@ static Stmt *hoistXlxAttrs(
           // it is performance on loop or region
           hoistedAttrs[parents[parent_size - Offset]].push_back(attr);
         }
+      }
+      else if(auto cache = dyn_cast<XlxCacheAttr>(attr)) {
+        left.push_back(attr);
       }
 
       else {

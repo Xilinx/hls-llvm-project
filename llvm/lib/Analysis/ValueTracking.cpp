@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3692,7 +3693,7 @@ ConstantRange llvm::computeConstantRangeIncludingKnownBits(
     const DominatorTree *DT, OptimizationRemarkEmitter *ORE) {
   // NOTE: Handle ptrtoint might change bitwidth
   ConstantRange CR = V->getType()->isIntOrIntVectorTy() ?
-      computeConstantRange(V, AC, safeCxtI(V, CxtI), Depth) :
+      computeConstantRange(V, AC, safeCxtI(V, CxtI), Depth, DT) :
       ConstantRange(BitWidth, /*isFullSet=*/true);
 
   // Split here to avoid paying the compile-time cost of calling both
@@ -5144,7 +5145,8 @@ static void setLimitsForBinOp(const BinaryOperator &BO, APInt &Lower,
 ConstantRange llvm::computeConstantRange(const Value *V,
                                          AssumptionCache *AC,
                                          const Instruction *CtxI,
-                                         unsigned Depth) {
+                                         unsigned Depth,
+                                         const DominatorTree *DT) {
   assert(V->getType()->isIntOrIntVectorTy() && "Expected integer instruction");
 
   if (Depth == MaxDepth)
@@ -5179,17 +5181,28 @@ ConstantRange llvm::computeConstantRange(const Value *V,
       assert(I->getCalledFunction()->getIntrinsicID() == Intrinsic::assume &&
              "must be an assume intrinsic");
 
-      if (!isValidAssumeForContext(I, CtxI, nullptr))
+      if (!isValidAssumeForContext(I, CtxI, DT))
         continue;
       Value *Arg = I->getArgOperand(0);
       ICmpInst *Cmp = dyn_cast<ICmpInst>(Arg);
       // Currently we just use information from comparisons.
-      if (!Cmp || Cmp->getOperand(0) != V)
+      if (!Cmp)
         continue;
-      ConstantRange RHS = computeConstantRange(Cmp->getOperand(1),
-                                               AC, I, Depth + 1);
+      
+      auto Pred = Cmp->getPredicate();
+      Value *RHSV = Cmp->getOperand(1);
+      if (Cmp->getOperand(0) != V) {
+        if (Cmp->getOperand(1) == V) {
+          RHSV = Cmp->getOperand(0);
+          Pred = CmpInst::getSwappedPredicate(Pred);
+        } else {
+          continue;
+        }
+      }
+
+      ConstantRange RHS = computeConstantRange(RHSV, AC, I, Depth + 1, DT);
       CR = CR.intersectWith(
-          ConstantRange::makeAllowedICmpRegion(Cmp->getPredicate(), RHS));
+          ConstantRange::makeAllowedICmpRegion(Pred, RHS));
     }
   }
 

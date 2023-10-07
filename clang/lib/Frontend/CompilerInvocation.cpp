@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2779,6 +2780,12 @@ static void ParsePreprocessorArgs(PreprocessorOptions &Opts, ArgList &Args,
   // "editor placeholder in source file" error in PP only mode.
   if (isStrictlyPreprocessorAction(Action))
     Opts.LexEditorPlaceholders = false;
+
+  if (Arg *A = Args.getLastArg(OPT_insert_hls_directive)) { 
+    StringRef name = A->getValue(); 
+    Opts.HLSDirectiveFileName = name.str(); 
+    A->claim(); 
+  }
 }
 
 static void ParsePreprocessorOutputArgs(PreprocessorOutputOptions &Opts,

@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -380,6 +381,7 @@ Retry:
   case tok::annot_pragma_XlxHLS_old:
   case tok::annot_pragma_XlxHLS_directive: 
   case tok::annot_pragma_XlxSLX_directive:  {
+    SourceLocation LocStart = PP.getCurPragmaIntroducerLoc(); 
     //TODO, should we support __attribute__(( ...)) { #pragma HLS .... 
     //currently, we don't support it, error out directly
     ProhibitAttributes(Attrs);
@@ -393,8 +395,10 @@ Retry:
     //will be bind with the HLS attribute
     if (!getCurScope()->getDependencePragmasRef().empty()) {
         Attrs.addAll(getCurScope()->getDependencePragmas());
+        Attrs.Range  = SourceRange(LocStart, Tok.getLocation()); 
+       // getCurScope()->getDependencePragmas()->getRange(); 
         getCurScope()->getDependencePragmasRef().clear();
-        return Actions.ActOnNullStmt(Tok.getLocation());
+        return Actions.ActOnNullStmt(LocStart);
     }
     else { 
         return StmtEmpty();
@@ -1136,6 +1140,53 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
                                    isStmtExpr);
 }
 
+bool Parser::ParseHLSIfCond(StmtResult *InitStmt,
+                            Sema::ConditionResult &Cond,
+                            SourceLocation Loc)
+{
+  BalancedDelimiterTracker T(*this, tok::l_paren);
+  T.consumeOpen();
+
+  if (getLangOpts().CPlusPlus) 
+    Cond = ParseCXXCondition(InitStmt, Loc, Sema::ConditionKind::ConstexprIf);
+  else {
+    ExprResult CondExpr = ParseExpression();
+
+    // If required, convert to a boolean value.
+    if (CondExpr.isInvalid())
+      Cond = Sema::ConditionError();
+    else{ 
+      Cond = Actions.ActOnCondition(getCurScope(), Loc, CondExpr.get(), 
+                                      Sema::ConditionKind::Boolean); 
+    }
+  }
+
+  // If the parser was confused by the condition and we don't have a ')', try to
+  // recover by skipping ahead to a semi and bailing out.  If condexp is
+  // semantically invalid but we have well formed code, keep going.
+  if (Cond.isInvalid() && Tok.isNot(tok::r_paren)) {
+    SkipUntil(tok::semi);
+    // Skipping may have stopped if it found the containing ')'.  If so, we can
+    // continue parsing the if statement.
+    if (Tok.isNot(tok::r_paren))
+      return true;
+  }
+
+  // Otherwise the condition is valid or the rparen is present.
+  T.consumeClose();
+
+  // Check for extraneous ')'s to catch things like "if (foo())) {".  We know
+  // that all callers are looking for a statement after the condition, so ")"
+  // isn't valid.
+  while (Tok.is(tok::r_paren)) {
+    Diag(Tok, diag::err_extraneous_rparen_in_condition)
+      << FixItHint::CreateRemoval(Tok.getLocation());
+    ConsumeParen();
+  }
+  return false; 
+}
+
+
 /// ParseParenExprOrCondition:
 /// [C  ]     '(' expression ')'
 /// [C++]     '(' condition ')'
@@ -1155,7 +1206,7 @@ bool Parser::ParseParenExprOrCondition(StmtResult *InitStmt,
   BalancedDelimiterTracker T(*this, tok::l_paren);
   T.consumeOpen();
 
-  if (getLangOpts().CPlusPlus)
+  if (getLangOpts().CPlusPlus) 
     Cond = ParseCXXCondition(InitStmt, Loc, CK);
   else {
     ExprResult CondExpr = ParseExpression();

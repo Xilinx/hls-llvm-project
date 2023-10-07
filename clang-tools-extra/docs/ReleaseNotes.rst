@@ -109,11 +109,6 @@ Improvements to clang-tidy
 
   FIXME: add release notes.
 
-- New `xilinx-remove-assert
-  <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-remove-assert.html>`_ check
-
-  FIXME: add release notes.
-
 - New `xilinx-resource-pragma-transformer
   <http://clang.llvm.org/extra/clang-tidy/checks/xilinx-resource-pragma-transformer.html>`_ check
 

@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -39,7 +40,8 @@ void addLoopMetadata(Loop *L, StringRef Attr,
 /// \p Min: minimum number of loop iterations
 /// \p Max: maximum number of loop iterations
 /// \p Avg: average number of loop iterations
-void addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg, StringRef Source = "");
+void addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg, 
+                      StringRef Source = "", DILocation *DL = nullptr);
 
 /// Add dataflow metadata to Loop \p L.
 void addDataFlow(Loop *L, StringRef Source = "");
@@ -64,7 +66,7 @@ void addUnrollOff(Loop *L, StringRef Source = "");
 void addFlatten(Loop *L, StringRef Source = "infer-from-design", DILocation *Loc = nullptr);
 
 /// Add flatten off(force not to flatten) metadata to Loop \p L.
-void addFlattenOff(Loop *L);
+void addFlattenOff(Loop *L, StringRef Source = "infer-from-design", DILocation *Loc = nullptr);
 
 } // end namespace llvm
 

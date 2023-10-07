@@ -10,6 +10,7 @@ add_llvm_unittest(UtilsTests
   ASanStackFrameLayoutTest.cpp
   Cloning.cpp
   CodeExtractor.cpp
+  CodeMoverUtilsTest.cpp
   FunctionComparator.cpp
   IntegerDivision.cpp
   Local.cpp

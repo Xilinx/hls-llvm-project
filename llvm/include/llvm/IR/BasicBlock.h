@@ -5,11 +5,6 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
-// And has the following additional copyright:
-//
-// (C) Copyright 2016-2022 Xilinx, Inc.
-// All Rights Reserved.
-//
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declaration of the BasicBlock class.
@@ -384,7 +379,9 @@ public:
 
   /// \brief Returns true if there are any uses of this basic block other than
   /// direct branches, switches, etc. to it.
-  bool hasAddressTaken() const { return getSubclassDataFromValue() != 0; }
+  bool hasAddressTaken() const {
+    return getBasicBlockBits().BlockAddressRefCount != 0;
+  }
 
   /// \brief Update all phi nodes in this basic block's successors to refer to
   /// basic block \p New instead of to it.
@@ -411,16 +408,65 @@ public:
 
   Optional<uint64_t> getIrrLoopHeaderWeight() const;
 
+  bool isInstrOrderValid() const {
+    return getBasicBlockBits().InstrOrderValid;
+  }
+
+  /// Mark instruction ordering invalid. Done on every instruction insert.
+  void invalidateOrders() {
+    validateInstrOrdering();
+    BasicBlockBits Bits = getBasicBlockBits();
+    Bits.InstrOrderValid = false;
+    setBasicBlockBits(Bits);
+  }
+
+  /// Renumber instructions and mark the ordering as valid.
+  void renumberInstructions();
+
+  /// Asserts that instruction order numbers are marked invalid, or that they
+  /// are in ascending order. This is constant time if the ordering is invalid,
+  /// and linear in the number of instructions if the ordering is valid. Callers
+  /// should be careful not to call this in ways that make common operations
+  /// O(n^2). For example, it takes O(n) time to assign order numbers to
+  /// instructions, so the order should be validated no more than once after
+  /// each ordering to ensure that transforms have the same algorithmic
+  /// complexity when asserts are enabled as when they are disabled.
+  void validateInstrOrdering() const;
+
 private:
+  /// Bitfield to help interpret the bits in Value::SubclassData.
+  struct BasicBlockBits {
+    unsigned short BlockAddressRefCount : 15;
+    unsigned short InstrOrderValid : 1;
+  };
+
+  /// Safely reinterpret the subclass data bits to a more useful form.
+  BasicBlockBits getBasicBlockBits() const {
+    static_assert(sizeof(BasicBlockBits) == sizeof(unsigned short),
+                  "too many bits for Value::SubclassData");
+    unsigned short ValueData = getSubclassDataFromValue();
+    BasicBlockBits AsBits;
+    memcpy(&AsBits, &ValueData, sizeof(AsBits));
+    return AsBits;
+  }
+
+  /// Reinterpret our subclass bits and store them back into Value.
+  void setBasicBlockBits(BasicBlockBits AsBits) {
+    unsigned short D;
+    memcpy(&D, &AsBits, sizeof(D));
+    Value::setValueSubclassData(D);
+  }
+
   /// \brief Increment the internal refcount of the number of BlockAddresses
   /// referencing this BasicBlock by \p Amt.
   ///
   /// This is almost always 0, sometimes one possibly, but almost never 2, and
   /// inconceivably 3 or more.
   void AdjustBlockAddressRefCount(int Amt) {
-    setValueSubclassData(getSubclassDataFromValue()+Amt);
-    assert((int)(signed char)getSubclassDataFromValue() >= 0 &&
-           "Refcount wrap-around");
+    BasicBlockBits Bits = getBasicBlockBits();
+    Bits.BlockAddressRefCount += Amt;
+    setBasicBlockBits(Bits);
+    assert(Bits.BlockAddressRefCount < 255 && "Refcount wrap-around");
   }
 
   /// \brief Shadow Value::setValueSubclassData with a private forwarding method
@@ -432,6 +478,12 @@ private:
 
 // Create wrappers for C Binding types (see CBindingWrapping.h).
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(BasicBlock, LLVMBasicBlockRef)
+
+#ifdef NDEBUG
+/// In release builds, this is a no-op. For !NDEBUG builds, the checks are
+/// implemented in the .cpp file to avoid circular header deps.
+inline void BasicBlock::validateInstrOrdering() const {}
+#endif
 
 } // end namespace llvm
 

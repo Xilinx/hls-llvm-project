@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -28,21 +29,6 @@ using namespace clang::CodeGen;
 using namespace llvm;
 
 extern StringRef getPragmaContext(const clang::Attr* A) ;
-static int EvaluateInteger(clang::Expr *E, clang::ASTContext &Ctx, int Default = -1, CodeGenFunction *CGF = nullptr) {
-  if (!E)
-    return Default;
-
-  auto Res = E->isIntegerConstantExpr(Ctx);
-  if (!Res) {
-    if (CGF) {
-      CGF->CGM.getDiags().Report(E->getExprLoc(), clang::diag::warn_xlx_expr_not_ice) << CGF->getLangOpts().CPlusPlus;
-    }
-    return Default;
-  }
-
-  llvm::APSInt Value = E->EvaluateKnownConstInt(Ctx);
-  return Value.getSExtValue();
-}
 
 static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
                               const llvm::DebugLoc &StartLoc,
@@ -93,7 +79,6 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
 
   // Setting interleave.count
   if (Attrs.UnrollCount > 0) {
-    assert(Attrs.UnrollPragmaLoc && "invalid unroll pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.unroll.count"),
                         ConstantAsMetadata::get(ConstantInt::get(
                             Type::getInt32Ty(Ctx), Attrs.UnrollCount)),
@@ -104,7 +89,6 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
 
   // UnrollNoCheckCount = 0 means full unroll
   if (Attrs.UnrollWithoutCheck != -1) {
-    assert(Attrs.UnrollPragmaLoc && "invalid unroll pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.unroll.withoutcheck"),
                         ConstantAsMetadata::get(ConstantInt::get(
                             Type::getInt32Ty(Ctx), Attrs.UnrollWithoutCheck)),
@@ -124,7 +108,6 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
 
   // Setting unroll.full or unroll.disable
   if (Attrs.UnrollEnable != LoopAttributes::Unspecified) {
-    assert(Attrs.UnrollPragmaLoc && "invalid unroll pragma location");
     std::string Name;
     if (Attrs.UnrollEnable == LoopAttributes::Enable)
       Name = "llvm.loop.unroll.enable";
@@ -137,7 +120,6 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
   }
 
   if (Attrs.PipelineII) {
-    assert(Attrs.PipelinePragmaLoc && "invalid pipeline pragma location");
     Metadata *Vals[] = {
         MDString::get(Ctx, "llvm.loop.pipeline.enable"),
         ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Ctx),
@@ -166,7 +148,6 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
   }
 
   if (Attrs.FlattenEnable != LoopAttributes::Unspecified) {
-    assert(Attrs.FlattenPragmaLoc && "invalid flatten pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.flatten.enable"),
                         ConstantAsMetadata::get(ConstantInt::get(
                             Type::getInt1Ty(Ctx),
@@ -186,7 +167,6 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
   }
 
   if (Attrs.TripCount.size() == 3) {
-    assert(Attrs.TripCountPragmaLoc && "invalid tripcount pragma location");
     Metadata *Vals[] = {
         MDString::get(Ctx, "llvm.loop.tripcount"),
         ConstantAsMetadata::get(
@@ -202,7 +182,6 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
   }
 
   if (Attrs.IsDataflow) {
-    assert(Attrs.DataflowPragmaLoc && "invalid dataflow pragma location");
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.dataflow.enable"),
                         ConstantAsMetadata::get(ConstantInt::get(
                             Type::getInt1Ty(Ctx), Attrs.DisableDFPropagation)),
@@ -271,6 +250,18 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       continue;
     }
 
+    if (const Expr* ifCond = Attr->getHLSIfCond()) { 
+      if (!ifCond->isEvaluatable(Ctx)) {
+        CGF->CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
+      }
+      else { 
+        llvm::APSInt Value = ifCond->EvaluateKnownConstInt(Ctx);
+        if (Value.getZExtValue() == 0){ 
+          continue; 
+        }
+      }
+    }
+
     if (isa<XlxPipelineAttr>(Attr) && dyn_cast<XlxPipelineAttr>(Attr)->getRewind()) {
       setRewind();
     }
@@ -292,6 +283,7 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
         dyn_cast<XlxPipelineAttr>(Attr);
 
     const XCLFlattenLoopAttr *XCLFlatten = dyn_cast<XCLFlattenLoopAttr>(Attr);
+    const XlxFlattenLoopAttr *XlxFlatten = dyn_cast<XlxFlattenLoopAttr>(Attr); 
 
     const XCLLoopTripCountAttr *XCLTripCount =
         dyn_cast<XCLLoopTripCountAttr>(Attr);
@@ -307,7 +299,8 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
         dyn_cast<XlxDependenceAttr>( Attr );
 
     // Skip non loop hint attributes
-    if (!LH && !OpenCLHint && !XlxUnrollHint && !XCLPipeline && !XlxPipeline && !XCLFlatten && !XCLTripCount && 
+    if (!LH && !OpenCLHint && !XlxUnrollHint && !XCLPipeline && !XlxPipeline && 
+        !XCLFlatten && !XlxFlatten && !XCLTripCount && 
         !XlxTripCount && !XCLDataflow && !XCLLatency && !XLXDependence) {
       continue;
     }
@@ -327,7 +320,7 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
     // 1 - disable unroll.
     // other positive integer n - unroll by n.
     if (OpenCLHint) {
-      ValueInt = EvaluateInteger(OpenCLHint->getUnrollHint(), Ctx,
+      ValueInt = CGF->HLSEvaluateICE(OpenCLHint->getUnrollHint(), "factor", "unroll",
                                  /*Default*/ 0);
       bool ExitCheck = OpenCLHint->getSkipExitCheck();
       if (!ExitCheck) {
@@ -347,7 +340,7 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       setUnrollPragmaContext(getPragmaContext(Attr)); 
     } 
     else if (XlxUnrollHint) { 
-      ValueInt = EvaluateInteger(XlxUnrollHint->getFactor(), Ctx,
+      ValueInt = CGF->HLSEvaluateICE(XlxUnrollHint->getFactor(), "factor", "unroll", 
                                  /*Default*/ 0);
       bool ExitCheck = XlxUnrollHint->getSkipExitCheck();
       if (!ExitCheck) {
@@ -369,40 +362,45 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       setUnrollPragmaContext(getPragmaContext(Attr)); 
     }
     else if (XlxPipeline) { 
-      PipelineInt = EvaluateInteger(XlxPipeline->getII(), Ctx, /*Default*/ -1, CGF);
+      PipelineInt = CGF->HLSEvaluateICE(XlxPipeline->getII(), "II", "pipeline", /*Default*/ -1);
       PipelineStyleInt = XlxPipeline->getStyle();
       Option = LoopHintAttr::Pipeline;
       State = LoopHintAttr::Numeric;
       setPipelineDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
       setPipelinePragmaContext(getPragmaContext(Attr)); 
     } else if (XCLPipeline) {
-      PipelineInt = EvaluateInteger(XCLPipeline->getII(), Ctx, /*Default*/ -1, CGF);
+      PipelineInt = CGF->HLSEvaluateICE(XCLPipeline->getII(), "II" , "xcl_pipeline", /*Default*/ -1);
       Option = LoopHintAttr::Pipeline;
       State = LoopHintAttr::Numeric;
       setPipelineDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
       setPipelinePragmaContext(getPragmaContext(Attr)); 
-    } else if (XCLFlatten) {
+    } else if (XlxFlatten) {
+      Option = LoopHintAttr::Flatten;
+      State = XlxFlatten->getEnable() ? LoopHintAttr::Enable
+                                      : LoopHintAttr::Disable;
+      setFlattenDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setFlattenPragmaContext(getPragmaContext(Attr)); 
+    }else if (XCLFlatten) {
       Option = LoopHintAttr::Flatten;
       State = XCLFlatten->getEnable() ? LoopHintAttr::Enable
                                       : LoopHintAttr::Disable;
       setFlattenDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
       setFlattenPragmaContext(getPragmaContext(Attr)); 
     } else if (XCLTripCount) {
-      int Min = EvaluateInteger(XCLTripCount->getMin(), Ctx, /*Default*/ 0);
-      int Max = EvaluateInteger(XCLTripCount->getMax(), Ctx, /*Default*/ -1);
+      int Min = CGF->HLSEvaluateICE(XCLTripCount->getMin(), "min", "tripcount", /*Default*/ 0);
+      int Max = CGF->HLSEvaluateICE(XCLTripCount->getMax(), "max", "tripcount", /*Default*/ -1);
       // FIXME: potential integer overflow.
-      int Avg = EvaluateInteger(XCLTripCount->getAvg(), Ctx,
-                                /*Default*/ (Min + Max)/2);
+      int Avg = CGF->HLSEvaluateICE(XCLTripCount->getAvg(), "avg", "tripcount", /*Default*/ (Min + Max)/2);
       TripInt = {Min, Max, Avg};
       Option = LoopHintAttr::TripCount;
       State = LoopHintAttr::Numeric;
       setTripCountDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
       setTripCountPragmaContext(getPragmaContext(Attr)); 
     } else if (XlxTripCount) {
-      int Min = EvaluateInteger(XlxTripCount->getMin(), Ctx, /*Default*/ 0);
-      int Max = EvaluateInteger(XlxTripCount->getMax(), Ctx, /*Default*/ -1);
+      int Min = CGF->HLSEvaluateICE(XlxTripCount->getMin(), "min", "tripcount", /*Default*/ 0);
+      int Max = CGF->HLSEvaluateICE(XlxTripCount->getMax(), "max", "tripcount", /*Default*/ -1);
       // FIXME: potential integer overflow.
-      int Avg = EvaluateInteger(XlxTripCount->getAvg(), Ctx,
+      int Avg = CGF->HLSEvaluateICE(XlxTripCount->getAvg(), "avg", "tripcount",
                                 /*Default*/ (Min + Max)/2);
       TripInt = {Min, Max, Avg};
       Option = LoopHintAttr::TripCount;
@@ -410,8 +408,8 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       setTripCountDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
       setTripCountPragmaContext(getPragmaContext(Attr)); 
     } else if (XCLLatency) {
-      int Min = EvaluateInteger(XCLLatency->getMin(), Ctx, /*Default*/ 0);
-      int Max = EvaluateInteger(XCLLatency->getMax(), Ctx, /*Default*/ 65535);
+      int Min = CGF->HLSEvaluateICE(XCLLatency->getMin(), "min", "latency", /*Default*/ 0);
+      int Max = CGF->HLSEvaluateICE(XCLLatency->getMax(), "max", "latency", /*Default*/ 65535);
       MinMaxInt = {Min, Max};
       Option = LoopHintAttr::Latency;
       State = LoopHintAttr::Numeric;
@@ -422,12 +420,22 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       setDataflowDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
       setDataflowPragmaContext(getPragmaContext(Attr)); 
     } else if (LH) {
-      ValueInt = EvaluateInteger(LH->getValue(), Ctx, 1);
-
+      //for native "loop_hint" attribute 
+      //
+      if (!LH->getValue())
+        ValueInt = 1; 
+      else { 
+        auto Res = LH->getValue()->isIntegerConstantExpr(Ctx);
+        if (!Res) {
+          CGF->CGM.getDiags().Report(LH->getValue()->getExprLoc(), clang::diag::warn_xlx_expr_not_ice) << CGF->getLangOpts().CPlusPlus;
+          ValueInt = 1;
+        }
+        else { 
+          ValueInt = LH->getValue()->EvaluateKnownConstInt(Ctx).getZExtValue(); 
+        }
+      }
       Option = LH->getOption();
       State = LH->getState();
-      setUnrollDebugLoc(CGF->PragmaSourceLocToDebugLoc(LH->getLocation()));
-      setUnrollPragmaContext(getPragmaContext(Attr)); 
     }
 
     switch (State) {

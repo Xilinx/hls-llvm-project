@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3631,7 +3632,7 @@ public:
   //                           Expression Emission
   //===--------------------------------------------------------------------===//
 
-  int HLSEvaluateInteger(Expr *E, int Default = -1);
+  int HLSEvaluateICE(Expr *E, StringRef optionName, StringRef pragmaName, int Default = -1);
   //HLS special handle for Top argument , because HLS changed the TopArgument's Calling Conversion, 
   //argument of struct type is passed by values, this cause EmitLValue of argument generate new alloca 
   //and  finnaly generate GEP basing on alloca instead of  function argument , it cause reflow Pragma Process
@@ -3827,6 +3828,7 @@ public:
   void HoistXlxScope( Stmt *body);
   void EmitXlxDependenceIntrinsic(const XlxDependenceAttr *attr) ;
   void EmitXCLDependenceIntrinsic(const XCLDependenceAttr *attr) ;
+  void EmitXlxCacheIntrinsic(const XlxCacheAttr *cache);
 
   
 

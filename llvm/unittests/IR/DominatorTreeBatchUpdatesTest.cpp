@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include <random>
@@ -22,13 +27,9 @@ namespace {
 const auto CFGInsert = CFGBuilder::ActionKind::Insert;
 const auto CFGDelete = CFGBuilder::ActionKind::Delete;
 
-struct PostDomTree : PostDomTreeBase<BasicBlock> {
-  PostDomTree(Function &F) { recalculate(F); }
-};
-
 using DomUpdate = DominatorTree::UpdateType;
 static_assert(
-    std::is_same<DomUpdate, PostDomTree::UpdateType>::value,
+    std::is_same<DomUpdate, PostDominatorTree::UpdateType>::value,
     "Trees differing only in IsPostDom should have the same update types");
 using DomSNCA = DomTreeBuilder::SemiNCAInfo<DomTreeBuilder::BBDomTree>;
 using PostDomSNCA = DomTreeBuilder::SemiNCAInfo<DomTreeBuilder::BBPostDomTree>;
@@ -100,7 +101,7 @@ TEST(DominatorTreeBatchUpdates, SingleInsertion) {
 
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(DT.verify());
 
   BasicBlock *B = Builder.getOrAddBlock("B");
@@ -122,7 +123,7 @@ TEST(DominatorTreeBatchUpdates, SingleDeletion) {
 
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(DT.verify());
 
   BasicBlock *B = Builder.getOrAddBlock("B");
@@ -148,7 +149,7 @@ TEST(DominatorTreeBatchUpdates, FewInsertion) {
 
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   BasicBlock *B = Builder.getOrAddBlock("B");
@@ -181,7 +182,7 @@ TEST(DominatorTreeBatchUpdates, FewDeletions) {
 
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   auto Updates = ToDomUpdates(Builder, CFGUpdates);
@@ -212,7 +213,7 @@ TEST(DominatorTreeBatchUpdates, InsertDelete) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   while (B.applyUpdate())
@@ -245,7 +246,7 @@ TEST(DominatorTreeBatchUpdates, InsertDeleteExhaustive) {
     CFGBuilder B(Holder.F, Arcs, Updates);
     DominatorTree DT(*Holder.F);
     EXPECT_TRUE(DT.verify());
-    PostDomTree PDT(*Holder.F);
+    PostDominatorTree PDT(*Holder.F);
     EXPECT_TRUE(PDT.verify());
 
     while (B.applyUpdate())
@@ -278,7 +279,7 @@ TEST(DominatorTreeBatchUpdates, InfiniteLoop) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   while (B.applyUpdate())
@@ -311,7 +312,7 @@ TEST(DominatorTreeBatchUpdates, DeadBlocks) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   while (B.applyUpdate())
@@ -341,7 +342,7 @@ TEST(DominatorTreeBatchUpdates, InfiniteLoop2) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   while (B.applyUpdate())

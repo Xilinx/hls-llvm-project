@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1647,16 +1648,6 @@ static bool tryToReplaceWithConstantRange(SCCPSolver &Solver, Value *V) {
   return Changed;
 }
 
-static void updateFunctionAttribute(Value *V, Constant *C) {
-  if (!isa<Argument>(V))
-    return;
-  auto *F = cast<Argument>(V)->getParent();
-  if (!isa<GlobalVariable>(
-          GetUnderlyingObject(C, F->getParent()->getDataLayout())))
-    return;
-  F->removeFnAttr(Attribute::ArgMemOnly);
-}
-
 static bool tryToReplaceWithConstant(SCCPSolver &Solver, Value *V) {
   Constant *Const = nullptr;
   if (V->getType()->isStructTy()) {
@@ -1693,7 +1684,6 @@ static bool tryToReplaceWithConstant(SCCPSolver &Solver, Value *V) {
 
   // Replaces all of the uses of a variable with uses of the constant.
   V->replaceAllUsesWith(Const);
-  updateFunctionAttribute(V, Const);
   return true;
 }
 
@@ -1886,17 +1876,41 @@ static bool runIPSCCP(Module &M, const DataLayout &DL,
     if (F.isDeclaration())
       continue;
 
-    if (Solver.isBlockExecutable(&F.front()))
+    if (Solver.isBlockExecutable(&F.front())) {
+      bool ReplacedPointerArg = false;
       for (Function::arg_iterator AI = F.arg_begin(), E = F.arg_end(); AI != E;
            ++AI) {
         if (!AI->use_empty() && tryToReplaceWithConstant(Solver, &*AI)) {
           ++IPNumArgsElimed;
+          ReplacedPointerArg |= AI->getType()->isPointerTy();
           continue;
         }
 
-        if (!AI->use_empty() && tryToReplaceWithConstantRange(Solver, &*AI))
+        if (!AI->use_empty() && tryToReplaceWithConstantRange(Solver, &*AI)) {
+          ReplacedPointerArg |= AI->getType()->isPointerTy();
           ++IPNumRangeInfoUsed;
+        }
       }
+
+      // If we replaced an argument, the argmemonly and
+      // inaccessiblemem_or_argmemonly attributes do not hold any longer. Remove
+      // them from both the function and callsites.
+      if (ReplacedPointerArg) {
+        SmallVector<Attribute::AttrKind, 2> AttributesToRemove = {
+            Attribute::ArgMemOnly, Attribute::InaccessibleMemOrArgMemOnly};
+        for (auto Attr : AttributesToRemove)
+          F.removeFnAttr(Attr);
+
+        for (User *U : F.users()) {
+          CallSite CS(U);
+          if (!CS || CS.getCalledFunction() != &F)
+            continue;
+
+          for (auto Attr : AttributesToRemove)
+            CS.removeAttribute(AttributeList::FunctionIndex, Attr);
+        }
+      }
+    }
 
     for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB) {
       if (!Solver.isBlockExecutable(&*BB)) {

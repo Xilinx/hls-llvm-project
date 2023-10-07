@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -676,5 +677,21 @@ def XlxInterfacePragma: HLSPragma, ModesFormat {
 
 }
 
+// #pragma HLS cache port=<name>
+// lines=<int> size=<int> ways=<int> users=<int> \
+// burst=<on|adaptive|off> write_mode=<write_back|write_through>
 
-
+def XlxCachePragma : HLSPragma { 
+  let Name = "cache";
+  let Desc = "cache";
+  let Objects = [Parameter, Function];
+  let Options = [
+    ReqVariableExprOption<"port", "Specify the interface for which cache is used.">,
+    OptIntDefaultConstExprOption<"lines", 1, "Number of cache lines">,
+    OptIntDefaultConstExprOption<"depth", 0, "Line size in words">,
+    OptIntDefaultConstExprOption<"ways", 1, "cache ways", Hidden>,
+    OptIntDefaultConstExprOption<"users", 1, "Number of port users", Hidden>,
+    OptEnumExprOption<"burst", ["off", "on"/*, "adaptive"*/], "HLS burst mode", Hidden>,
+    OptEnumExprOption<"write_mode", ["write_back", "write_through"], "Write mode", Hidden>
+  ];
+}

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file defines classes to implement an intrusive doubly linked list class
@@ -66,9 +71,8 @@ template <typename NodeTy> struct ilist_callback_traits {
   void addNodeToList(NodeTy *) {}
   void removeNodeFromList(NodeTy *) {}
 
-  /// Callback before transferring nodes to this list.
-  ///
-  /// \pre \c this!=&OldList
+  /// Callback before transferring nodes to this list. The nodes may already be
+  /// in this same list.
   template <class Iterator>
   void transferNodesFromList(ilist_callback_traits &OldList, Iterator /*first*/,
                              Iterator /*last*/) {
@@ -300,8 +304,8 @@ private:
     if (position == last)
       return;
 
-    if (this != &L2) // Notify traits we moved the nodes...
-      this->transferNodesFromList(L2, first, last);
+    // Notify traits we moved the nodes...
+    this->transferNodesFromList(L2, first, last);
 
     base_list_type::splice(position, L2, first, last);
   }

@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -29,6 +30,7 @@
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/XILINXFunctionInfoUtils.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -938,25 +940,4 @@ LoopUnrollResult llvm::UnrollLoop(
                           : LoopUnrollResult::PartiallyUnrolled;
 }
 
-/// Given an llvm.loop loop id metadata node, returns the loop hint metadata
-/// node with the given name (for example, "llvm.loop.unroll.count"). If no
-/// such metadata node exists, then nullptr is returned.
-MDNode *llvm::GetUnrollMetadata(MDNode *LoopID, StringRef Name) {
-  // First operand should refer to the loop id itself.
-  assert(LoopID->getNumOperands() > 0 && "requires at least one operand");
-  assert(LoopID->getOperand(0) == LoopID && "invalid loop id");
 
-  for (unsigned i = 1, e = LoopID->getNumOperands(); i < e; ++i) {
-    MDNode *MD = dyn_cast<MDNode>(LoopID->getOperand(i));
-    if (!MD)
-      continue;
-
-    MDString *S = dyn_cast<MDString>(MD->getOperand(0));
-    if (!S)
-      continue;
-
-    if (Name.equals(S->getString()))
-      return MD;
-  }
-  return nullptr;
-}

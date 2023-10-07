@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file is used as the registry of passes that are part of the core LLVM
@@ -242,4 +247,5 @@ LOOP_PASS("unswitch", SimpleLoopUnswitchPass())
 LOOP_PASS("print-access-info", LoopAccessInfoPrinterPass(dbgs()))
 LOOP_PASS("print<ivusers>", IVUsersPrinterPass(dbgs()))
 LOOP_PASS("loop-predication", LoopPredicationPass())
+LOOP_PASS("tree-height-reduction", TreeHeightReductionPass())
 #undef LOOP_PASS

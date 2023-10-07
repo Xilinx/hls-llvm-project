@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -948,6 +949,9 @@ def warn_pragma_align_invalid_option : Warning<
 // - #pragma pack
 def warn_pragma_unsupported_action : Warning<
   "known but unsupported action '%1' for '#pragma %0' - ignored">,
+  InGroup<InvalidXlxPragmas>;
+def warn_pragma_limited_option : Warning<
+  "'%1' option is for '%0' only - ignored">,
   InGroup<InvalidXlxPragmas>;
 def warn_pragma_invalid_specific_action : Warning<
   "unknown action '%1' for '#pragma %0' - ignored">,

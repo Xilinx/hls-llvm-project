@@ -5,10 +5,16 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 
 #include <random>
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/IteratedDominanceFrontier.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -21,19 +27,15 @@
 
 using namespace llvm;
 
-struct PostDomTree : PostDomTreeBase<BasicBlock> {
-  PostDomTree(Function &F) { recalculate(F); }
-};
-
 /// Build the dominator tree for the function and run the Test.
 static void runWithDomTree(
     Module &M, StringRef FuncName,
-    function_ref<void(Function &F, DominatorTree *DT, PostDomTree *PDT)> Test) {
+    function_ref<void(Function &F, DominatorTree *DT, PostDominatorTree *PDT)> Test) {
   auto *F = M.getFunction(FuncName);
   ASSERT_NE(F, nullptr) << "Could not find " << FuncName;
   // Compute the dominator tree for the function.
   DominatorTree DT(*F);
-  PostDomTree PDT(*F);
+  PostDominatorTree PDT(*F);
   Test(*F, &DT, &PDT);
 }
 
@@ -43,6 +45,37 @@ static std::unique_ptr<Module> makeLLVMModule(LLVMContext &Context,
   std::unique_ptr<Module> M = parseAssemblyString(ModuleStr, Err, Context);
   assert(M && "Bad assembly?");
   return M;
+}
+
+TEST(DominatorTree, PHIs) {
+  StringRef ModuleString = R"(
+      define void @f() {
+      bb1:
+        br label %bb1
+      bb2:
+        %a = phi i32 [0, %bb1], [1, %bb2]
+        %b = phi i32 [2, %bb1], [%a, %bb2]
+        br label %bb2
+      };
+  )";
+
+  // Parse the module.
+  LLVMContext Context;
+  std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
+
+  runWithDomTree(*M, "f",
+                 [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
+                   auto FI = F.begin();
+                   ++FI;
+                   BasicBlock *BB2 = &*FI;
+                   auto BI = BB2->begin();
+                   Instruction *PhiA = &*BI++;
+                   Instruction *PhiB = &*BI;
+
+                   // Phis are thought to execute "instantly, together".
+                   EXPECT_TRUE(DT->dominates(PhiA, PhiB));
+                   EXPECT_TRUE(DT->dominates(PhiB, PhiA));
+                 });
 }
 
 TEST(DominatorTree, Unreachable) {
@@ -75,7 +108,7 @@ TEST(DominatorTree, Unreachable) {
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
-      *M, "f", [&](Function &F, DominatorTree *DT, PostDomTree *PDT) {
+      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
         Function::iterator FI = F.begin();
 
         BasicBlock *BB0 = &*FI++;
@@ -295,7 +328,7 @@ TEST(DominatorTree, NonUniqueEdges) {
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
-      *M, "f", [&](Function &F, DominatorTree *DT, PostDomTree *PDT) {
+      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
         Function::iterator FI = F.begin();
 
         BasicBlock *BB0 = &*FI++;
@@ -359,7 +392,7 @@ TEST(DominatorTree, NonUniqueEdges) {
 // unreachable    Exit
 //
 // Both the blocks that end with ret and with unreachable become trivial
-// PostDomTree roots, as they have no successors.
+// PostDominatorTree roots, as they have no successors.
 //
 TEST(DominatorTree, DeletingEdgesIntroducesUnreachables) {
   StringRef ModuleString =
@@ -379,7 +412,7 @@ TEST(DominatorTree, DeletingEdgesIntroducesUnreachables) {
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
-      *M, "f", [&](Function &F, DominatorTree *DT, PostDomTree *PDT) {
+      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
         Function::iterator FI = F.begin();
 
         FI++;
@@ -406,7 +439,7 @@ TEST(DominatorTree, DeletingEdgesIntroducesUnreachables) {
         DominatorTree NDT(F);
         EXPECT_EQ(DT->compare(NDT), 0);
 
-        PostDomTree NPDT(F);
+        PostDominatorTree NPDT(F);
         EXPECT_EQ(PDT->compare(NPDT), 0);
       });
 }
@@ -473,7 +506,7 @@ TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop) {
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
-      *M, "f", [&](Function &F, DominatorTree *DT, PostDomTree *PDT) {
+      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
         Function::iterator FI = F.begin();
 
         FI++;
@@ -498,7 +531,7 @@ TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop) {
         DominatorTree NDT(F);
         EXPECT_EQ(DT->compare(NDT), 0);
 
-        PostDomTree NPDT(F);
+        PostDominatorTree NPDT(F);
         EXPECT_EQ(PDT->compare(NPDT), 0);
       });
 }
@@ -562,7 +595,7 @@ TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop2) {
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
-      *M, "f", [&](Function &F, DominatorTree *DT, PostDomTree *PDT) {
+      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
         Function::iterator FI = F.begin();
 
         FI++;
@@ -593,8 +626,77 @@ TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop2) {
         DominatorTree NDT(F);
         EXPECT_EQ(DT->compare(NDT), 0);
 
-        PostDomTree NPDT(F);
+        PostDominatorTree NPDT(F);
         EXPECT_EQ(PDT->compare(NPDT), 0);
+      });
+}
+
+// Verify that the IDF returns blocks in a deterministic way.
+//
+// Test case:
+//
+//          CFG
+//
+//          (A)
+//          / \
+//         /   \
+//       (B)   (C)
+//        |\   /|
+//        |  X  |
+//        |/   \|
+//       (D)   (E)
+//
+// IDF for block B is {D, E}, and the order of blocks in this list is defined by
+// their 1) level in dom-tree and 2) DFSIn number if the level is the same.
+//
+TEST(DominatorTree, IDFDeterminismTest) {
+  StringRef ModuleString =
+      "define void @f() {\n"
+      "A:\n"
+      "  br i1 undef, label %B, label %C\n"
+      "B:\n"
+      "  br i1 undef, label %D, label %E\n"
+      "C:\n"
+      "  br i1 undef, label %D, label %E\n"
+      "D:\n"
+      "  ret void\n"
+      "E:\n"
+      "  ret void\n"
+      "}\n";
+
+  // Parse the module.
+  LLVMContext Context;
+  std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
+
+  runWithDomTree(
+      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
+        Function::iterator FI = F.begin();
+
+        BasicBlock *A = &*FI++;
+        BasicBlock *B = &*FI++;
+        BasicBlock *C = &*FI++;
+        BasicBlock *D = &*FI++;
+        BasicBlock *E = &*FI++;
+        (void)C;
+
+        DT->updateDFSNumbers();
+        ForwardIDFCalculator IDF(*DT);
+        SmallPtrSet<BasicBlock *, 1> DefBlocks;
+        DefBlocks.insert(B);
+        IDF.setDefiningBlocks(DefBlocks);
+
+        SmallVector<BasicBlock *, 32> IDFBlocks;
+        SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
+        IDF.resetLiveInBlocks();
+        IDF.calculate(IDFBlocks);
+
+
+        EXPECT_EQ(IDFBlocks.size(), 2UL);
+        EXPECT_EQ(DT->getNode(A)->getDFSNumIn(), 0UL);
+        EXPECT_EQ(IDFBlocks[0], D);
+        EXPECT_EQ(IDFBlocks[1], E);
+        EXPECT_TRUE(DT->getNode(IDFBlocks[0])->getDFSNumIn() <
+                    DT->getNode(IDFBlocks[1])->getDFSNumIn());
       });
 }
 
@@ -621,7 +723,7 @@ TEST(DominatorTree, InsertReachable) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate;
@@ -647,7 +749,7 @@ TEST(DominatorTree, InsertReachable2) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate = B.applyUpdate();
@@ -675,7 +777,7 @@ TEST(DominatorTree, InsertUnreachable) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate;
@@ -696,7 +798,7 @@ TEST(DominatorTree, InsertFromUnreachable) {
 
   std::vector<CFGBuilder::Update> Updates = {{Insert, {"3", "5"}}};
   CFGBuilder B(Holder.F, Arcs, Updates);
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate = B.applyUpdate();
@@ -724,7 +826,7 @@ TEST(DominatorTree, InsertMixed) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate;
@@ -754,7 +856,7 @@ TEST(DominatorTree, InsertPermut) {
     CFGBuilder B(Holder.F, Arcs, Updates);
     DominatorTree DT(*Holder.F);
     EXPECT_TRUE(DT.verify());
-    PostDomTree PDT(*Holder.F);
+    PostDominatorTree PDT(*Holder.F);
     EXPECT_TRUE(PDT.verify());
 
     Optional<CFGBuilder::Update> LastUpdate;
@@ -781,7 +883,7 @@ TEST(DominatorTree, DeleteReachable) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate;
@@ -807,7 +909,7 @@ TEST(DominatorTree, DeleteUnreachable) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate;
@@ -837,7 +939,7 @@ TEST(DominatorTree, InsertDelete) {
   CFGBuilder B(Holder.F, Arcs, Updates);
   DominatorTree DT(*Holder.F);
   EXPECT_TRUE(DT.verify());
-  PostDomTree PDT(*Holder.F);
+  PostDominatorTree PDT(*Holder.F);
   EXPECT_TRUE(PDT.verify());
 
   Optional<CFGBuilder::Update> LastUpdate;
@@ -875,7 +977,7 @@ TEST(DominatorTree, InsertDeleteExhaustive) {
     CFGBuilder B(Holder.F, Arcs, Updates);
     DominatorTree DT(*Holder.F);
     EXPECT_TRUE(DT.verify());
-    PostDomTree PDT(*Holder.F);
+    PostDominatorTree PDT(*Holder.F);
     EXPECT_TRUE(PDT.verify());
 
     Optional<CFGBuilder::Update> LastUpdate;

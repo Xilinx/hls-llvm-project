@@ -9,6 +9,7 @@ add_llvm_library(LLVMTransformUtils
   CloneFunction.cpp
   CloneModule.cpp
   CodeExtractor.cpp
+  CodeMoverUtils.cpp
   CtorUtils.cpp
   DemoteRegToStack.cpp
   EntryExitInstrumenter.cpp

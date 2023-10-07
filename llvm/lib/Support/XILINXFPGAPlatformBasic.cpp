@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -842,7 +843,9 @@ bool PlatformBasic::CoreBasic::isInitializable() const
                 getMemoryImpl() == PlatformBasic::MEMORY_IMPL_BRAM_ECC ||
                 getMemoryImpl() == PlatformBasic::MEMORY_IMPL_LUTRAM ||
                 getMemoryImpl() == PlatformBasic::MEMORY_IMPL_BLOCK ||
-                getMemoryImpl() == PlatformBasic::MEMORY_IMPL_DISTRIBUTE));
+                getMemoryImpl() == PlatformBasic::MEMORY_IMPL_DISTRIBUTE || 
+                (getMemoryImpl() == PlatformBasic::MEMORY_IMPL_URAM && PlatformBasic::getInstance()->isVersal()) || 
+                (getMemoryImpl() == PlatformBasic::MEMORY_IMPL_URAM_ECC && PlatformBasic::getInstance()->isVersal()) ));
 }
 
 // class PlatformBasic
@@ -1974,6 +1977,7 @@ void PlatformBasic::checkEnumEncode()
 bool PlatformBasic::load(const std::string& libraryName)
 {
     bool result = loadStrEnumConverter() && loadCoreBasic(libraryName) && loadAlias() && loadCoreBasicInCompleteRepository();
+    mLibraryName = libraryName;
     checkEnumEncode();
     return result;
 }
@@ -2244,6 +2248,11 @@ bool PlatformBasic::verifyMemImplIsSupported (MEMORY_IMPL memImpl) const
 bool PlatformBasic::hasSuccLoad() const
 {
     return !mCoreBasicMap.empty();
+}
+
+bool PlatformBasic::isVersal()
+{
+    return mLibraryName.find("versal") != std::string::npos;
 }
 
 } //< namespace platform

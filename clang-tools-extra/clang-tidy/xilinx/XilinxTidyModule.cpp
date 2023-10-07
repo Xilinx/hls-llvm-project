@@ -1,4 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -33,7 +34,6 @@
 #include "DumpOpenclkernelCheck.h"
 #include "LabelAllLoopsCheck.h"
 #include "LoopBraceBracketCheck.h"
-#include "RemoveAssertCheck.h"
 #include "SsdmIntrinsicsArgumentsCheck.h"
 #include "SsdmIntrinsicsScopeCheck.h"
 #include "StreamInStructCheck.h"
@@ -68,7 +68,6 @@ public:
         "xilinx-label-all-loops");
     CheckFactories.registerCheck<LoopBraceBracketCheck>(
         "xilinx-loop-brace-bracket");
-    CheckFactories.registerCheck<RemoveAssertCheck>("xilinx-remove-assert");
     CheckFactories.registerCheck<SsdmIntrinsicsArgumentsCheck>(
         "xilinx-ssdm-intrinsics-arguments");
     CheckFactories.registerCheck<SsdmIntrinsicsScopeCheck>(

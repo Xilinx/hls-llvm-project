@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -51,6 +52,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Path.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -619,6 +621,38 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
     // we're done.
     ++NumFastMacroExpanded;
     return true;
+  }
+
+  // check whether this is assert macro we need to do replace
+  const LangOptions &LangOpts = getLangOpts();
+  if (LangOpts.HLSExt) {
+    bool DoReplace = true;
+    if (IdentifierInfo *II = Identifier.getIdentifierInfo()) {
+      if (II->getName().equals("assert")) {
+        // 1. check the macro define in system header assert.h
+        SourceLocation Loc = SourceMgr.getSpellingLoc(MI->getDefinitionLoc());
+        if (Loc.isValid()) {
+          StringRef FileName =
+              llvm::sys::path::filename(SourceMgr.getFilename(Loc));
+          DoReplace &= SourceMgr.isInSystemHeader(Loc);
+        }
+
+        // 2. is function like macro with only one argument
+        DoReplace &= MI->isFunctionLike() && !MI->isVariadic() &&
+                     MI->getNumParams() == 1;
+
+        // 3. only do replace when defined __SYNTHESIS__ macro
+        DoReplace &= isMacroDefined("__SYNTHESIS__");
+
+        if (DoReplace) {
+          IdentifierInfo *II = getIdentifierInfo("__HLS_BUILTIN_ASSUME__");
+          assert(II && "Can not find hls builtin assume macro??");
+          if (MacroDefinition MD = getMacroDefinition(II)) {
+            MI = MD.getMacroInfo();
+          }
+        }
+      }
+    }
   }
 
   // Start expanding the macro.

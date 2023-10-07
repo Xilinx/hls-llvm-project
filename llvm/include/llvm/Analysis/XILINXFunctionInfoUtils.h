@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -28,6 +29,7 @@
 #define LLVM_ANALYSIS_XILINXFUNCTIONINFOUTILS_H
 
 #include "llvm/ADT/Optional.h"
+#include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Function.h"
@@ -46,6 +48,9 @@ bool isPipeline(const Function *F);
 
 /// Returns true if Function \p F is a function that must not be pipelined.
 bool isPipelineOff(const Function *F);
+
+/// drop pipeline
+bool dropPipeline(Function *F);
 
 /// Get target II for pipeline Function \p F. Retrun None if Function \p F is
 /// not a pipeline function.
@@ -68,6 +73,21 @@ bool isNoInline(const CallSite CS);
 
 /// Returns true if Function \p F is top function
 bool isTop(const Function *F);
+
+/// Returns true if Function \p F contains latency pragma
+bool hasFunctionLatency(const Function *F); 
+
+/// Returns true if Function \p F contains protocol pragma
+bool hasFunctionProtocol(const Function *F); 
+
+/// Returns true if Function \p F contains exprbalance pragma
+bool hasFunctionExpressBalance(const Function *F);
+
+/// Returns true if Function \p F contains mergeloop pragma
+bool hasFunctionLoopMerge(const Function *F);
+
+/// Returns true if Function \p F contains occurrence pragma
+bool hasFunctionOccurrence(const Function *F); 
 
 /// Returns Function \p Top 's name if it's a top function.
 Optional<const std::string> getTopFunctionName(const Function *Top);
@@ -129,6 +149,9 @@ inline DebugLoc getPreservePragmaLoc( Function * F)
   return getFuncPragmaLoc(F, "fpga_preserve");
 }
 
+MemDepResult getDependency(Instruction *QueryInst, Instruction *ScanPos,
+                           MemoryDependenceResults *MDR, AliasAnalysis *AA,
+                           TargetLibraryInfo *TLI);
 
 } // end namespace llvm
 

@@ -1,4 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -52,6 +53,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/XILINXFPGAPlatformBasic.h"
+#include "llvm/Support/XILINXSystemInfo.h"
 #include "clang/Basic/HLSDiagnostic.h"
 #include "clang/Basic/HLSPragmaParser.inc"
 #include <cstdlib>
@@ -384,6 +386,7 @@ class XlxPragmaArgParser {
   // currently example"interface::mode" pragma param will affect
   // the set of valid param values for other pragma params
   StringRef SubjectParam;
+  Expr* ifCond; 
   StringMap<ArgsUnion> ArgMap;
   StringMap<IdentifierLoc *> PresentedID;
 
@@ -398,8 +401,11 @@ public:
   IdentifierInfo *pragmaContext; 
 
   XlxPragmaArgParser(
-      Parser &P, Scope *CurScope, SubjectListTy &Subjects, IdentifierInfo* pragmaContext)
-      : P(P), PP(P.getPreprocessor()), pragmaContext(pragmaContext), SubjectList(Subjects), 
+      Parser &P, Scope *CurScope, SubjectListTy &Subjects, 
+      IdentifierInfo* pragmaContext, 
+      Expr* ifCond
+      )
+      : P(P), PP(P.getPreprocessor()), pragmaContext(pragmaContext), ifCond(ifCond),  SubjectList(Subjects), 
         ScopeAttrs(CurScope->getParsedHLSPragmasRef()),
         DependenceAttrs(CurScope->getDependencePragmasRef())
   { 
@@ -428,7 +434,10 @@ public:
     auto &Pool = ScopeAttrs.getPool();
     auto *A = Pool.create(II, PragmaRange, nullptr, PragmaLoc, Args.data(),
                           Args.size(), AttributeList::AS_GNU);
+    //is the pragma from 'ext'(external tool auto generating) or from 'user'
+    //this is used to mark the source of the pragma 
     A->setPragmaContext( pragmaContext); 
+    A->setHLSIfCond(ifCond); 
     A->setNext(List);
     return A;
   }
@@ -966,11 +975,6 @@ bool XlxPragmaArgParser::parse() {
   return true;
 }
 
-static SourceLocation FinishPragmaHLS(Parser &P) {
-  P.SkipUntil(tok::annot_pragma_XlxHLS_end, Parser::StopBeforeMatch);
-  // Consume tok::annot_pragma_XlxHLS_end terminator.
-  return P.ConsumeAnyToken();
-}
 
 static bool IsHLSStreamType(const Expr *VarExpr) {
   if (!VarExpr)
@@ -1067,11 +1071,13 @@ static bool HandleXlxPipelinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
       PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::error_pipeline_style_conflict)
           << "'enable_flush' option.";
     }
+#if 0
     if (PAP.presentedId("rewind") && StyleMode->Ident->getName().equals_lower("stp") == false) {
       // error out
       PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::error_pipeline_style_conflict)
           << "'rewind' option.";
     }
+#endif 
   }
 
   // following with use style ID instead
@@ -1154,18 +1160,13 @@ static bool HandleXlxUnrollPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 static bool HandleXlxFlattenPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                                    SourceLocation PragmaLoc) {
   auto *S = CurScope;
-  if (!IsHoistScope(S)) {
-    PAP.P.Diag(PragmaLoc, diag::warn_xlx_pragma_applied_in_wrong_scope)
-        << "loop_flatten" << 1;
-    return true;
-  }
 
   PAP.setPragmaOption("", false, {presentId("off", 1)}, PragmaLoc); 
   if (!PAP.parse())
     return false;
 
   auto FlattenOff = PAP["off"];
-  PAP.addAttribute("xcl_flatten_loop", FlattenOff);
+  PAP.addDependenceAttribute("xlx_flatten_loop", FlattenOff);
 
   return true;
 }
@@ -1191,11 +1192,6 @@ static bool HandleXlxMergePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 static bool HandleLoopTripCountPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                                       SourceLocation PragmaLoc) {
   auto *S = CurScope;
-  if (!IsHoistScope(S)) {
-    PAP.P.Diag(PragmaLoc, diag::warn_xlx_pragma_applied_in_wrong_scope)
-        << "loop_tripcount" << 1;
-    return false;
-  }
 
   PAP.setPragmaOption("", false,
 #ifdef TABLEGEN_HLS
@@ -2914,59 +2910,65 @@ static bool HandleInterfacePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     TypeMode = Sty.get<IdentifierLoc *>();
   }
 
-  IdentifierLoc Mode ;
+  IdentifierLoc *Mode = nullptr ;
   if (auto id = PAP.presentedId("m_axi")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("axis")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("s_axilite")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_memory")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("bram")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_none")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_fifo")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_hs")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_ack")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_vld")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_ovld")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_stable")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_bus")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_ctrl_none")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_ctrl_hs")) { 
-    Mode = *id;
+    Mode = id;
   }
   else if (auto id = PAP.presentedId("ap_ctrl_chain")) { 
-    Mode = *id;
+    Mode = id;
   }
-  else if (TypeMode) {
-    Mode = *TypeMode;
+
+  if (TypeMode && Mode) { 
+    SmallString<128> tmp; 
+    PAP.P.Diag(PragmaLoc, diag::err_xlx_attribute_invalid_option_and_because)
+      <<llvm::Twine(TypeMode->Ident->getName() + " and " +  Mode->Ident->getName()).toStringRef(tmp)
+      <<"can not support more than one interface modes in one pragma "; 
+    return false; 
   }
-  else {
+
+  if (!TypeMode && !Mode) { 
     //for "$pragma HLS  register port = return " 
     //or  "pramga HLS register port = xxx " 
     //we need warning and ignore , use need use "$pramga HLS Latency min = 1 max = 1"
@@ -2981,11 +2983,15 @@ static bool HandleInterfacePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     }
     return false;
   }
+
+  if(TypeMode) { 
+    Mode = TypeMode;
+  }
   bool ValidPragma = false;
-  ValidPragma = CheckInterfacePort(PAP.P, PAP.lookup("port").get<Expr*>(),  Mode);
+  ValidPragma = CheckInterfacePort(PAP.P, PAP.lookup("port").get<Expr*>(),  *Mode);
   if (!ValidPragma)
     return false;
-  return HandleInterfacePragmaWithPAP(PAP.P, CurScope, Mode, PragmaLoc, PAP);
+  return HandleInterfacePragmaWithPAP(PAP.P, CurScope, *Mode, PragmaLoc, PAP);
 }
 
 static bool HandleMAXIAliasPragma(XlxPragmaArgParser &PAP, Scope *CurScope, SourceLocation PragmaLoc) { 
@@ -3499,6 +3505,62 @@ static bool HandleXlxArrayStencilPragma(XlxPragmaArgParser &PAP, Scope *CurScope
   return true;
 }
 
+static bool HandleCachePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
+                              SourceLocation PragmaLoc) {
+  // FIXME cache pragma can only be applied in function scope
+  if (!CurScope->isFunctionScope()) {
+    PAP.P.Diag(PragmaLoc, diag::warn_xlx_pragma_applied_in_wrong_scope)
+        << "cache" << 0;
+    return false;
+  }
+
+  PAP.setPragmaOption("",  true,
+#ifdef  TABLEGEN_HLS 
+      PRAGMA_HLS_CACHE, 
+#else 
+      {reqVarRefExpr("port"),
+       optICEExpr("lines"), optICEExpr("depth"), optICEExpr("ways"),
+       optICEExpr("users"),
+       optEnum("burst", {"off", "on"/*, "adaptive"*/}),
+       optEnum("write_mode", {"write_back", "write_through"})},
+#endif
+       PragmaLoc);
+      
+  if (!PAP.parse()) { 
+    return false;
+  }
+
+  IdentifierLoc *burst;
+  if (auto b = PAP.lookup("burst")) {
+    burst = b.get<IdentifierLoc *>();
+  } else {
+    burst = PAP.createIdentLoc("on");
+  }
+
+  IdentifierLoc *write_mode;
+  if (auto w = PAP.lookup("write_mode")) {
+    write_mode = w.get<IdentifierLoc *>();
+  } else {
+    write_mode = PAP.createIdentLoc("write_back");
+  }
+
+  Expr *var_expr = PAP.lookup("port").get<Expr*>();
+  if (var_expr) {
+    SmallVector<Expr *, 4> subExprs;
+    getSubExprOfVariable(subExprs, var_expr, PAP.P);
+    for (auto port_ref : subExprs) {
+      ArgsUnion args[] = { port_ref, PAP.lookup("lines"), PAP.lookup("depth"),
+                           PAP.lookup("ways"), PAP.lookup("users"), 
+                          burst, write_mode
+                         };
+      PAP.addDependenceAttribute("xlx_cache", args);
+    }
+    return true;
+  } else {
+    return false;
+  }
+}
+
 static bool UnsupportPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                             SourceLocation PragmaLoc) {
   if (enableXilinxPragmaChecker()) {
@@ -3517,7 +3579,19 @@ static bool HandleUnknownPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 /// \brief Handle the annotation token produced for #pragma HLS|AP|AUTOPILOT ...
 void Parser::HandleXlxPragma() {
   getActions().EnterHLSParsing();
-  auto RAII = llvm::make_scope_exit([this]() { FinishPragmaHLS(*this); });
+  auto RAII = llvm::make_scope_exit([this]() {
+      // Ensure that we consume all tokens of the pragma, even when we exit early
+      // due to errors.
+      // Don't use SkipUntil because it has additional logic for braces etc.
+      while (!Tok.is(tok::eof)) {
+        if (Tok.is(tok::annot_pragma_XlxHLS_end)) {
+          ConsumeAnyToken();
+          break;
+        }
+        ConsumeAnyToken();
+      }
+    });
+
 
   assert((Tok.is(tok::annot_pragma_XlxHLS_directive) || 
       Tok.is(tok::annot_pragma_XlxHLS) || 
@@ -3545,6 +3619,32 @@ void Parser::HandleXlxPragma() {
     return;
   }
 
+
+  // Return when hit pragma end
+  if (Tok.is(tok::annot_pragma_XlxHLS_end))
+    return; 
+
+  // Do not fail on #pragma HLS inline
+  Expr *ifCond = nullptr; 
+  if (Tok.is(tok::kw_if)) { 
+    auto Name = Tok.getIdentifierInfo();
+    //consume 'if' keyworkd
+    auto IfLoc = ConsumeToken();
+    // Parse the condition.
+    StmtResult InitStmt;
+    Sema::ConditionResult Cond;
+    if (ParseHLSIfCond(&InitStmt, Cond, IfLoc)){ 
+
+      Diag(IfLoc, diag::err_xlx_pragma_if_cond_constexpr) ; 
+    }
+    else { 
+      ifCond = Cond.get().second; 
+      if (!InitStmt.isUnset()) { 
+        Diag(IfLoc, diag::err_xlx_pragma_if_cond_init_var) ; 
+      }
+    }
+  }
+
   // Do not fail if the pragma end right after the beginning
   if (Tok.is(tok::annot_pragma_XlxHLS_end))
     return;
@@ -3557,10 +3657,12 @@ void Parser::HandleXlxPragma() {
 
   if (!getLangOpts().HLSSLX && contextStr == "slx_directive") { 
     if (!MaybeName.Ident->getName().equals_lower("performance") && 
-        !MaybeName.Ident->getName().equals_lower("loop_tripcount")) { 
+        !MaybeName.Ident->getName().equals_lower("loop_tripcount") && 
+        !MaybeName.Ident->getName().equals_lower("dependence")) { 
       return ; 
     }
   }
+
 
   typedef bool (*Handler)(XlxPragmaArgParser & PAP, Scope * CurScope,
                           SourceLocation PragmaLoc);
@@ -3603,10 +3705,11 @@ void Parser::HandleXlxPragma() {
           .CaseLower("data_pack", HandleDataPackPragma)
           .CaseLower("array_stencil", HandleXlxArrayStencilPragma)
           .CaseLower("performance", HandlePerformancePragma)
+          .CaseLower("cache", HandleCachePragma)
           .Default(HandleUnknownPragma);
 
   SubjectListTy subjects; 
-  XlxPragmaArgParser PAP( *this, CurScope, subjects, annotation); 
+  XlxPragmaArgParser PAP( *this, CurScope, subjects, annotation, ifCond ); 
 
   SourceLocation startLoc = Tok.getLocation();
   const clang::FunctionDecl * FD = getActions().getCurFunctionDecl();
@@ -3622,10 +3725,14 @@ void Parser::HandleXlxPragma() {
     << "_XLX_SEP_ PragmaFunction=" << (FD ? FD->getNameAsString() : "")
     << "_XLX_SEP_ PragmaOptions=" << allOptions.str()
     << "_XLX_SEP_";
-    
-  Diag(PragmaLoc, diag::dump_xlx_pragma)  
-    << pragmaDetails.str();
 
+  FullSourceLoc fullLoc(PragmaLoc, getPreprocessor().getSourceManager()); 
+
+  if (!XilinxSystemInfo::isSystemHLSHeaderFile(fullLoc.getPresumedLoc().getFilename())) { 
+    Diag(PragmaLoc, diag::dump_xlx_pragma)  
+      << pragmaDetails.str();
+  }
+    
   getActions().ExitHLSParsing();
 
   // if don't consume left tokens in pramga decl, parser will automatically

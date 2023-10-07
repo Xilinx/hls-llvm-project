@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -190,16 +191,15 @@ static Constant *ConvertTo(Constant *C, Type *TargetTy) {
   return ConstantExpr::getBitCast(C, TargetTy);
 }
 
-/// Return the value that would be computed by a load from P after the stores
-/// reflected by 'memory' have been performed.  If we can't decide, return null.
-Constant *Evaluator::ComputeLoadResult(Constant *P) {
+static Constant *getGEPFromBitCastForStruct(Constant *P, const DataLayout &DL,
+                                            const TargetLibraryInfo *TLI) {
   Type *TargetTy = P->getType()->getPointerElementType();
-  if (auto *CE = dyn_cast<ConstantExpr>(P)) { 
+  if (auto *CE = dyn_cast<ConstantExpr>(P)) {
     if (CE->getOpcode() == Instruction::BitCast) {
       P = CE->getOperand(0);
-
       Type *NewTy = cast<PointerType>(P->getType())->getElementType();
 
+      bool BuildGEP = false;
       while (!canLosslesslyBitCast(TargetTy, NewTy, DL)) {
         if (StructType *STy = dyn_cast<StructType>(NewTy)) {
           NewTy = STy->getTypeAtIndex(0U);
@@ -211,13 +211,55 @@ Constant *Evaluator::ComputeLoadResult(Constant *P) {
           P = ConstantExpr::getGetElementPtr(nullptr, P, IdxList);
           if (auto *FoldedPtr = ConstantFoldConstant(P, DL, TLI))
             P = FoldedPtr;
+          BuildGEP = true;
         } else {
           return nullptr;
         }
       }
       assert(canLosslesslyBitCast(
-                 TargetTy, P->getType()->getPointerElementType(), DL) && 
+                 TargetTy, P->getType()->getPointerElementType(), DL) &&
              "Bad bitcast");
+      if (BuildGEP)
+        return P;
+    }
+  }
+  return nullptr;
+}
+
+/// Return the value that would be computed by a load from P after the stores
+/// reflected by 'memory' have been performed.  If we can't decide, return null.
+Constant *Evaluator::ComputeLoadResult(Constant *P) {
+  Type *TargetTy = P->getType()->getPointerElementType();
+  if (auto *CE = dyn_cast<ConstantExpr>(P)) { 
+    if (CE->getOpcode() == Instruction::BitCast) {
+      if (!CE->getOperand(0)->getType()->isPointerTy())
+        return nullptr;
+      Type *SrcTy = CE->getOperand(0)->getType()->getPointerElementType();
+      if (Constant *GEP = getGEPFromBitCastForStruct(P, DL, TLI)) {
+        P = GEP;
+      } else { 
+        if (SrcTy->isSingleValueType() && TargetTy->isSingleValueType()) {
+          Constant *Val = ComputeLoadResult(CE->getOperand(0));
+          if (Val) {
+            uint64_t SrcSize = DL.getTypeSizeInBits(SrcTy);
+            uint64_t TargetSize = DL.getTypeSizeInBits(TargetTy);
+            if (SrcSize == TargetSize) {
+              return ConstantExpr::getBitCast(Val, TargetTy);
+            } else if (SrcSize > TargetSize) {
+              if (!SrcTy->isIntegerTy()) {
+                Val = 
+                    ConstantExpr::getBitCast(
+                        Val, IntegerType::get(SrcTy->getContext(), SrcSize));
+              } 
+              Val = 
+                  ConstantExpr::getTrunc(
+                      Val, IntegerType::get(SrcTy->getContext(), TargetSize));
+              return ConstantExpr::getBitCast(Val, TargetTy);
+            }
+          }
+        }
+        return nullptr;
+      }
     }
   }
 
@@ -609,6 +651,24 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
         } else if (II->getIntrinsicID() == Intrinsic::ssa_copy) {
           DEBUG(dbgs() << "Propagate the source of ssa_copy intrinsic.\n");
           setVal(&*CurInst, getVal(II->getReturnedArgOperand()));
+          ++CurInst;
+          continue;
+        } else if (II->getIntrinsicID() == Intrinsic::fpga_ssa_keep) {
+          DEBUG(dbgs() << "Propagate the source of fpga_ssa_keep intrinsic.\n");
+          setVal(&*CurInst, getVal(II->getArgOperand(0)));
+          ++CurInst;
+          continue;
+        } else if (II->getIntrinsicID() == Intrinsic::fpga_type_annotate) {
+          DEBUG(dbgs() << "Skipping fpga type annotate intrinsic.\n");
+          ++CurInst;
+          continue;
+        } else if (II->getIntrinsicID() == Intrinsic::fpga_fence) {
+          DEBUG(dbgs() << "Skipping fpga fence intrinsic.\n");
+          ++CurInst;
+          continue;
+        } else if (II->getIntrinsicID() == Intrinsic::fpga_any) {
+          DEBUG(dbgs() << "Replacing fpga any intrinsic with 0.\n");
+          setVal(&*CurInst, ConstantInt::get(II->getType(), 0));
           ++CurInst;
           continue;
         } else if (!II->mayHaveSideEffects()) {

@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass promotes "by reference" arguments to be "by value" arguments.  In
@@ -49,6 +54,7 @@
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/XILINXFunctionInfoUtils.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -821,6 +827,18 @@ promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
   if (!F->hasLocalLinkage())
     return nullptr;
 
+  //HLS special
+  for(User *user: F->users()) { 
+    if (isa<CallInst>(user)) { 
+      CallInst *call = cast<CallInst>(user); 
+      Function * caller = call->getParent()->getParent(); 
+      if (isDataFlow(caller)){ 
+        return nullptr; 
+      }
+    }
+  }
+
+
   // Don't promote arguments for variadic functions. Adding, removing, or
   // changing non-pack parameters can change the classification of pack
   // parameters. Frontends encode that classification at the call site in the
@@ -962,6 +980,7 @@ PreservedAnalyses ArgumentPromotionPass::run(LazyCallGraph::SCC &C,
         assert(&F == &OldF && "Called with an unexpected function!");
         return FAM.getResult<AAManager>(F);
       };
+
 
       Function *NewF = promoteArguments(&OldF, AARGetter, MaxElements, None);
       if (!NewF)

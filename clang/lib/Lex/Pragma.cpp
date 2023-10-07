@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -135,6 +136,8 @@ void Preprocessor::HandlePragmaDirective(SourceLocation IntroducerLoc,
                                          PragmaIntroducerKind Introducer) {
   if (Callbacks)
     Callbacks->PragmaDirective(IntroducerLoc, Introducer);
+
+  CurPragmaIntroducerLoc = IntroducerLoc; 
 
   if (!PragmasEnabled)
     return;

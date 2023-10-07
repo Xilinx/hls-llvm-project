@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -309,6 +310,9 @@ class Preprocessor {
   /// \brief The source location of the currently-active
   /// \#pragma clang assume_nonnull begin.
   SourceLocation PragmaAssumeNonNullLoc;
+
+  /// \brief The source location of the current  #pragma introducer
+  SourceLocation CurPragmaIntroducerLoc; 
 
   /// \brief True if we hit the code-completion point.
   bool CodeCompletionReached = false;
@@ -1504,6 +1508,11 @@ public:
     PragmaAssumeNonNullLoc = Loc;
   }
 
+  /// \brief get current #pragma loc
+
+  SourceLocation getCurPragmaIntroducerLoc() const { 
+    return CurPragmaIntroducerLoc; 
+  }
   /// \brief Set the directory in which the main file should be considered
   /// to have been found, if it is not a real file.
   void setMainFileDir(const DirectoryEntry *Dir) {

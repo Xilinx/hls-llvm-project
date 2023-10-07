@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -73,14 +74,18 @@ class LoopTripCountMDInfo {
   uint64_t Min; // minimum number of loop iterations
   uint64_t Max; // maximum number of loop iterations
   uint64_t Avg; // average number of loop iterations
-
+  std::string Source;
+  DILocation *DL;
 public:
-  LoopTripCountMDInfo(uint64_t Min, uint64_t Max, uint64_t Avg)
-      : Min(Min), Max(Max), Avg(Avg) {}
+  LoopTripCountMDInfo(uint64_t Min, uint64_t Max, uint64_t Avg, 
+                      StringRef Source, DILocation *DL)
+      : Min(Min), Max(Max), Avg(Avg), Source(Source), DL(DL) {}
 
   uint64_t getMin() const { return Min; }
   uint64_t getMax() const { return Max; }
   uint64_t getAvg() const { return Avg; }
+  StringRef getSource() const { return Source; }
+  DILocation *getDILocation() const { return DL; }
 };
 
 /// Get loop trip count from HLS loop_tripcount pragma.
@@ -100,6 +105,8 @@ bool isPipelineRewind(const Loop *L);
 
 /// Returns true if Loop \p L is a loop that must not be pipelined.
 bool isPipelineOff(const Loop *L);
+/// Drop pipeline pragma if any
+bool dropPipeline(Loop *L);
 
 /// Get target II for pipeline Loop \p L. Retrun None if Loop \p L is not a
 /// pipeline loop.
@@ -151,6 +158,12 @@ uint64_t getUnrollFactorUInt64(const Loop *L);
 /// \p LTC is the loop trip count of loop \p L.
 bool mayFullyUnroll(const Loop *L, const SCEV *LTC);
 
+/// Returns true if the loop \p L may be partially unrolled
+bool hasLoopPartialUnroll(const Loop *L);
+
+/// Returns true if the loop \p L may contain trip count pragma
+bool hasLoopTripCount(const Loop *L);
+ 
 /// Returns true if the do-while loop \p L may be exposed to the dataflow
 /// region.
 bool mayExposeInDataFlowRegion(ScalarEvolution &SE, const Loop *L);
@@ -167,6 +180,8 @@ DebugLoc getLoopTripCountPragmaLoc( const Loop* L);
 DebugLoc getLoopPipelinePragmaLoc( const Loop *L );
 DebugLoc getLoopUnrollPragmaLoc( const Loop *L );
 DebugLoc getLoopDataflowPragmaLoc( const Loop *L );
+
+MDNode *GetUnrollMetadata(MDNode *LoopID, StringRef Name);
 
 struct ReflowUnrollOption {
   unsigned Count;  /// unroll factor

@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -673,6 +674,11 @@ def hls_support_slx :  Joined<["-"], "hls-support-slx">,
   Group<f_Group>, 
   Flags<[CC1Option]>, 
   HelpText<"Support pragma from SLX dreictive"> ; 
+
+def insert_hls_directive: Joined<["-"], "insert-hls-directive=">, 
+  Group<f_Group>, 
+  Flags<[CC1Option]>, 
+  HelpText<"Insert HLS directive into C/C++ source file during preprocoessing">;
 
 def device_resource_info : Joined<["-"], "device-resource-info=">,
   Group<f_Group>,

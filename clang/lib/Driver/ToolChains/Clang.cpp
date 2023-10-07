@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3177,6 +3178,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-Eonly");
     else {
       CmdArgs.push_back("-E");
+      if (Arg *A = Args.getLastArg(options::OPT_insert_hls_directive)) {
+        CmdArgs.push_back(Args.MakeArgString("-insert-hls-directive=" + StringRef(A->getValue()))); 
+      }
       if (Args.hasArg(options::OPT_rewrite_objc) &&
           !Args.hasArg(options::OPT_g_Group))
         CmdArgs.push_back("-P");

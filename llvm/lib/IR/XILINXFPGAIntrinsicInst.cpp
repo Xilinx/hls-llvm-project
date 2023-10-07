@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -357,6 +358,89 @@ DirectiveScopeExit *DirectiveScopeEntry::BuildDirectiveScope(
   return BuildDirectiveScope(ScopeAttrs, Entry, Exit);
 }
 
+// FIXME GEPOperator don't have good API...
+static Value *getGEPIndex(GEPOperator *GEP, unsigned Idx) {
+  assert(Idx < GEP->getNumIndices() &&
+         "Idx out of range of GEPOperand's operands");
+  auto I = GEP->idx_begin();
+  while (Idx-- > 0)
+    ++I;
+  return I->get();
+}
+
+// FIXME GEPOperator don't have good API...
+static Type *getGEPIndexType(GEPOperator *GEP, unsigned Idx) {
+  assert(Idx < GEP->getNumIndices() &&
+         "Idx out of range of GEPOperand's operands");
+  auto T = gep_type_begin(GEP);
+  while (Idx-- > 0)
+    ++T;
+  return T.getIndexedType();
+}
+
+// FIXME This is necessary because our pragmas on arrays use the "decayed" form
+//       In the future we should clean that up...
+static Type *getUndecayedVariableType(Value *Var) {
+  // Clang generates a bit cast that removes exactly one dimension:
+  //
+  //     %decayed = bitcast [10 x i8]* %var to i8*
+  //
+  if (auto *Cast = dyn_cast<BitCastOperator>(Var)) {
+    Type *SrcTy = Cast->getSrcTy();
+    Type *DestTy = Cast->getDestTy();
+    if (!SrcTy->isPointerTy() || !DestTy->isPointerTy())
+      return nullptr;
+
+    SrcTy = SrcTy->getPointerElementType();
+    DestTy = DestTy->getPointerElementType();
+
+    if (SrcTy->isArrayTy() && SrcTy->getArrayElementType() == DestTy)
+      return SrcTy;
+  }
+
+  // LLVM optimize it into a gep into its first element
+  //
+  //     %decayed = getelementptr [10 x i8], [10 x i8]* %var, i64 0, i64 0
+  //
+  if (auto *GEP = dyn_cast<GEPOperator>(Var)) {
+    unsigned LastIdx = GEP->getNumIndices() - 1;
+    if (!match(getGEPIndex(GEP, LastIdx), m_Zero()))
+      return nullptr;
+
+    if (LastIdx == 0)
+      return getUndecayedVariableType(GEP->getPointerOperand());
+
+    Type *SrcTy = getGEPIndexType(GEP, LastIdx-1);
+    Type *DestTy = GEP->getResultElementType();
+
+    if (SrcTy->isArrayTy() && SrcTy->getArrayElementType() == DestTy)
+      return SrcTy;
+  }
+
+  return nullptr;
+}
+
+uint64_t PragmaInst::guessPragmaVarAllocaSizeInBits(const DataLayout &DL) const {
+  // If the pragma has a VarAllocSize, use that
+  if (getPragmaVarAllocaSizeInBits() > 0)
+    return getPragmaVarAllocaSizeInBits();
+
+  // Else we try to guess from the type
+  Value *V = getVariable();
+  Type *VTy = V->getType();
+
+  // If it is a pointer, get the element type
+  if (isa<PointerType>(VTy))
+    VTy = VTy->getPointerElementType();
+
+  // If it is a "array" pragma, the argument is probably decayed
+  if (Type *Ty = getUndecayedVariableType(V))
+    VTy = Ty;
+
+  // And we are done
+  return DL.getTypeAllocSizeInBits(VTy);
+}
+
 // Return true if this pragma should be applied on variable declaration site.
 bool PragmaInst::ShouldBeOnDeclaration() const {
   if (isa<DisaggrInst>(this) || isa<AggregateInst>(this) ||
@@ -384,7 +468,7 @@ bool PragmaInst::ShouldBeOnDeclaration() const {
             isa<XlxFunctionAllocationInst>(this) || isa<ResetPragmaInst>(this) ||
             isa<MAXIAliasInst>(this) || isa<NPortChannelInst>(this) ||
             isa<FuncInstantiateInst>(this) || isa<ArrayStencilInst>(this) ||
-            isa<XlxIPInst>(this)
+            isa<XlxIPInst>(this) || isa<MaxiCacheInst>(this)
             ) && "Unexpected pragma");
     return false;
   }
@@ -397,6 +481,10 @@ Value *PragmaInst::getVariable() const {
          "PragmaInst is invalid and its bundle num should be 1");
   OperandBundleUse Bundle = getOperandBundleAt(0);
   return Bundle.Inputs[0];
+}
+
+bool PragmaInst::isUserPragma() const {
+  return "user" == getPragmaSource();
 }
 
 bool InterfaceInst::classof(const PragmaInst *I) {
@@ -475,4 +563,5 @@ const std::string ShiftRegLabelInst::BundleTagName = "shift_reg_interface";
 const std::string StreamOfBlocksLabelInst::BundleTagName = "stream_of_blocks_interface";
 const std::string NPortChannelInst::BundleTagName = "nport_channel";
 const std::string XlxIPInst::BundleTagName = "xlx_ip";
+const std::string MaxiCacheInst::BundleTagName = "xlx_cache";
 

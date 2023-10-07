@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2149,7 +2150,6 @@ bool GVN::processBlock(BasicBlock *BB) {
       I->eraseFromParent();
     }
 
-    OI->invalidateBlock(BB);
     InstrsToErase.clear();
     if (InvalidateImplicitCF)
       fillImplicitControlFlowInfo(BB);
@@ -2375,7 +2375,6 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
       FirstImplicitControlFlowInsts.lookup(CurInst->getParent()) == CurInst;
   // FIXME: Intended to be markInstructionForDeletion(CurInst), but it causes
   // some assertion failures.
-  OI->invalidateBlock(CurrentBlock);
   CurInst->eraseFromParent();
   if (InvalidateImplicitCF)
     fillImplicitControlFlowInfo(CurrentBlock);

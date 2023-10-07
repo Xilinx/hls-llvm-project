@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This pass reassociates n-ary add expressions and eliminates the redundancy
@@ -217,7 +222,18 @@ bool NaryReassociatePass::runImpl(Function &F, AssumptionCache *AC_,
 static bool isPotentiallyNaryReassociable(Instruction *I) {
   switch (I->getOpcode()) {
   case Instruction::Add:
-  case Instruction::GetElementPtr:
+  // HLS begin
+  // disable reassociate for gep, this will block many precommit case
+  // failed precommit case list:
+  // AppSuite/AE/AES/Encrypt
+  // AppSuite/AE/AES/Decrypt
+  // BugSpray/bugzilla/4421/run_2
+  // BugSpray/crs/692197
+  // BugSpray/bugzilla/1058
+  // BugSpray/crs/692257
+  // BugSpray/bugzilla/3502
+  // case Instruction::GetElementPtr:
+  // HLS end
   case Instruction::Mul:
     return true;
   default:

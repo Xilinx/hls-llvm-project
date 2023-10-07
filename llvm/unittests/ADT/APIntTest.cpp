@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2059,6 +2060,48 @@ TEST(APIntTest, GCD) {
   APInt B = HugePrime * APInt(BitWidth, 123456);
   APInt C = GreatestCommonDivisor(A, B);
   EXPECT_EQ(C, HugePrime);
+}
+
+TEST(APIntTest, LCM) {
+  using APIntOps::LeastCommonMultiple;
+
+  for (unsigned Bits : {1, 2, 32, 63, 64, 65}) {
+    // Test some corner cases near zero.
+    APInt Zero(Bits, 0), One(Bits, 1);
+    EXPECT_EQ(LeastCommonMultiple(Zero, Zero), Zero);
+    EXPECT_EQ(LeastCommonMultiple(Zero, One), Zero);
+    EXPECT_EQ(LeastCommonMultiple(One, Zero), Zero);
+    EXPECT_EQ(LeastCommonMultiple(One, One), One);
+
+    if (Bits > 1) {
+      APInt Two(Bits, 2);
+      EXPECT_EQ(LeastCommonMultiple(Zero, Two), Zero);
+      EXPECT_EQ(LeastCommonMultiple(One, Two), Two);
+      EXPECT_EQ(LeastCommonMultiple(Two, Two), Two);
+
+      // Test some corner cases near the highest representable value.
+      APInt Max(Bits, 0);
+      Max.setAllBits();
+      EXPECT_EQ(LeastCommonMultiple(Zero, Max), Zero);
+      EXPECT_EQ(LeastCommonMultiple(One, Max), Max);
+      EXPECT_EQ(LeastCommonMultiple(Two, Max - 1), Max - 1);
+      EXPECT_EQ(LeastCommonMultiple(Max, Max), Max);
+
+      APInt MaxOver2 = Max.udiv(Two);
+      // Max - 1 == Max / 2 * 2, because Max is odd.
+      EXPECT_EQ(LeastCommonMultiple(MaxOver2, Max - 1), Max - 1);
+    }
+  }
+
+  // Compute the 20th Mersenne prime.
+  const unsigned BitWidth = 4450;
+  APInt HugePrime = APInt::getLowBitsSet(BitWidth, 4423);
+
+  // 2 and 3 are coprime.
+  APInt A = HugePrime * APInt(BitWidth, 2);
+  APInt B = HugePrime * APInt(BitWidth, 3);
+  APInt C = LeastCommonMultiple(A, B);
+  EXPECT_EQ(C, HugePrime * APInt(BitWidth, 2) * APInt(BitWidth, 3));
 }
 
 TEST(APIntTest, LogicalRightShift) {

@@ -23,6 +23,8 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/ValueHandle.h"
 #include <memory>
 #include <utility>
@@ -43,6 +45,56 @@ class LoadInst;
 class PHINode;
 class TargetLibraryInfo;
 class Value;
+class MemoryDependenceResults;
+
+class JumpThreadingSinkHoist {
+public:
+  using BlockCacheKeyTy = std::pair<BasicBlock *, BasicBlock *>;
+  using BlockCacheTy = DenseMap<BlockCacheKeyTy, SmallPtrSet<BasicBlock *, 8>>;
+
+private:
+  LoopInfo LI;
+  DominatorTree DT;
+  PostDominatorTree PDT;
+  MemoryDependenceResults *MDR;
+  AliasAnalysis *AA;
+  TargetLibraryInfo *TLI;
+  unsigned BBDupThreshold;
+  SmallVector<Instruction *, 8> HoistInsts;
+  SmallVector<Instruction *, 8> SinkInsts;
+  SmallPtrSet<Instruction *, 8> MovedInsts;
+  SmallPtrSet<BasicBlock *, 8> VisitedBlocks;
+  BlockCacheTy ForwardBlockCache;
+  BlockCacheTy BackwardBlockCache;
+
+public:
+  JumpThreadingSinkHoist(MemoryDependenceResults *MDR, AliasAnalysis *AA,
+                         TargetLibraryInfo *TLI, unsigned BBDupThreshold)
+      : MDR(MDR), AA(AA), TLI(TLI), BBDupThreshold(BBDupThreshold) {}
+
+  bool doSinkHoistOnBlock(BasicBlock *BB);
+
+private:
+  void tryHoistInstInBlock(BasicBlock *BB, BasicBlock *MovedTo);
+  void trySinkInstInBlock(BasicBlock *BB, BasicBlock *MovedTo);
+  bool shouldMoveInst(Instruction *I);
+
+  BasicBlock *getSinkMoveBlock(BasicBlock *BB);
+  BasicBlock *getHoistMoveBlock(BasicBlock *BB);
+  bool canSinkInst(Instruction *I, BasicBlock *MovedFrom, BasicBlock *MovedTo);
+  bool canHoistInst(Instruction *I, BasicBlock *MovedFrom, BasicBlock *MovedTo);
+
+  void collectForwardReachableBlocks(BasicBlock *BB, BasicBlock *PostDomBB,
+                                     SmallPtrSetImpl<BasicBlock *> &Blocks);
+  void
+  collectForwardReachableBlocksSlowCase(BasicBlock *BB, BasicBlock *PostDomBB,
+                                        SmallPtrSetImpl<BasicBlock *> &Blocks);
+  void collectBackwardReachableBlocks(BasicBlock *BB, BasicBlock *DomBB,
+                                      SmallPtrSetImpl<BasicBlock *> &Blocks);
+  void
+  collectBackwardReachableBlocksSlowCase(BasicBlock *BB, BasicBlock *DomBB,
+                                         SmallPtrSetImpl<BasicBlock *> &Blocks);
+};
 
 /// A private "module" namespace for types and utilities used by
 /// JumpThreading.
@@ -81,6 +133,7 @@ class JumpThreadingPass : public PassInfoMixin<JumpThreadingPass> {
   DeferredDominance *DDT;
   std::unique_ptr<BlockFrequencyInfo> BFI;
   std::unique_ptr<BranchProbabilityInfo> BPI;
+  std::unique_ptr<JumpThreadingSinkHoist> JTSinkHoist;
   bool HasProfileData = false;
   bool HasGuards = false;
 #ifdef NDEBUG
@@ -91,6 +144,7 @@ class JumpThreadingPass : public PassInfoMixin<JumpThreadingPass> {
   DenseSet<std::pair<Value *, BasicBlock *>> RecursionSet;
 
   unsigned BBDupThreshold;
+  bool EnableSinkHoist;
 
   // RAII helper for updating the recursion stack.
   struct RecursionSetRemover {
@@ -105,13 +159,14 @@ class JumpThreadingPass : public PassInfoMixin<JumpThreadingPass> {
   };
 
 public:
-  JumpThreadingPass(int T = -1);
+  JumpThreadingPass(int T = -1, bool enableSinkHoist = false);
 
   // Glue for old PM.
   bool runImpl(Function &F, TargetLibraryInfo *TLI_, LazyValueInfo *LVI_,
                AliasAnalysis *AA_, DeferredDominance *DDT_,
                bool HasProfileData_, std::unique_ptr<BlockFrequencyInfo> BFI_,
-               std::unique_ptr<BranchProbabilityInfo> BPI_);
+               std::unique_ptr<BranchProbabilityInfo> BPI_,
+               MemoryDependenceResults *MDR_);
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 

@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -72,15 +73,19 @@ void llvm::addLoopMetadata(Loop *L, StringRef Attr,
   L->setLoopID(NewLoopID);
 }
 
-void llvm::addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg, StringRef Source) {
+void llvm::addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg, 
+                            StringRef Source, DILocation *DL) {
   Type *Int32Ty = Type::getInt32Ty(GetContext(L));
   SmallVector<Metadata *, 4> MD(
       {ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Min)),
        ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Max)),
        ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Avg))});
-  if (Source != "") {
+  if (Source != "") 
     MD.push_back(MDString::get(GetContext(L), Source));
-  }
+  
+  if (DL)
+    MD.push_back(DL);
+
   addLoopMetadata(L, "llvm.loop.tripcount", MD);
 }
 
@@ -159,8 +164,11 @@ void llvm::addFlatten(Loop *L, StringRef Source, DILocation *Loc) {
   addLoopMetadata(L, "llvm.loop.flatten.enable", MD);
 }
 
-void llvm::addFlattenOff(Loop *L) {
-  addLoopMetadata(L, "llvm.loop.flatten.enable",
-                  {ConstantAsMetadata::get(ConstantInt::get(
-                      Type::getInt1Ty(GetContext(L)), /* No flatten */ 0))});
+void llvm::addFlattenOff(Loop *L, StringRef Source, DILocation *Loc) {
+  SmallVector<Metadata *, 3> MD{ConstantAsMetadata::get(
+                      ConstantInt::get(Type::getInt1Ty(GetContext(L)), 0 /*No Flatten*/)),
+                      MDString::get(GetContext(L), Source)};
+  if (Loc)
+    MD.push_back(Loc);
+  addLoopMetadata(L, "llvm.loop.flatten.enable", MD);
 }

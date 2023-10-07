@@ -10,10 +10,9 @@
 // This file defines an efficient way to check for dominance relation between 2
 // instructions.
 //
-// This interface dispatches to appropriate dominance check given 2
-// instructions, i.e. in case the instructions are in the same basic block,
-// OrderedBasicBlock (with instruction numbering and caching) are used.
-// Otherwise, dominator tree is used.
+// FIXME: This is really just a convenience wrapper to check dominance between
+// two arbitrary instructions in different basic blocks. We should fold it into
+// DominatorTree, which is the more widely used interface.
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,19 +20,19 @@
 #define LLVM_TRANSFORMS_UTILS_ORDEREDINSTRUCTIONS_H
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Analysis/OrderedBasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Operator.h"
 
 namespace llvm {
 
 class OrderedInstructions {
-  /// Used to check dominance for instructions in same basic block.
-  mutable DenseMap<const BasicBlock *, std::unique_ptr<OrderedBasicBlock>>
-      OBBMap;
-
   /// The dominator tree of the parent function.
   DominatorTree *DT;
+
+  /// Return true if the first instruction comes before the second in the
+  /// same basic block. It will create an ordered basic block, if it does
+  /// not yet exist in OBBMap.
+  bool localDominates(const Instruction *, const Instruction *) const;
 
 public:
   /// Constructor.
@@ -42,11 +41,17 @@ public:
   /// Return true if first instruction dominates the second.
   bool dominates(const Instruction *, const Instruction *) const;
 
-  /// Invalidate the OrderedBasicBlock cache when its basic block changes.
-  /// i.e. If an instruction is deleted or added to the basic block, the user
-  /// should call this function to invalidate the OrderedBasicBlock cache for
-  /// this basic block.
-  void invalidateBlock(const BasicBlock *BB) { OBBMap.erase(BB); }
+  /// Return true if the first instruction comes before the second in the
+  /// dominator tree DFS traversal if they are in different basic blocks,
+  /// or if the first instruction comes before the second in the same basic
+  /// block.
+  bool dfsBefore(const Instruction *, const Instruction *) const;
+
+  // Return true if the first instruction comes before the second in the
+  // dominator tree BFS traversal based on the level number of nodes in
+  // dominator tree if they are in different basic blocks else if the first
+  // instruction comes before the second in the same basic block.
+  bool domTreeLevelBefore(const Instruction *, const Instruction *) const;
 };
 
 } // end namespace llvm

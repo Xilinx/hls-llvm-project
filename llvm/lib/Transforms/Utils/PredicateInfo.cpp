@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------===//
 //
 // This file implements the PredicateInfo class.
@@ -118,7 +123,7 @@ static bool valueComesBefore(OrderedInstructions &OI, const Value *A,
     return false;
   if (ArgA && ArgB)
     return ArgA->getArgNo() < ArgB->getArgNo();
-  return OI.dominates(cast<Instruction>(A), cast<Instruction>(B));
+  return OI.dfsBefore(cast<Instruction>(A), cast<Instruction>(B));
 }
 
 // This compares ValueDFS structures, creating OrderedBasicBlocks where
@@ -557,6 +562,7 @@ void PredicateInfo::renameUses(SmallPtrSetImpl<Value *> &OpSet) {
   ValueDFS_Compare Compare(OI);
   // Compute liveness, and rename in O(uses) per Op.
   for (auto *Op : OpsToRename) {
+    DEBUG(dbgs() << "Visiting " << *Op << "\n");
     unsigned Counter = 0;
     SmallVector<ValueDFS, 16> OrderedUses;
     const auto &ValueInfo = getValueInfo(Op);

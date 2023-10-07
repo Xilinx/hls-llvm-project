@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -46,6 +47,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/XILINXInterfaceAnalysis.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/IteratedDominanceFrontier.h"
@@ -85,6 +87,7 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <stack>
 
 using namespace llvm;
 
@@ -263,8 +266,8 @@ class GVNHoist {
 public:
   GVNHoist(DominatorTree *DT, PostDominatorTree *PDT, AliasAnalysis *AA,
            MemoryDependenceResults *MD, MemorySSA *MSSA,
-           TargetTransformInfo &TTI)
-      : DT(DT), PDT(PDT), AA(AA), MD(MD), MSSA(MSSA), TTI(TTI),
+           TargetTransformInfo &TTI, InterfaceAnalysis *IA)
+      : DT(DT), PDT(PDT), AA(AA), MD(MD), MSSA(MSSA), TTI(TTI), IA(IA),
         MSSAUpdater(llvm::make_unique<MemorySSAUpdater>(MSSA)) {}
 
   bool run(Function &F) {
@@ -341,6 +344,7 @@ private:
   MemoryDependenceResults *MD;
   MemorySSA *MSSA;
   TargetTransformInfo &TTI;
+  InterfaceAnalysis *IA;
   std::unique_ptr<MemorySSAUpdater> MSSAUpdater;
   DenseMap<const Value *, unsigned> DFSNumber;
   BBSideEffectsSet BBSideEffects;
@@ -519,6 +523,71 @@ private:
 
     return false;
   }
+  
+  // In order to keep array-to-stream access order, if there's other accesses on
+  // the path (access on the same address is fine), then cannot hoist the access
+  bool invalidatedArray2StreamAccess(Instruction *NewPt, Instruction *OldPt) {
+    auto *LI = dyn_cast<LoadInst>(OldPt);
+    if (!LI)
+      return false;
+    auto *Ptr = LI->getPointerOperand();
+    if (!isArray2Stream(Ptr, IA))
+      return false;
+    auto &DL = NewPt->getModule()->getDataLayout();
+    SmallVector<Value *, 1> Objects;
+    GetUnderlyingObjects(Ptr, Objects, DL);
+    if (Objects.size() > 1)
+      return true;
+    auto *UnderlyingObj = Objects[0];
+    auto visitBB = [LI, UnderlyingObj, &DL,
+                    this](BasicBlock::iterator ScanIt) -> bool {
+      auto FirstInst = (&*ScanIt)->getParent()->begin();
+      while (ScanIt != FirstInst) {
+        Instruction *Inst = &*--ScanIt;
+        if (auto *OtherLI = dyn_cast<LoadInst>(Inst)) {
+          // If they have the same underlying object but with different address
+          // then stop
+          SmallVector<Value *, 1> OtherObjects;
+          GetUnderlyingObjects(OtherLI->getPointerOperand(), OtherObjects, DL);
+          if (std::any_of(
+                  OtherObjects.begin(), OtherObjects.end(),
+                  [UnderlyingObj](Value *V) { return V == UnderlyingObj; })) {
+            if (!AA->isMustAlias(MemoryLocation(LI), MemoryLocation(Inst)))
+              return true;
+          }
+        } else if (auto *SI = dyn_cast<StoreInst>(Inst)) {
+        } else if (auto *CI = dyn_cast<CallInst>(Inst)) {
+        }
+      }
+      return false;
+    };
+    if (visitBB(OldPt->getIterator()))
+      return true;
+    // depth first visit each BB in the path from OldPt to NewPt
+    auto DFS = [visitBB, NewPt](BasicBlock *BB) -> bool {
+      SmallPtrSet<BasicBlock *, 3> Visited;
+      std::stack<BasicBlock *> Stack;
+      Stack.push(BB);
+      while (!Stack.empty()) {
+        auto *Top = Stack.top();
+        Stack.pop();
+        auto P = Visited.insert(Top);
+        if (!P.second)
+          continue;
+        if (Top == NewPt->getParent()) // stop at the NewPt
+          continue;
+        if (visitBB(Top->getTerminator()->getIterator()))
+          return true;
+        for (auto *Pred : predecessors(Top))
+          Stack.push(Pred);
+      }
+      return false;
+    };
+    for (auto *Pred : predecessors(OldPt->getParent()))
+      if (DFS(Pred))
+        return true;
+    return false;
+  }
 
   // Return true when it is safe to hoist a memory load or store U from OldPt
   // to NewPt.
@@ -550,6 +619,11 @@ private:
       if (hasEHOrLoadsOnPath(NewPt, dyn_cast<MemoryDef>(U), NBBsOnAllPaths))
         return false;
     } else if (hasEHOnPath(NewBB, OldBB, NBBsOnAllPaths))
+      return false;
+
+    // Check for array-to-stream access
+    if (invalidatedArray2StreamAccess(const_cast<Instruction *>(NewPt),
+                                      const_cast<Instruction *>(OldPt)))
       return false;
 
     if (UBB == NewBB) {
@@ -627,6 +701,8 @@ private:
     auto it1 = ValueBBs.find(BB);
     if (it1 != ValueBBs.end()) {
       // Iterate in reverse order to keep lower ranked values on the top.
+      DEBUG(dbgs() << "\nVisiting: " << BB->getName()
+                   << " for pushing instructions on stack";);
       for (std::pair<VNType, Instruction *> &VI : reverse(it1->second)) {
         // Get the value of instruction I
         DEBUG(dbgs() << "\nPushing on stack: " << *VI.second);
@@ -680,12 +756,12 @@ private:
     if (!Root)
       return;
     // Depth first walk on PDom tree to fill the CHIargs at each PDF.
-    RenameStackType RenameStack;
     for (auto Node : depth_first(Root)) {
       BasicBlock *BB = Node->getBlock();
       if (!BB)
         continue;
 
+      RenameStackType RenameStack;
       // Collect all values in BB and push to stack.
       fillRenameStack(BB, ValueBBs, RenameStack);
 
@@ -1175,8 +1251,9 @@ public:
     auto &MD = getAnalysis<MemoryDependenceWrapperPass>().getMemDep();
     auto &MSSA = getAnalysis<MemorySSAWrapperPass>().getMSSA();
     auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
+    auto &IA = getAnalysis<InterfaceAnalysisWrapperPass>().getIA();
 
-    GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA, TTI);
+    GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA, TTI, &IA);
     return G.run(F);
   }
 
@@ -1187,6 +1264,7 @@ public:
     AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<MemoryDependenceWrapperPass>();
     AU.addRequired<MemorySSAWrapperPass>();
+    AU.addRequired<InterfaceAnalysisWrapperPass>();
     AU.addPreserved<DominatorTreeWrapperPass>();
     AU.addPreserved<MemorySSAWrapperPass>();
     AU.addPreserved<GlobalsAAWrapperPass>();
@@ -1202,7 +1280,8 @@ PreservedAnalyses GVNHoistPass::run(Function &F, FunctionAnalysisManager &AM) {
   MemoryDependenceResults &MD = AM.getResult<MemoryDependenceAnalysis>(F);
   MemorySSA &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
   TargetTransformInfo &TTI = AM.getResult<TargetIRAnalysis>(F);
-  GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA, TTI);
+  InterfaceAnalysis IA(*F.getParent());
+  GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA, TTI, &IA);
   if (!G.run(F))
     return PreservedAnalyses::all();
 
@@ -1221,6 +1300,7 @@ INITIALIZE_PASS_DEPENDENCY(MemoryDependenceWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(InterfaceAnalysisWrapperPass)
 INITIALIZE_PASS_END(GVNHoistLegacyPass, "gvn-hoist",
                     "Early GVN Hoisting of Expressions", false, false)
 

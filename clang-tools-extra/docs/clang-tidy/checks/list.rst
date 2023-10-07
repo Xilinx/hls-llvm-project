@@ -229,7 +229,6 @@ Clang-Tidy Checks
    xilinx-directive2pragma
    xilinx-dump-openclkernel
    xilinx-loop-brace-bracket
-   xilinx-remove-assert
    xilinx-resource-pragma-transformer
    xilinx-ssdm-intrinsics-arguments
    xilinx-ssdm-intrinsics-scope

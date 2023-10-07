@@ -5,6 +5,11 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+// And has the following additional copyright:
+//
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // Compute iterated dominance frontiers using a linear time algorithm.
@@ -21,15 +26,20 @@ template <class NodeTy, bool IsPostDom>
 void IDFCalculator<NodeTy, IsPostDom>::calculate(
     SmallVectorImpl<BasicBlock *> &PHIBlocks) {
   // Use a priority queue keyed on dominator tree level so that inserted nodes
-  // are handled from the bottom of the dominator tree upwards.
-  typedef std::pair<DomTreeNode *, unsigned> DomTreeNodePair;
+  // are handled from the bottom of the dominator tree upwards. We also augment
+  // the level with a DFS number to ensure that the blocks are ordered in a
+  // deterministic way.
+  typedef std::pair<DomTreeNode *, std::pair<unsigned, unsigned>>
+      DomTreeNodePair;
   typedef std::priority_queue<DomTreeNodePair, SmallVector<DomTreeNodePair, 32>,
                               less_second> IDFPriorityQueue;
   IDFPriorityQueue PQ;
 
+  DT.updateDFSNumbers();
+
   for (BasicBlock *BB : *DefBlocks) {
     if (DomTreeNode *Node = DT.getNode(BB))
-      PQ.push({Node, Node->getLevel()});
+      PQ.push({Node, std::make_pair(Node->getLevel(), Node->getDFSNumIn())});
   }
 
   SmallVector<DomTreeNode *, 32> Worklist;
@@ -40,7 +50,7 @@ void IDFCalculator<NodeTy, IsPostDom>::calculate(
     DomTreeNodePair RootPair = PQ.top();
     PQ.pop();
     DomTreeNode *Root = RootPair.first;
-    unsigned RootLevel = RootPair.second;
+    unsigned RootLevel = RootPair.second.first;
 
     // Walk all dominator tree children of Root, inspecting their CFG edges with
     // targets elsewhere on the dominator tree. Only targets whose level is at
@@ -59,11 +69,6 @@ void IDFCalculator<NodeTy, IsPostDom>::calculate(
       for (auto *Succ : children<NodeTy>(BB)) {
         DomTreeNode *SuccNode = DT.getNode(Succ);
 
-        // Quickly skip all CFG edges that are also dominator tree edges instead
-        // of catching them below.
-        if (SuccNode->getIDom() == Node)
-          continue;
-
         const unsigned SuccLevel = SuccNode->getLevel();
         if (SuccLevel > RootLevel)
           continue;
@@ -77,7 +82,8 @@ void IDFCalculator<NodeTy, IsPostDom>::calculate(
 
         PHIBlocks.emplace_back(SuccBB);
         if (!DefBlocks->count(SuccBB))
-          PQ.push(std::make_pair(SuccNode, SuccLevel));
+          PQ.push(std::make_pair(SuccNode,
+              std::make_pair(SuccLevel, SuccNode->getDFSNumIn())));
       }
 
       for (auto DomChild : *Node) {

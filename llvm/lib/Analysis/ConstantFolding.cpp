@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -45,6 +46,8 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/XILINXAggregateUtil.h"
+#include "llvm/IR/XILINXHLSIRBuilder.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
@@ -1158,6 +1161,32 @@ Constant *FoldBitConcat(ArrayRef<Constant *> Operands) {
   return Ret;
 }
 
+Constant *FoldUnpack(ConstantInt *IntObj, Type *RetTy, const DataLayout &DL, AggregateType AggrTy) {
+  HLSIRBuilder IB(IntObj->getContext(), DL);
+  return cast<Constant>(IB.unpackIntToAggregate(IntObj, RetTy, AggrTy));
+}
+
+ConstantInt *FoldPack(Constant *Obj, Type *Ty, const DataLayout &DL, AggregateType AggrTy) {
+  LLVMContext &C = Obj->getContext();
+  HLSIRBuilder IB(C, DL);
+  ConstantInt *IntObj = cast<ConstantInt>(IB.packAggregateToInt(Obj, AggrTy));
+  IntegerType *thePackTy = cast<IntegerType>(Ty);
+  APInt res { IntObj->getValue().zextOrTrunc(thePackTy->getBitWidth()) };
+  return ConstantInt::get(C, res);
+}
+
+Constant *FoldMux(ArrayRef<Constant *> Operands) {
+  assert(Operands.size() > 1 && "Mux must have more than 1 argument");
+  auto *Cond = dyn_cast<ConstantInt>(Operands[0]);
+  if (!Cond) {
+    return nullptr;
+  }
+
+  auto Idx = Cond->getZExtValue();
+  assert(Idx + 1 < Operands.size() && "Mux: index out of range");
+  return Operands[Idx + 1];
+}
+
 Constant *FoldLegacyPartSelect(ArrayRef<Constant *> Operands) {
   assert(Operands.size() == 3 && "Legacy part select must have 3 arguments");
   Constant *SrcI = Operands[0];
@@ -1609,6 +1638,15 @@ bool llvm::canConstantFoldCallTo(ImmutableCallSite CS, const Function *F) {
   case Intrinsic::fpga_legacy_part_select:
   case Intrinsic::fpga_legacy_part_set:
   case Intrinsic::fpga_bit_concat:
+  case Intrinsic::fpga_unpack_bytes:
+  case Intrinsic::fpga_pack_bytes:
+  case Intrinsic::fpga_unpack_bits:
+  case Intrinsic::fpga_pack_bits:
+  case Intrinsic::fpga_unpack_none:
+  case Intrinsic::fpga_pack_none:
+  case Intrinsic::fpga_mux:
+  case Intrinsic::fpga_recip:
+  case Intrinsic::fpga_rsqrt:
     return true;
   default:
     return false;
@@ -1783,8 +1821,17 @@ double getValueAsDouble(ConstantFP *Op) {
   return APF.convertToDouble();
 }
 
+double recip(double Op) {
+  return 1.0 / Op;
+}
+
+double rsqrt(double Op) {
+  return 1.0 / sqrt(Op);
+}
+
 Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
                                  ArrayRef<Constant *> Operands,
+                                 const DataLayout &DL,
                                  const TargetLibraryInfo *TLI) {
   if (Operands.size() == 1) {
     if (isa<UndefValue>(Operands[0])) {
@@ -1876,6 +1923,10 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
           return ConstantFoldFP(cos, V, Ty);
         case Intrinsic::sqrt:
           return ConstantFoldFP(sqrt, V, Ty);
+        case Intrinsic::fpga_recip:
+          return ConstantFoldFP(recip, V, Ty);
+        case Intrinsic::fpga_rsqrt:
+          return ConstantFoldFP(rsqrt, V, Ty);
       }
 
       if (!TLI)
@@ -2008,6 +2059,12 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
       }
       case Intrinsic::fpga_bit_concat:
         return FoldBitConcat(Operands);
+      case Intrinsic::fpga_unpack_bytes:
+        return FoldUnpack(Op, Ty, DL, AggregateType::Byte);
+      case Intrinsic::fpga_unpack_bits:
+        return FoldUnpack(Op, Ty, DL, AggregateType::Bit);
+      case Intrinsic::fpga_unpack_none:
+        return FoldUnpack(Op, Ty, DL, AggregateType::NoCompact);
       default:
         return nullptr;
       }
@@ -2040,6 +2097,15 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
       }
     }
 
+    switch (IntrinsicID) {
+    case Intrinsic::fpga_pack_bytes:
+      return FoldPack(Operands[0], Ty, DL, AggregateType::Byte);
+    case Intrinsic::fpga_pack_bits:
+      return FoldPack(Operands[0], Ty, DL, AggregateType::Bit);
+    case Intrinsic::fpga_pack_none:
+      return FoldPack(Operands[0], Ty, DL, AggregateType::NoCompact);
+    }
+
     return nullptr;
   }
 
@@ -2055,6 +2121,10 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
 
   if (IntrinsicID == Intrinsic::fpga_bit_concat) 
     return FoldBitConcat(Operands);
+
+  if (IntrinsicID == Intrinsic::fpga_mux) {
+    return FoldMux(Operands);
+  }
 
   if (Operands.size() == 2) {
     if (auto *Op1 = dyn_cast<ConstantFP>(Operands[0])) {
@@ -2275,7 +2345,7 @@ Constant *ConstantFoldVectorCall(StringRef Name, unsigned IntrinsicID,
     }
 
     // Use the regular scalar folding to simplify this column.
-    Constant *Folded = ConstantFoldScalarCall(Name, IntrinsicID, Ty, Lane, TLI);
+    Constant *Folded = ConstantFoldScalarCall(Name, IntrinsicID, Ty, Lane, DL, TLI);
     if (!Folded)
       return nullptr;
     Result[I] = Folded;
@@ -2302,7 +2372,8 @@ llvm::ConstantFoldCall(ImmutableCallSite CS, Function *F,
     return ConstantFoldVectorCall(Name, F->getIntrinsicID(), VTy, Operands,
                                   F->getParent()->getDataLayout(), TLI);
 
-  return ConstantFoldScalarCall(Name, F->getIntrinsicID(), Ty, Operands, TLI);
+  return ConstantFoldScalarCall(Name, F->getIntrinsicID(), Ty, Operands,
+                                F->getParent()->getDataLayout(), TLI);
 }
 
 bool llvm::isMathLibCallNoop(CallSite CS, const TargetLibraryInfo *TLI) {

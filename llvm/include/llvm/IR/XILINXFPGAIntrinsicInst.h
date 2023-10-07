@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -333,6 +334,75 @@ public:
   /// \brief Return Condition value that correspond to the Use
   unsigned getMuxUseIdx(const Use *U) const {
     return U - arg_begin() - 1;
+  }
+};
+
+/// This represents the fpga_sparse_mux
+class FPGASparseMuxInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_sparse_mux;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  /// \brief Return the Condition argument
+  Value *getCondition() const {
+    return getArgOperand(0);
+  }
+
+  /// \brief Return the Condition type
+  IntegerType *getConditionType() const {
+    return cast<IntegerType>(getArgOperand(0)->getType());
+  }
+
+  /// \brief Return the Number of input value
+  unsigned getNumMuxValues() const {
+    assert(getNumArgOperands()%2 == 1);
+    return (getNumArgOperands() - 1)/2;
+  }
+
+  /// \brief Return the Constant that the Condition must take in order for
+  ///        the mux to return the Idx-th mux Value
+  ConstantInt *getMuxCase(unsigned Idx) const {
+    Value *Arg = getArgOperand(2*Idx + 1);
+    assert(Arg->getType() == getConditionType());
+    return cast<ConstantInt>(Arg);
+  }
+
+  /// \brief Return the Idx-th mux Value that will be returned when Condition
+  ///        is selected by the Idx-th case
+  Value *getMuxValue(unsigned Idx) const {
+    Value *Arg = getArgOperand(2*Idx + 2);
+    assert(Arg->getType() == this->getType());
+    return Arg;
+  }
+
+  /// \brief Set the Idx-th case's condition
+  void setMuxCase(unsigned Idx, ConstantInt *Cst) {
+    return setArgOperand(2*Idx + 1, Cst);
+  }
+
+  /// \brief Set the Idx-th case's Value
+  void setMuxValue(unsigned Idx, Value *Val) {
+    return setArgOperand(2*Idx + 2, Val);
+  }
+
+  /// \brief Return the Use for when Condition is equal to Idx
+  const Use &getMuxUse(unsigned Idx) const {
+    return getArgOperandUse(2*Idx + 2);
+  }
+
+  /// \brief Return the Use for when Condition is equal to Idx
+  Use &getMuxUse(unsigned Idx) {
+    return getArgOperandUse(2*Idx + 2);
+  }
+
+  /// \brief Return Condition value that correspond to the Use
+  unsigned getMuxUseIdx(const Use *U) const {
+    return (U - arg_begin() - 2)/2;
   }
 };
 
@@ -1535,6 +1605,10 @@ public:
       return getPragmaSource(#Tag);                                            \
     }                                                                          \
                                                                                \
+    bool isUserPragma() const  {                                               \
+      return "user" == getPragmaSrc();                                         \
+    }                                                                          \
+                                                                               \
     DebugLoc getPragmaDebugLoc( ) const {                                      \
       return getPragmaLoc( #Tag );                                             \
     }                                                                          \
@@ -1589,6 +1663,21 @@ DEFINE_DIRECTIVE_SCOPE(LoopMergeRegion, xlx_merge_loop)
 DEFINE_DIRECTIVE_SCOPE(ResourceRegion, fpga_resource_hint)
 DEFINE_DIRECTIVE_SCOPE(ResourceLimitRegion, fpga_resource_limit_hint)
 DEFINE_DIRECTIVE_SCOPE(ComputeRegion, fpga_compute_region)
+
+/// This represent the fpga_ssa_keep
+class SSAKeepInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_ssa_keep;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  /// \brief Return the input
+  Value *getValue() const { return getArgOperand(0); }
+};
 
 class SSACopyInst : public IntrinsicInst {
 public:
@@ -1859,10 +1948,14 @@ public:
       return false;
   }
 
+  uint64_t guessPragmaVarAllocaSizeInBits(const DataLayout &DL) const;
+
   StringRef getPragmaSource() const {
     auto result = getAttributes().getAttribute(llvm::AttributeList::FunctionIndex, "xlx.source");
     return result.getValueAsString();
   }
+
+  bool isUserPragma() const;
 
 protected:
   template <typename ValueT, typename PragmaInstType>
@@ -2096,11 +2189,17 @@ public:
   static std::pair<const MAXIAliasInst *, int64_t> getWithOffset(const Value *V) {
     for (auto *U : V->users()) {
       if (auto *BC = dyn_cast<BitCastOperator>(U)) {
-        get(BC);
+        auto P = getWithOffset(BC);
+        if (P.first)
+          return P;
       } else if (auto *GEP = dyn_cast<GEPOperator>(U)) {
-        get(GEP);
+        auto P = getWithOffset(GEP);
+        if (P.first)
+          return P;
       } else if (auto * Extract = dyn_cast<ExtractValueInst>(U)) {
-        get(Extract);
+        auto P = getWithOffset(Extract);
+        if (P.first)
+          return P;
       } else if (auto *PI = dyn_cast<MAXIAliasInst>(U)) {
         return std::make_pair(PI, PI->getOffset(V));
       }
@@ -2542,10 +2641,23 @@ public:
   }
 
   Value *getStream() const { return getVariable(); }
+  static StreamOfBlocksPragmaInst *get(Value *V) {
+    return PragmaInst::get<StreamOfBlocksPragmaInst>(V, false);
+  }
+
+  static const StreamOfBlocksPragmaInst *get(const Value *V) {
+    return PragmaInst::get<StreamOfBlocksPragmaInst>(V, false);
+  }
 };
 
 class PipoPragmaInst : public PragmaInst {
 public:
+  enum PipoType {
+    PIPO = 1,
+    SHARED = 2,
+    UNSYNC = 3
+  };
+
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
     return I->getOperandBundle(BundleTagName).hasValue();
@@ -4177,6 +4289,51 @@ public:
     assert(Bundle && "Illegal xlx_ip intrinsic");
     ConstantInt *Impl = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
     return (platform::PlatformBasic::IMPL_TYPE)Impl->getSExtValue();
+  }
+};
+
+class MaxiCacheInst : public PragmaInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  void getOptions(SmallVectorImpl<Value *> &Opts) const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal xlx_maxi_cache intrinsic");
+    auto It = Bundle.getValue().Inputs.begin();
+    ++It;
+    for (auto Ie = Bundle.getValue().Inputs.end(); It != Ie; ++It) {
+      Opts.push_back(*It);
+    }
+  }
+
+  Value *getPort() const { return getVariable(); }
+
+  uint64_t getLines() const {
+    return cast<ConstantInt>(getOperand(1))->getZExtValue();
+  }
+
+  static void get(Value *V, SetVector<MaxiCacheInst *> &PSet, bool Indirect = true) {
+    return PragmaInst::get(V, PSet, Indirect);
+  }
+
+  static void get(const Value *V,
+                  SetVector<const MaxiCacheInst *> &PSet, bool Indirect = true) {
+    return PragmaInst::get(V, PSet, Indirect);
+  }
+
+  static MaxiCacheInst *get(Value *V, bool Indirect = true) {
+    return PragmaInst::get<MaxiCacheInst>(V, Indirect);
+  }
+
+  static const MaxiCacheInst *get(const Value *V, bool Indirect = true) {
+    return PragmaInst::get<MaxiCacheInst>(V, Indirect);
   }
 };
 

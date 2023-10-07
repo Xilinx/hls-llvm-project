@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -808,34 +809,40 @@ public:
 
   /// Determine the unsigned range for a particular SCEV.
   /// NOTE: This returns a copy of the reference returned by getRangeRef.
-  ConstantRange getUnsignedRange(const SCEV *S) {
-    return getRangeRef(S, HINT_RANGE_UNSIGNED);
+  ConstantRange getUnsignedRange(const SCEV *S, 
+                                 const Instruction *CtxI = nullptr) {
+    return getRangeRef(S, HINT_RANGE_UNSIGNED, CtxI);
   }
 
   /// Determine the min of the unsigned range for a particular SCEV.
-  APInt getUnsignedRangeMin(const SCEV *S) {
-    return getRangeRef(S, HINT_RANGE_UNSIGNED).getUnsignedMin();
+  APInt getUnsignedRangeMin(const SCEV *S,
+                            const Instruction *CtxI = nullptr) {
+    return getRangeRef(S, HINT_RANGE_UNSIGNED, CtxI).getUnsignedMin();
   }
 
   /// Determine the max of the unsigned range for a particular SCEV.
-  APInt getUnsignedRangeMax(const SCEV *S) {
-    return getRangeRef(S, HINT_RANGE_UNSIGNED).getUnsignedMax();
+  APInt getUnsignedRangeMax(const SCEV *S,
+                            const Instruction *CtxI = nullptr) {
+    return getRangeRef(S, HINT_RANGE_UNSIGNED, CtxI).getUnsignedMax();
   }
 
   /// Determine the signed range for a particular SCEV.
   /// NOTE: This returns a copy of the reference returned by getRangeRef.
-  ConstantRange getSignedRange(const SCEV *S) {
-    return getRangeRef(S, HINT_RANGE_SIGNED);
+  ConstantRange getSignedRange(const SCEV *S,
+                               const Instruction *CtxI = nullptr) {
+    return getRangeRef(S, HINT_RANGE_SIGNED, CtxI);
   }
 
   /// Determine the min of the signed range for a particular SCEV.
-  APInt getSignedRangeMin(const SCEV *S) {
-    return getRangeRef(S, HINT_RANGE_SIGNED).getSignedMin();
+  APInt getSignedRangeMin(const SCEV *S,
+                          const Instruction *CtxI = nullptr) {
+    return getRangeRef(S, HINT_RANGE_SIGNED, CtxI).getSignedMin();
   }
 
   /// Determine the max of the signed range for a particular SCEV.
-  APInt getSignedRangeMax(const SCEV *S) {
-    return getRangeRef(S, HINT_RANGE_SIGNED).getSignedMax();
+  APInt getSignedRangeMax(const SCEV *S,
+                          const Instruction *CtxI = nullptr) {
+    return getRangeRef(S, HINT_RANGE_SIGNED, CtxI).getSignedMax();
   }
 
   /// Test if the given expression is known to be negative.
@@ -1379,18 +1386,21 @@ private:
   /// Determine the range for a particular SCEV.
   /// NOTE: This returns a reference to an entry in a cache. It must be
   /// copied if its needed for longer.
-  const ConstantRange &getRangeRef(const SCEV *S, RangeSignHint Hint);
+  ConstantRange getRangeRef(const SCEV *S, RangeSignHint Hint,
+                            const Instruction *CtxI);
 
   /// Determines the range for the affine SCEVAddRecExpr {\p Start,+,\p Stop}.
   /// Helper for \c getRange.
   ConstantRange getRangeForAffineAR(const SCEV *Start, const SCEV *Stop,
-                                    const SCEV *MaxBECount, unsigned BitWidth);
+                                    const SCEV *MaxBECount, unsigned BitWidth,
+                                    const Instruction *CtxI);
 
   /// Try to compute a range for the affine SCEVAddRecExpr {\p Start,+,\p
   /// Stop} by "factoring out" a ternary expression from the add recurrence.
   /// Helper called by \c getRange.
   ConstantRange getRangeViaFactoring(const SCEV *Start, const SCEV *Stop,
-                                     const SCEV *MaxBECount, unsigned BitWidth);
+                                     const SCEV *MaxBECount, unsigned BitWidth,
+                                     const Instruction *CtxI);
 
   /// We know that there is no SCEV for the specified value.  Analyze the
   /// expression.

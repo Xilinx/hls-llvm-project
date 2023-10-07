@@ -1,4 +1,5 @@
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2021 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -64,7 +65,8 @@ struct InterfaceInfo {
   // related interface spec
   // it's located in top function, and should not deleted/invalidated. Otherwise
   // we need to use WeakVH instead
-  InterfaceInst *Spec;
+  Instruction *Spec; // can be InterfaceInst or ssdm_InterfaceSpec
+
 
   InterfaceInfo()
       : IM(InterfaceMode::Auto), IT(ImplementType::None), Spec(nullptr) {}
@@ -72,7 +74,7 @@ struct InterfaceInfo {
       : IM(Info.IM), IT(Info.IT), Spec(Info.Spec) {}
   InterfaceInfo(InterfaceMode Mode)
       : IM(Mode), IT(ImplementType::None), Spec(nullptr) {}
-  InterfaceInfo(InterfaceMode Mode, InterfaceInst *Spec)
+  InterfaceInfo(InterfaceMode Mode, Instruction *Spec)
       : IM(Mode), IT(ImplementType::None), Spec(Spec) {}
   InterfaceInfo(InterfaceMode Mode, ImplementType IT)
       : IM(Mode), IT(IT), Spec(nullptr) {}

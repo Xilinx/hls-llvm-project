@@ -7,9 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
-//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the BasicBlock class for the IR library.
@@ -37,6 +36,10 @@ ValueSymbolTable *BasicBlock::getValueSymbolTable() {
 
 LLVMContext &BasicBlock::getContext() const {
   return getType()->getContext();
+}
+
+template <> void llvm::invalidateParentIListOrdering(BasicBlock *BB) {
+  BB->invalidateOrders();
 }
 
 // Explicit instantiation of SymbolTableListTraits since some of the methods
@@ -67,6 +70,8 @@ void BasicBlock::insertInto(Function *NewParent, BasicBlock *InsertBefore) {
 }
 
 BasicBlock::~BasicBlock() {
+  validateInstrOrdering();
+
   // If the address of the block is taken and it is being deleted (e.g. because
   // it is dead), this means that there is either a dangling constant expr
   // hanging off the block, or an undefined use of the block (source code
@@ -474,3 +479,29 @@ Optional<uint64_t> BasicBlock::getIrrLoopHeaderWeight() const {
   }
   return Optional<uint64_t>();
 }
+
+void BasicBlock::renumberInstructions() {
+  unsigned Order = 0;
+  for (Instruction &I : *this)
+    I.Order = Order++;
+
+  // Set the bit to indicate that the instruction order valid and cached.
+  BasicBlockBits Bits = getBasicBlockBits();
+  Bits.InstrOrderValid = true;
+  setBasicBlockBits(Bits);
+}
+
+#ifndef NDEBUG
+/// In asserts builds, this checks the numbering. In non-asserts builds, it
+/// is defined as a no-op inline function in BasicBlock.h.
+void BasicBlock::validateInstrOrdering() const {
+  if (!isInstrOrderValid())
+    return;
+  const Instruction *Prev = nullptr;
+  for (const Instruction &I : *this) {
+    assert((!Prev || Prev->comesBefore(&I)) &&
+           "cached instruction ordering is incorrect");
+    Prev = &I;
+  }
+}
+#endif

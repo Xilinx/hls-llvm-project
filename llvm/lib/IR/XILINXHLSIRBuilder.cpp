@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -271,6 +272,21 @@ Value *HLSIRBuilder::twoStepsBitCast(Value *V, Type *DstTy) {
     return twoStepsBitCast(twoStepsBitCast(V, MidTy), DstTy);
 
   return CreateBitOrPointerCast(V, DstTy);
+}
+
+Type *HLSIRBuilder::StripPadding(Type *T, const DataLayout &DL) {
+  if (auto *ST = dyn_cast<StructType>(T)) {
+    if (ST->isOpaque())
+      return Type::getInt8Ty(T->getContext());
+
+    if (ST->getNumElements() == 1) {
+      auto *EltT = ST->getElementType(0);
+      if (DL.getTypeAllocSize(ST) == DL.getTypeAllocSize(EltT))
+        return StripPadding(EltT, DL);
+    }
+  }
+
+  return T;
 }
 
 Value *HLSIRBuilder::twoStepsBitCast(Value *V) {
@@ -717,12 +733,19 @@ Value *HLSIRBuilder::CreateMux(Value *Cond, ArrayRef<Value *> Args,
   for (auto &Arg : Args)
     AllArgs.push_back(Arg);
 
-  SmallVector<Type *, 4> AllTypes({Args[0]->getType()});
-  for (auto &Arg : AllArgs)
-    AllTypes.push_back(Arg->getType());
-
   auto *Mux = Intrinsic::getDeclaration(getModule(), Intrinsic::fpga_mux,
                                         {Args[0]->getType(), Cond->getType()});
+  return CreateCall(Mux, AllArgs, Name);
+}
+
+Value *HLSIRBuilder::CreateSparseMux(Value *Cond, ArrayRef<Value *> Args,
+                                     const Twine &Name) {
+  SmallVector<Value *, 4> AllArgs({Cond});
+  for (auto &Arg : Args)
+    AllArgs.push_back(Arg);
+
+  auto *Mux = Intrinsic::getDeclaration(getModule(), Intrinsic::fpga_sparse_mux,
+                                        {Args[1]->getType(), Cond->getType()});
   return CreateCall(Mux, AllArgs, Name);
 }
 
@@ -1117,6 +1140,34 @@ Value *HLSIRBuilder::CreatePIPOPushAcquire(Value *Pipo) {
 
 Value *HLSIRBuilder::CreatePIPOPushRelease(Value *Pipo) {
   return CreatePIPOInst(Intrinsic::fpga_pipo_push_release, Pipo);
+}
+
+Value *HLSIRBuilder::CreateShiftRegPeek(Value *ShiftReg, Value *Idx) {
+  auto *ShiftRegTy = ShiftReg->getType()->getPointerElementType();
+  // FIXME shift_register intrinsics are decayed form...
+  auto *Zero = Constant::getNullValue(getIntPtrTy());
+  auto *Gep = CreateGEP(ShiftRegTy, ShiftReg, {Zero, Zero});
+  auto *ValTy = Gep->getType()->getPointerElementType();
+  auto *ValPtrTy = Gep->getType();
+  auto *IdxTy = Idx->getType();
+  auto ID = Intrinsic::fpga_shift_register_peek;
+  auto *Intr = Intrinsic::getDeclaration(getModule(), ID, {ValTy, ValPtrTy, IdxTy});
+  return CreateCall(Intr, {Gep, Idx});
+}
+
+Value *HLSIRBuilder::CreateShiftRegShift(Value *In, Value *ShiftReg,
+                                         Value *Pred) {
+  if (Pred == nullptr)
+    Pred = getTrue();
+  auto *ShiftRegTy = ShiftReg->getType()->getPointerElementType();
+  // FIXME shift_register intrinsics are decayed form...
+  auto *Zero = Constant::getNullValue(getIntPtrTy());
+  auto *Gep = CreateGEP(ShiftRegTy, ShiftReg, {Zero, Zero});
+  auto *ValTy = Gep->getType()->getPointerElementType();
+  auto *ValPtrTy = Gep->getType();
+  auto ID = Intrinsic::fpga_shift_register_shift;
+  auto *Intr = Intrinsic::getDeclaration(getModule(), ID, {ValTy, ValPtrTy});
+  return CreateCall(Intr, {In, Gep, Pred});
 }
 
 uint64_t HLSIRBuilder::calculateByteOffset(Type *T,
@@ -2040,11 +2091,13 @@ Value *HLSIRBuilder::CreateStreamPragmaInst(Value *V, int32_t Depth, int64_t Bit
       {V, ConstantInt::getSigned(Int32Ty, Depth)}, nullptr, M, BitSize));
 }
 
-Value *HLSIRBuilder::CreatePipoPragmaInst(Value *V, int32_t Depth, int32_t SType, int64_t BitSize) {
+Value *HLSIRBuilder::CreatePipoPragmaInst(Value *V, int32_t Depth, 
+                                          int32_t SType, int64_t BitSize,
+                                          StringRef Source) {
   auto *M = getModule();
   Type *Int32Ty = Type::getInt32Ty(M->getContext());
   return Insert(PragmaInst::Create<PipoPragmaInst>(
-      {V, ConstantInt::getSigned(Int32Ty, Depth), ConstantInt::getSigned(Int32Ty, SType)}, nullptr, M, BitSize));
+      {V, ConstantInt::getSigned(Int32Ty, Depth), ConstantInt::getSigned(Int32Ty, SType)}, nullptr, M, BitSize, Source));
 }
 
 Value *HLSIRBuilder::CreateSAXIPragmaInst(Value *V, StringRef Bundle,

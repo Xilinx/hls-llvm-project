@@ -98,6 +98,7 @@ add_clang_library(clangBasic
   VirtualFileSystem.cpp
   Warnings.cpp
   XRayLists.cpp
+  HLSDirective.cpp
   ${version_inc}
   )
 

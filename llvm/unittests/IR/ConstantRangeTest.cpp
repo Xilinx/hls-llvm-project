@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -943,6 +944,68 @@ TEST(ConstantRange, MakeGuaranteedNoWrapRegion) {
       ConstantRange::makeGuaranteedNoWrapRegion(
           Instruction::Sub, One, OBO::NoUnsignedWrap | OBO::NoSignedWrap),
       ConstantRange(APInt::getMinValue(32) + 1, APInt::getSignedMinValue(32)));
+
+  ConstantRange OneLessThanBitWidth(APInt(32, 0), APInt(32, 31) + 1);
+  ConstantRange UpToBitWidth(APInt(32, 0), APInt(32, 32) + 1);
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, UpToBitWidth, OBO::NoUnsignedWrap),
+            ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, OneLessThanBitWidth, OBO::NoUnsignedWrap));
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, UpToBitWidth, OBO::NoSignedWrap),
+            ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, OneLessThanBitWidth, OBO::NoSignedWrap));
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, UpToBitWidth, OBO::NoUnsignedWrap),
+            ConstantRange(APInt(32, 0), APInt(32, 1) + 1));
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, UpToBitWidth, OBO::NoSignedWrap),
+            ConstantRange(APInt(32, -1), APInt(32, 0) + 1));
+
+  EXPECT_EQ(
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, ConstantRange(32, true), OBO::NoUnsignedWrap),
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, OneLessThanBitWidth, OBO::NoUnsignedWrap));
+  EXPECT_EQ(
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, ConstantRange(32, true), OBO::NoSignedWrap),
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, OneLessThanBitWidth, OBO::NoSignedWrap));
+
+  ConstantRange IllegalShAmt(APInt(32, 32), APInt(32, 0) + 1);
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, IllegalShAmt, OBO::NoUnsignedWrap),
+            ConstantRange(32, true));
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl, IllegalShAmt, OBO::NoSignedWrap),
+            ConstantRange(32, true));
+
+  EXPECT_EQ(
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, ConstantRange(APInt(32, -32), APInt(32, 16) + 1),
+          OBO::NoUnsignedWrap),
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, ConstantRange(APInt(32, 0), APInt(32, 16) + 1),
+          OBO::NoUnsignedWrap));
+  EXPECT_EQ(
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, ConstantRange(APInt(32, -32), APInt(32, 16) + 1),
+          OBO::NoSignedWrap),
+      ConstantRange::makeGuaranteedNoWrapRegion(
+          Instruction::Shl, ConstantRange(APInt(32, 0), APInt(32, 16) + 1),
+          OBO::NoSignedWrap));
+
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl,
+                ConstantRange(APInt(32, -32), APInt(32, 16) + 1),
+                OBO::NoUnsignedWrap),
+            ConstantRange(APInt(32, 0), APInt(32, 65535) + 1));
+  EXPECT_EQ(ConstantRange::makeGuaranteedNoWrapRegion(
+                Instruction::Shl,
+                ConstantRange(APInt(32, -32), APInt(32, 16) + 1),
+                OBO::NoSignedWrap),
+            ConstantRange(APInt(32, -32768), APInt(32, 32767) + 1));
 }
 
 TEST(ConstantRange, GetEquivalentICmp) {

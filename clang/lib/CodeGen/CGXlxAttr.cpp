@@ -1,4 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -44,7 +45,7 @@ StringRef getPragmaContext(const Attr* A)
     return "user" ; 
   }
     if(A->getPragmaContext()->getName().equals_lower("SLXDIRECTIVE")) { 
-      return "infer-from-pragma";
+      return "user";
     }
     else if (A->getPragmaContext()->getName().equals_lower("HLSDIRECTIVE")) { 
       return "user" ;
@@ -123,6 +124,7 @@ StringRef getPragmaContext(const Attr* A)
     case attr::APScalarInterface:
     case attr::APScalarInterruptInterface:
     case attr::FPGAFunctionCtrlInterface:
+    case attr::XlxCache:
     case attr::FPGARegister:
     case attr::FPGADataFootPrintHint:
     case attr::FPGASignalName:
@@ -185,21 +187,6 @@ static int EvaluateInteger(Expr *E, const ASTContext &Ctx, int Default = -1) {
   return Value.getSExtValue();
 }
 
-//TODO, we will need replace all EvaluateInteger to HLSEvaluateInteger 
-
-static int HLSEvaluateInteger(Expr *E, CodeGenModule& CGM,  const ASTContext &Ctx, int Default = -1) {
-  if (!E)
-    return Default;
-
-  if (!E->isEvaluatable(Ctx)) {
-    CGM.getDiags().Report(E->getExprLoc(), diag::err_xlx_expr_not_ice);
-    return Default;
-  }
-  else { 
-    llvm::APSInt Value = E->EvaluateKnownConstInt(Ctx);
-    return Value.getSExtValue();
-  }
-}
 
 static int64_t HLSEvaluateDoubleAsInteger(Expr *E, CodeGenModule& CGM,  const ASTContext &Ctx) {
 
@@ -241,17 +228,22 @@ static int64_t HLSEvaluateDoubleAsInteger(Expr *E, CodeGenModule& CGM,  const AS
   return 0;
 }
 
-int CodeGenFunction::HLSEvaluateInteger(Expr *E, int Default ) { 
+int CodeGenFunction::HLSEvaluateICE(Expr *E, StringRef optionName, StringRef pragmaName, int Default ) {
+  if (!E)
+    return Default;
 
-  if (!E->isEvaluatable(getContext())) { 
-    CGM.getDiags().Report(E->getExprLoc(), diag::err_xlx_expr_not_ice );
+  if (!E->isEvaluatable(getContext())) {
+    CGM.getDiags().Report(E->getExprLoc(), diag::err_xlx_option_not_ice)
+      << optionName << pragmaName;
     return Default;
   }
   else { 
     llvm::APSInt Value = E->EvaluateKnownConstInt(getContext());
-    return  Value.getSExtValue();
+    return (int)Value.getSExtValue();
   }
+  return Default; 
 }
+
 
 template <unsigned N>
 static llvm::ConstantAsMetadata *CreateIntMeatadata(llvm::LLVMContext &Ctx,
@@ -312,7 +304,7 @@ static void EmitXlxReqdPipeDepthAttr(XlxReqdPipeDepthAttr *A,
         llvm::MDNode::get(Ctx, {llvm::MDString::get(Ctx, "xlx_fpga_pipo_depth"),
                                 CreateIntMeatadata<32>(Ctx, Depth)}));
   } else {
-    auto Depth = EvaluateInteger(A->getDepth(), ASTCtx, /*Default*/ 1);
+    auto Depth = EvaluateInteger(A->getDepth(), ASTCtx,  /*Default*/ 1);
     // to be compatible with Reflow's handler, using "xcl_reqd_pipe_depth"
     // instead of "xlx_read_pipe_depth"
     MDs.push_back(
@@ -542,6 +534,35 @@ static std::string SynthesisAttr(FPGAAddressInterfaceAttr *A,
   }
 
   return S.str();
+}
+
+static bool IsHLSStreamOfBlocksType(QualType Ty) { 
+  if (isa<DecayedType>(Ty)) { 
+    Ty = cast<DecayedType>(Ty)->getOriginalType();
+  }
+  Ty = Ty.getCanonicalType();
+
+  auto *BTy = Ty->isReferenceType() ? Ty->getPointeeType().getTypePtr()
+                                    : Ty->getPointeeOrArrayElementType();
+
+  if (BTy->isClassType() && !BTy->getAsCXXRecordDecl()
+                                 ->getCanonicalDecl()
+                                 ->getQualifiedNameAsString()
+                                 .compare("hls::stream_of_blocks"))
+    return true;
+
+  // hls::stream<type> with template in type
+  if (dyn_cast<TemplateSpecializationType>(BTy)) {
+    TemplateName name =
+        dyn_cast<TemplateSpecializationType>(BTy)->getTemplateName();
+    if (TemplateDecl *decl = name.getAsTemplateDecl()) {
+      std::string base_name = decl->getQualifiedNameAsString();
+      if (base_name == "hls::stream_of_blocks")
+        return true;
+    }
+  }
+  return false;
+
 }
 
 static bool IsHLSBurstMaxiType(QualType ty) {
@@ -872,14 +893,40 @@ void CodeGenFunction::EmitXlxParamAttributes(const ParmVarDecl *D,
   EmitStoreOfScalar(Copy, lv);
 }
 
+
 void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
                                                 llvm::Function *Fn) {
   if (getLangOpts().CPlusPlus)
     if (auto *NameII = FD->getIdentifier())
       Fn->addFnAttr("fpga.demangled.name", NameII->getName());
   
+  if (!FD->hasAttrs())
+    return ; 
   auto &Ctx = getLLVMContext(); 
   llvm::MDBuilder MDB(Ctx);
+
+  SmallVector<Attr *, 4> resultAttrs; 
+  for ( Attr* A: FD->getAttrs()) { 
+    bool HLSIfCondRet = true; 
+    if (const Expr* ifCond = A->getHLSIfCond()) { 
+      if (!ifCond->isEvaluatable(getContext())) {
+        CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
+      }
+      else { 
+        llvm::APSInt Value = ifCond->EvaluateKnownConstInt(getContext());
+        if (Value.getZExtValue() == 0){ 
+          HLSIfCondRet = false; 
+        }
+      }
+    }
+    if (HLSIfCondRet) { 
+      resultAttrs.push_back(A); 
+    }
+  }
+  AttrVec &attrs = const_cast<AttrVec &>(FD->getAttrs()); 
+  attrs.clear();
+  attrs.append(resultAttrs.begin(), resultAttrs.end()); 
+
 
   SmallVector<llvm::Metadata *, 4> Args;
   if (auto DownwardInline = FD->getAttr<XCLInlineAttr>()) {
@@ -970,9 +1017,19 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
     llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
     Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("hls_preserve"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
   }
+
    
   if(!Args.empty()) {
     Fn->addMetadata("fpga.function.pragma", *llvm::MDNode::get(Ctx, Args));
+  }
+  if (auto *A = FD->getAttr<SDxKernelAttr>()) {
+    for( auto *param : FD->parameters()) { 
+      QualType param_type = param->getType(); 
+      if (IsHLSStreamOfBlocksType(param_type)) { 
+        CGM.getDiags().Report(param->getLocation(), diag::err_xlx_not_supported_by_scout_HLS) 
+        << "the argument of hls::stream_of_blocks type in 'top' function "; 
+      }
+    }
   }
 }
 
@@ -1242,6 +1299,23 @@ void CodeGenFunction::EmitBundleForScope(
 
   for (auto *A : Attrs) {
     bool isNormalKind = true;
+
+    bool HLSIfCondRet = true; 
+    if (const Expr* ifCond = A->getHLSIfCond()) { 
+      if (!ifCond->isEvaluatable(getContext())) {
+        CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
+      }
+      else { 
+        llvm::APSInt Value = ifCond->EvaluateKnownConstInt(getContext());
+        if (Value.getZExtValue() == 0){ 
+          HLSIfCondRet = false; 
+        }
+      }
+    }
+    if (!HLSIfCondRet) { 
+      continue; 
+    }
+
     switch (A->getKind()) {
     default:
       isNormalKind = false;
@@ -1459,16 +1533,23 @@ Expr* EmitHLSVariableRecur( Expr *E, SmallVectorImpl<unsigned int> &idxs, std::s
     else{ 
       CGM.getDiags().Report(E->getExprLoc(),
         diag::warn_invalid_variable_expr);
-      return nullptr;
+      return E;
     }
   }
   else if (isa<ArraySubscriptExpr>(E)) { 
     base = EmitHLSVariableRecur(cast<ArraySubscriptExpr>(E)->getBase(), idxs,  name, CGM, context);
     Expr * idxSub = cast<ArraySubscriptExpr>(E)->getIdx();
     //TODO, we need evaluate and check const int after Sematic Action
-    int idx = HLSEvaluateInteger(idxSub, CGM, context, 0);
-    idxs.push_back(idx);
-    name.append( "_" ).append( std::to_string(idx));
+    if (!idxSub->isEvaluatable(context)) {
+      CGM.getDiags().Report(idxSub->getExprLoc(), diag::err_xlx_expr_not_ice); 
+      return E; 
+    }
+    else { 
+      llvm::APSInt Value = idxSub->EvaluateKnownConstInt(context);
+      int idx = (int)Value.getSExtValue();
+      idxs.push_back(idx); 
+      name.append( "_" ).append( std::to_string(idx));
+    }
   }
   else if (isa<ImplicitCastExpr>(E)) { 
     base = EmitHLSVariableRecur(cast<ImplicitCastExpr>(E)->getSubExpr(), idxs, name, CGM, context);
@@ -1820,11 +1901,11 @@ void CodeGenFunction::EmitArrayPartitionXFormIntrinsic(const XlxArrayPartitionXF
 
   Expr *DimE = A->getDim();
   Expr *FactorE = A->getFactor();
-  int factor = HLSEvaluateInteger(FactorE, -1); 
+  int factor = HLSEvaluateICE(FactorE, "factor" , "array_partition",  -1); 
   if (factor == -1 ) 
     return ; 
 
-  int dim = HLSEvaluateInteger(DimE, -1); 
+  int dim = HLSEvaluateICE(DimE, "dim", "array_partition", -1); 
   if (dim == -1)
     return; 
   /*
@@ -1856,11 +1937,11 @@ void CodeGenFunction::EmitArrayReshapeXFormIntrinsic(const XlxArrayReshapeXFormA
   Expr *DimE = A->getDim();
   Expr *FactorE = A->getFactor();
 
-  int factor = HLSEvaluateInteger(FactorE, -1); 
+  int factor = HLSEvaluateICE(FactorE, "factor", "array_reshape",  -1); 
   if (factor == -1 ) 
     return ; 
 
-  int dim = HLSEvaluateInteger(DimE, -1); 
+  int dim = HLSEvaluateICE(DimE, "dim", "array_reshape", -1); 
   if (dim == -1)
     return; 
   /*
@@ -1963,7 +2044,7 @@ void CodeGenFunction::EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAt
   auto dep_compel = attr->getCompel();
   auto dep_type = attr->getType();
   auto dep_direction = attr->getDirection();
-  auto dep_distance = HLSEvaluateInteger(attr->getDistance());
+  auto dep_distance = HLSEvaluateICE(attr->getDistance(), "distance", "dependence with cross_variables");
 
   llvm::Value* args[] = {
        addr0,
@@ -1983,7 +2064,7 @@ void CodeGenFunction::EmitXlxCrossDependenceIntrinsic(const XlxCrossDependenceAt
 void CodeGenFunction::EmitResourceLimitIntrinsic(const FPGAResourceLimitHintAttr* resourceLimit) 
 {
   auto Limit = resourceLimit->getLimit();
-  auto LimitInt = EvaluateInteger(Limit, getContext(), /*Default*/ 0);
+  auto LimitInt = HLSEvaluateICE(Limit, "limit", "allocation",  /*Default*/ 0);
   auto InstanceType = resourceLimit->getInstanceType()->getName();
   auto Name = resourceLimit->getInstanceName()->getName();
   llvm::Value *Args[] = {llvm::ConstantDataArray::getString(getLLVMContext(), Name),
@@ -2031,7 +2112,7 @@ void CodeGenFunction::EmitFunctionAllocationIntrinsic(const XlxFunctionAllocatio
   }
 
   auto Limit = functionAlloc->getLimit();
-  auto LimitInt = EvaluateInteger(Limit, getContext(), /*Default*/ 0);
+  auto LimitInt = HLSEvaluateICE(Limit, "limit", "allocation", /*Default*/ 0);
 
   assert(FD && "unexpected, instances options is not function");
 
@@ -2112,7 +2193,7 @@ void CodeGenFunction::EmitSAXILITEOffsetIntrinsic( const SAXILITEOffsetInterface
   }
 
   auto bundName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getBundleName(), false);
-  auto offset = Builder.getInt64(EvaluateInteger(interface->getOffset(), getContext(), -1));
+  auto offset = Builder.getInt64(HLSEvaluateICE(interface->getOffset(), "offset", "s_axilite", -1));
   auto isRegister = Builder.getInt1(interface->getIsRegister());
   auto signalName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getSignalName(), false);
   auto clockName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getClockName(), false);
@@ -2170,15 +2251,15 @@ void CodeGenFunction::EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *inter
   std::string channelID = 
       cast<StringLiteral>(interface->getChannel())->getString();
   
-  int depth = EvaluateInteger(interface->getDepth(), getContext(), -1);
+  int depth = HLSEvaluateICE(interface->getDepth(), "depth", "m_axi", -1);
   StringRef offsetType = MAXIInterfaceAttr::ConvertOffsetModeTypeToStr(interface->getOffsetMode());
   StringRef signalName = interface->getSignalName();
-  int num_read_outstanding = EvaluateInteger(interface->getNumReadOutstanding(), getContext());
-  int num_write_outstanding = EvaluateInteger(interface->getNumWriteOutstanding(), getContext());
-  int max_read_burst_length = EvaluateInteger(interface->getMaxReadBurstLength(), getContext());
-  int max_write_burst_length = EvaluateInteger(interface->getMaxWriteBurstLength(), getContext());
-  int latency = EvaluateInteger(interface->getLatency(), getContext());
-  int max_widen_bitwidth = EvaluateInteger(interface->getMaxWidenBitWidth(), getContext());
+  int num_read_outstanding = HLSEvaluateICE(interface->getNumReadOutstanding(), "read_outstanding", "m_axi");
+  int num_write_outstanding = HLSEvaluateICE(interface->getNumWriteOutstanding(), "write_outstanding", "m_axi");
+  int max_read_burst_length = HLSEvaluateICE(interface->getMaxReadBurstLength(), "max_read_burst_length", "m_axi");
+  int max_write_burst_length = HLSEvaluateICE(interface->getMaxWriteBurstLength(), "max_write_burst_length", "m_axi");
+  int latency = HLSEvaluateICE(interface->getLatency(), "latency", "m_axi");
+  int max_widen_bitwidth = HLSEvaluateICE(interface->getMaxWidenBitWidth(), "bitwidth" , "m_axi");
   llvm::Value *Args[] = {
     port_var, 
     llvm::ConstantDataArray::getString(getLLVMContext(), bundleName, false), 
@@ -2219,7 +2300,7 @@ void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceA
 
   bool isRegister = interface->getIsRegister();
   int registerMode = (int)interface->getRegisterMode();
-  int depth = EvaluateInteger(interface->getDepth(), getContext(), 0);
+  int depth = HLSEvaluateICE(interface->getDepth(), "depth","axis",  0);
   StringRef signalName = interface->getSignalName();
   StringRef bundleName = interface->getBundleName();
 
@@ -2275,9 +2356,9 @@ void CodeGenFunction::EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *i
     storage_type_op = (int)mem_impl_type.first;
   }
 
-  int latency = EvaluateInteger(interface->getLatency(), getContext());
+  int latency = HLSEvaluateICE(interface->getLatency(), "latency", "interface " + interface->getMode().str());
   StringRef signalName = interface->getSignalName();
-  int depth = EvaluateInteger(interface->getDepth(), getContext());
+  int depth = HLSEvaluateICE(interface->getDepth(), "depth", "interface " + interface->getMode().str());
 
   llvm::Value* Args[] = {
     port_var,
@@ -2319,7 +2400,7 @@ void CodeGenFunction::EmitAPFifoInterfaceIntrinsic( const APFifoInterfaceAttr *i
 
   bool isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
-  int depth = EvaluateInteger(interface->getDepth(), getContext());
+  int depth = HLSEvaluateICE(interface->getDepth(), "depth", "interface ap_fifo" );
   llvm::Value *Args [] = { 
     port_var,
     Builder.getInt1(isRegister), 
@@ -2391,7 +2472,7 @@ void CodeGenFunction::EmitAPScalarInterruptInterfaceIntrinsic(const APScalarInte
 
   bool isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
-  int interruptValue = EvaluateInteger(interface->getInterrupt(), getContext());
+  int interruptValue = HLSEvaluateICE(interface->getInterrupt(), "interrupt",  "interrupt" );
 
   llvm::Value* Args[] = { 
     port_var,
@@ -2481,7 +2562,7 @@ void CodeGenFunction::EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias
   }
 
   for(auto i = maxi_alias->offsets_begin(), e = maxi_alias->offsets_end(); i != e; ++i) {
-    auto offset = HLSEvaluateInteger(*i);
+    auto offset = HLSEvaluateICE(*i, "offset", "alias");
     if(offset < 0) {
       CGM.getDiags().Report((*i)->getExprLoc(), diag::err_invalid_offset_for_alias); 
       return;
@@ -2572,7 +2653,7 @@ void  CodeGenFunction::EmitXlxDependenceIntrinsic( const XlxDependenceAttr*  XLX
   auto dep_compel = XLXDependence->getCompel();
   auto dep_type = XLXDependence->getType();
   auto dep_direction = XLXDependence->getDirection();
-  auto dep_distance = HLSEvaluateInteger(XLXDependence->getDistance());
+  auto dep_distance = HLSEvaluateICE(XLXDependence->getDistance(), "distance" , "dependence");
 
   if (dep_distance > 0 && dep_type ==  XlxDependenceAttr::intra ){
     dep_distance = 0;
@@ -2624,7 +2705,7 @@ void  CodeGenFunction::EmitXCLDependenceIntrinsic( const XCLDependenceAttr*  XLX
   auto dep_compel = XLXDependence->getCompel();
   auto dep_type = XLXDependence->getType();
   auto dep_direction = XLXDependence->getDirection();
-  auto dep_distance = HLSEvaluateInteger( XLXDependence->getDistance());
+  auto dep_distance = HLSEvaluateICE( XLXDependence->getDistance(), "distance", "dependence");
 
   llvm::Value* args[] = {
        addr,
@@ -2638,4 +2719,69 @@ void  CodeGenFunction::EmitXCLDependenceIntrinsic( const XCLDependenceAttr*  XLX
 
   assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");
   CreateCallSideEffect(CGM, Builder, "fpga.dependence", args, port_width, getPragmaContext(XLXDependence));
+}
+
+void CodeGenFunction::EmitXlxCacheIntrinsic(const XlxCacheAttr *cache)
+{
+  if (!CurFuncDecl->hasAttr<SDxKernelAttr>()) { 
+    return;
+  }
+  Expr *port = cache->getPort();
+  int64_t port_width = 0;
+
+  if (port->getType()->isPointerType() || port->getType()->isReferenceType()) { 
+    if (IsHLSBurstMaxiType(port->getType()->getPointeeType())) { 
+      CGM.getDiags().Report(cache->getLocation(), diag::err_xlx_invalid_port_expr)
+          << "cache for 'burst_maxi' doesn't support pointer or reference  ";
+      return;
+    }
+  }
+
+  llvm::Value* port_var = nullptr;
+  if (IsFunctionPointer(port)) { 
+    CGM.getDiags().Report(cache->getLocation(), diag::err_xlx_invalid_port_expr)
+        << "cache pragma option 'port' doesn't support function pointer";
+    return;
+  }
+  else if (IsHLSBurstMaxiType(port->getType())) { 
+    std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
+    llvm::Value *V = port_info.first;
+    if (V->getType()->isPointerTy()) { 
+      CGM.getDiags().Report(cache->getLocation(), diag::err_xlx_invalid_port_expr)
+          << "cache for 'burst_maxi' doesn't support pointer or reference  ";
+      return;
+    }
+    else {
+      port_var = Builder.CreateExtractValue(V, {0});
+      port_width = CGM.getDataLayout().getTypeAllocSizeInBits(port_var->getType()->getPointerElementType());
+    }
+  }
+  else {
+    std::pair<llvm::Value*, int64_t> port_info = EmitHLSVariableExpr(port);
+    if (nullptr == port_info.first) return;
+
+    port_var = port_info.first;
+    port_width = port_info.second;
+  }
+
+  size_t lines = HLSEvaluateICE(cache->getLines(), "lines", "cache", 1);
+  size_t depth = HLSEvaluateICE(cache->getDepth(), "depth", "cache");
+  size_t ways = HLSEvaluateICE(cache->getWays(), "ways", "cache", 1);
+  size_t users = HLSEvaluateICE(cache->getUsers(), "users", "cache", 1);
+  size_t burst = (size_t)cache->getBurst();
+  size_t write = (size_t)cache->getWrite();
+
+  llvm::Value *Args[] = {
+    port_var,
+    Builder.getInt64(lines),
+    Builder.getInt64(depth),
+    Builder.getInt64(ways),
+    Builder.getInt64(users),
+    Builder.getInt64(burst), 
+    Builder.getInt64(write), 
+  };
+
+  CreateCallSideEffect(CGM, Builder, "xlx_cache", Args, port_width, getPragmaContext(cache));
 }

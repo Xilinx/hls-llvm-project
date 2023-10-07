@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -4474,7 +4475,6 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
      Assert(CS.isCall(), "directive_scope_entry can not be invoked");
      IntrinsicInst* call = dyn_cast<IntrinsicInst>(CS.getInstruction());
 
-     bool atLeastOneExit = false;
      for (Use &use : call->uses()){
        User *user = use.getUser();
        CallSite callsite(user);
@@ -4484,11 +4484,7 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
        if (callsite.getIntrinsicID() != Intrinsic::directive_scope_exit) {
          Assert(callsite.isBundleOperand(&use), "directive.scope.entry can only be used in an operand bundle or by a directive.scope.exit");
        }
-       else { 
-         atLeastOneExit = true;
-       }
      }
-     Assert(atLeastOneExit, "directive.scope.entry should have at least one directive.scope.exit user");
      break;
   }
   case Intrinsic::directive_scope_exit:{

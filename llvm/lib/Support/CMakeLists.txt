@@ -3,22 +3,21 @@ add_library( sqlite3 SHARED IMPORTED)
 # Find out position of libsqlite3 .so/.lib/.dll
 #################################################
 if (DEFINED LINK_DIRS)
-  set(LINK_DIRS_LIST ${LINK_DIRS})
   #if( MSVC OR MINGW )
   if(WIN32 OR CYGWIN)
-    foreach(dir ${LINK_DIRS_LIST})
+    foreach(dir ${LINK_DIRS})
       message(STATUS dir=${dir})
-      find_file(sqlite_res_path_lib libsqlite3.28.0.lib ${dir})
-      if (sqlite_res_path_lib)
+      if (EXISTS "${dir}/libsqlite3.28.0.lib")
+        set(sqlite_res_path_lib "${dir}/libsqlite3.28.0.lib" CACHE FILEPATH "" FORCE)
         message(STATUS sqlite_res_path_lib=${sqlite_res_path_lib})
         break()
       endif()
     endforeach()
   else()
-    foreach(dir ${LINK_DIRS_LIST})
+    foreach(dir ${LINK_DIRS})
       message(STATUS dir=${dir})
-      find_file(sqlite_res_path_so libsqlite3.28.0.so ${dir})
-      if (sqlite_res_path_so)
+      if (EXISTS "${dir}/libsqlite3.28.0.so")
+        set(sqlite_res_path_so "${dir}/libsqlite3.28.0.so" CACHE FILEPATH "" FORCE)
         message(STATUS sqlite_res_path_so=${sqlite_res_path_so})
         break()
       endif()
@@ -166,6 +165,7 @@ add_llvm_library(LLVMSupport
   Unicode.cpp
   XILINXFPGAPlatformBasic.cpp
   XILINXFPGACoreInstFactory.cpp
+  XILINXSystemInfo.cpp
   YAMLParser.cpp
   YAMLTraits.cpp
   raw_os_ostream.cpp
@@ -209,8 +209,8 @@ if (DEFINED INCLUDE_DIRS)
   message(STATUS gradle_INCLUDE_DIRS=${INCLUDE_DIRS})
   foreach(dir ${INCLUDE_DIRS})
     message(STATUS each_include_dir=${dir})
-    find_file(sqlite3_header sqlite3.h ${dir})
-    if (sqlite3_header)
+    if (EXISTS "${dir}/sqlite3.h") 
+      set(sqlite3_header "{dir}/sqlite3.h" CACHE FILEPATH "" FORCE)
       message(STATUS sqlite3_header=${sqlite3_header})
       break()
     endif()

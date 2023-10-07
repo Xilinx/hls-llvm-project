@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===//
 //
@@ -6653,14 +6654,42 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
 #define PRAGMA_SPELLING_ATTR(X)                                                \
   case attr::X:                                                                \
     return getDerived().Transform##X##Attr(cast<X##Attr>(R));
+
 #define XLX_PRAGMA_SPELLING_ATTR(X)                                            \
   case attr::X:                                                                \
     return getDerived().Transform##X##Attr(cast<X##Attr>(R));
 #include "clang/Basic/AttrList.inc"
-  // FIXME: we may want to create a special macro like PRAGMA_SPELLING_ATTR
-  // such that we can automatically generate the HLS specific attributes
-  // cases requiring substitution.
+ /* currently, there are still following OpenCL attribute from 
+  * XLXLab, they are partly obsoleted, TODO, clean them 
+  attr::OpenCLUnrollHint:
+  attr::MAXIAdaptor:
+  attr::BRAMAdaptor:
+  attr::FPGADataFootPrintHint:
+  attr::FPGAMaxiMaxWidenBitwidth:
+  attr::FPGAMaxiLatency:
+  attr::FPGAMaxiNumRdOutstand:
+  attr::FPGAMaxiNumWtOutstand:
+  attr::FPGAMaxiRdBurstLength:
+  attr::FPGAMaxiWtBurstLength:
+  */
+
+  case attr::XlxOccurrence:
+  {
+    Sema &S = getSema();
+    const Attr *attr = getDerived().instantiateTemplateAttr(R);
+    const XlxOccurrenceAttr* A = cast<XlxOccurrenceAttr>(attr); 
+    Expr* Cycle = A->getCycle(); 
+    if (Cycle != cast<XlxOccurrenceAttr>(R)->getCycle()) { 
+      S.CheckXlxOccurrenceExprs(Cycle, A->getLocation(), A->getSpelling()); 
+    }
+  
+    return attr; 
+  }
+
+  case attr::FPGAResourceHint:
+  case attr::XCLLatency:
   case attr::XlxPipeline:
+  case attr::XCLDataFlow:
   case attr::XlxLoopTripCount:
   case attr::XlxArrayView:
   case attr::XlxResetIntrinsic:
@@ -6883,6 +6912,14 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   case attr::FPGAFunctionCtrlInterface:
   {
     const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    return attr;
+  }
+  case attr::XlxCache: 
+  {
+    const Attr* attr = getDerived().instantiateTemplateAttr(R);
+    Expr* var = dyn_cast<XlxCacheAttr>(attr)->getPort();
+    MarkDeclIsUsed  marker(SemaRef);
+    marker.Visit(var);
     return attr;
   }
     

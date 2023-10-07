@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2021 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //
@@ -83,7 +84,6 @@ void computePeelCount(Loop *L, unsigned LoopSize,
 bool peelLoop(Loop *L, unsigned PeelCount, LoopInfo *LI, ScalarEvolution *SE,
               DominatorTree *DT, AssumptionCache *AC, bool PreserveLCSSA);
 
-MDNode *GetUnrollMetadata(MDNode *LoopID, StringRef Name);
 
 } // end namespace llvm
 

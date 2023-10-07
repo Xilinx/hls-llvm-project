@@ -1,4 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -81,7 +82,11 @@ TbProcessCheck::TbProcessCheck(StringRef Name, ClangTidyContext *Context)
       KeepTopName(Options.get("KeepTopName", 0)),
       NewFlow(Options.get("NewFlow", 0)), BCSim(Options.get("BCSim", 0)),
       hTop(this), hTopDef(this), hCall(this), hMain(this),
-      BuildDir(Context->getCurrentBuildDirectory()) {}
+      BuildDir(Context->getCurrentBuildDirectory()) {
+  Wrap.Sw.Body.append(
+    "refine_signal_handler();\n"
+  );
+}
 
 void TbProcessCheck::storeOptions(ClangTidyOptions::OptionMap &Options) {
   TbProcessCheck::storeOptions(Options);
@@ -265,6 +270,10 @@ void TbProcessCheck::generateWrapFunction(
     dumpStr += Wrap.HwStub.dumpAllReturnStructAsArg() + "\n";
   else 
     dumpStr += Wrap.HwStub.dumpAll() + "\n";
+  dumpStr.append("#ifdef __cplusplus\n");
+  dumpStr.append("extern \"C\"\n");
+  dumpStr.append("#endif\n");
+  dumpStr.append("void refine_signal_handler();\n");
   dumpStr += Wrap.Sw.dumpAll() + "\n";
   dumpStr += "#endif\n";
 
@@ -334,7 +343,8 @@ void TbProcessCheck::generateWrapBody(const clang::FunctionDecl *Top,
   Callstmt += ");\n";
   Retstmt += ";";
 
-  ConvTo.Body = Callstmt + Retstmt;
+  ConvTo.Body.append(Callstmt);
+  ConvTo.Body.append(Retstmt);
 }
 
 void TbProcessCheck::insertGuardForKeepTopName(

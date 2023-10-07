@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -36,6 +37,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/XILINXFunctionInfoUtils.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constant.h"
@@ -130,7 +132,7 @@ namespace {
   public:
     static char ID; // Pass identification
 
-    JumpThreading(int T = -1) : FunctionPass(ID), Impl(T) {
+    JumpThreading(int T = -1, bool enableSinkHoist = false) : FunctionPass(ID), Impl(T) {
       initializeJumpThreadingPass(*PassRegistry::getPassRegistry());
     }
 
@@ -144,6 +146,7 @@ namespace {
       AU.addPreserved<LazyValueInfoWrapperPass>();
       AU.addPreserved<GlobalsAAWrapperPass>();
       AU.addRequired<TargetLibraryInfoWrapperPass>();
+      AU.addRequiredTransitive<MemoryDependenceWrapperPass>();
     }
 
     void releaseMemory() override { Impl.releaseMemory(); }
@@ -159,15 +162,17 @@ INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LazyValueInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MemoryDependenceWrapperPass)
 INITIALIZE_PASS_END(JumpThreading, "jump-threading",
                 "Jump Threading", false, false)
 
 // Public interface to the Jump Threading pass
-FunctionPass *llvm::createJumpThreadingPass(int Threshold) {
+FunctionPass *llvm::createJumpThreadingPass(int Threshold, bool enableSinkHoist) {
   return new JumpThreading(Threshold);
 }
 
-JumpThreadingPass::JumpThreadingPass(int T) {
+JumpThreadingPass::JumpThreadingPass(int T, bool enableSinkHoist)
+    : EnableSinkHoist(enableSinkHoist) {
   BBDupThreshold = (T == -1) ? BBDuplicateThreshold : unsigned(T);
 }
 
@@ -289,6 +294,8 @@ bool JumpThreading::runOnFunction(Function &F) {
   auto DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto LVI = &getAnalysis<LazyValueInfoWrapperPass>().getLVI();
   auto AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+  auto MDR = &getAnalysis<MemoryDependenceWrapperPass>().getMemDep();
+
   DeferredDominance DDT(*DT);
   std::unique_ptr<BlockFrequencyInfo> BFI;
   std::unique_ptr<BranchProbabilityInfo> BPI;
@@ -300,7 +307,7 @@ bool JumpThreading::runOnFunction(Function &F) {
   }
 
   bool Changed = Impl.runImpl(F, TLI, LVI, AA, &DDT, HasProfileData,
-                              std::move(BFI), std::move(BPI));
+                              std::move(BFI), std::move(BPI), MDR);
 
   if (PrintLVIAfterJumpThreading) {
     dbgs() << "LVI for function '" << F.getName() << "':\n";
@@ -315,6 +322,8 @@ PreservedAnalyses JumpThreadingPass::run(Function &F,
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &LVI = AM.getResult<LazyValueAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
+  auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+  auto &MDR = AM.getResult<MemoryDependenceAnalysis>(F);
   DeferredDominance DDT(DT);
 
   std::unique_ptr<BlockFrequencyInfo> BFI;
@@ -326,7 +335,7 @@ PreservedAnalyses JumpThreadingPass::run(Function &F,
   }
 
   bool Changed = runImpl(F, &TLI, &LVI, &AA, &DDT, HasProfileData,
-                         std::move(BFI), std::move(BPI));
+                         std::move(BFI), std::move(BPI), &MDR);
 
   if (!Changed)
     return PreservedAnalyses::all();
@@ -341,7 +350,8 @@ bool JumpThreadingPass::runImpl(Function &F, TargetLibraryInfo *TLI_,
                                 LazyValueInfo *LVI_, AliasAnalysis *AA_,
                                 DeferredDominance *DDT_, bool HasProfileData_,
                                 std::unique_ptr<BlockFrequencyInfo> BFI_,
-                                std::unique_ptr<BranchProbabilityInfo> BPI_) {
+                                std::unique_ptr<BranchProbabilityInfo> BPI_,
+                                MemoryDependenceResults *MDR_) {
   DEBUG(dbgs() << "Jump threading on function '" << F.getName() << "'\n");
   TLI = TLI_;
   LVI = LVI_;
@@ -349,6 +359,9 @@ bool JumpThreadingPass::runImpl(Function &F, TargetLibraryInfo *TLI_,
   DDT = DDT_;
   BFI.reset();
   BPI.reset();
+  JTSinkHoist =
+      llvm::make_unique<JumpThreadingSinkHoist>(MDR_, AA, TLI, BBDupThreshold);
+
   // When profile data is available, we need to update edge weights after
   // successful jump threading, which requires both BPI and BFI being available.
   HasProfileData = HasProfileData_;
@@ -475,9 +488,9 @@ static bool isRegionSSDM(const CallInst *Call) {
 /// Return the cost of duplicating a piece of this block from first non-phi
 /// and before StopAt instruction to thread across it. Stop scanning the block
 /// when exceeding the threshold. If duplication is impossible, returns ~0U.
-static unsigned getJumpThreadDuplicationCost(BasicBlock *BB,
-                                             Instruction *StopAt,
-                                             unsigned Threshold) {
+static unsigned getJumpThreadDuplicationCost(
+    BasicBlock *BB, Instruction *StopAt, unsigned Threshold,
+    const SmallPtrSetImpl<Instruction *> *MovedInsts = nullptr) {
   assert(StopAt->getParent() == BB && "Not an instruction from proper BB?");
   /// Ignore PHI nodes, these will be flattened when duplication happens.
   BasicBlock::const_iterator I(BB->getFirstNonPHI());
@@ -513,6 +526,9 @@ static unsigned getJumpThreadDuplicationCost(BasicBlock *BB,
 
     // Debugger intrinsics don't incur code size.
     if (isa<DbgInfoIntrinsic>(I)) continue;
+
+    if (MovedInsts && MovedInsts->count(&*I))
+      continue;
 
     // HLS BEGIN
     // consider load, GEP, cast is free for HLS 
@@ -1578,6 +1594,7 @@ bool JumpThreadingPass::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
             << " for pred '" << PredValue.second->getName() << "'.\n";
         });
 
+  bool Changed = false;
   // HLS BEGIN
   if(HLS) {
     // we only do JT when BB's All Pred will jump to the only one BB's Succ,
@@ -1585,6 +1602,8 @@ bool JumpThreadingPass::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
     unsigned PredNum = std::distance(pred_begin(BB), pred_end(BB));
     if(PredNum != PredValues.size())
       return false;
+    
+    Changed |= JTSinkHoist->doSinkHoistOnBlock(BB);
   }
   // HLS END
   
@@ -1650,7 +1669,7 @@ bool JumpThreadingPass::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
 
   // If all edges were unthreadable, we fail.
   if (PredToDestList.empty())
-    return false;
+    return Changed;
 
   // If all the predecessors go to a single known successor, we want to fold,
   // not thread. By doing so, we do not need to duplicate the current block and
@@ -2230,6 +2249,16 @@ bool JumpThreadingPass::DuplicateCondBranchOnPHIIntoPred(
     return false;
   }
 
+  if (HLS) {
+    // HLS BEGIN
+    // Don't thread across the loop latch
+    for (BasicBlock *SuccBB : successors(BB)) {
+      if (LoopHeaders.count(SuccBB))
+        return false;
+    }
+    // HLS END
+  }
+
   unsigned DuplicationCost =
       getJumpThreadDuplicationCost(BB, BB->getTerminator(), BBDupThreshold);
   if (DuplicationCost > BBDupThreshold) {
@@ -2684,5 +2713,418 @@ bool JumpThreadingPass::ThreadGuard(BasicBlock *BB, IntrinsicInst *Guard,
     }
     Inst->eraseFromParent();
   }
+  return true;
+}
+
+
+/************************************************************************************************
+ *  Below implement the sink/hoist for jump threading pss
+************************************************************************************************/
+bool JumpThreadingSinkHoist::shouldMoveInst(Instruction *I) {
+  if (isa<PHINode>(I))
+    return false;
+
+  if (isa<DbgInfoIntrinsic>(I))
+    return false;
+
+  if (isa<AllocaInst>(I))
+    return false;
+
+  if (isa<TerminatorInst>(I))
+    return false;
+
+  return true;
+}
+
+void JumpThreadingSinkHoist::collectForwardReachableBlocksSlowCase(
+    BasicBlock *BB, BasicBlock *PostDomBB,
+    SmallPtrSetImpl<BasicBlock *> &Blocks) {
+  assert(PDT.properlyDominates(PostDomBB, BB) &&
+         "PostDomBB should post dominate BB");
+
+  for (BasicBlock *Succ : successors(BB)) {
+    if (Succ == PostDomBB)
+      continue;
+
+    assert(PDT.properlyDominates(PostDomBB, Succ) &&
+           "PostDomBB should post dominate Succ");
+    if (Blocks.insert(Succ).second)
+      collectForwardReachableBlocksSlowCase(Succ, PostDomBB, Blocks);
+  }
+
+  Blocks.insert(PostDomBB);
+}
+
+void JumpThreadingSinkHoist::collectForwardReachableBlocks(
+    BasicBlock *BB, BasicBlock *PostDomBB,
+    SmallPtrSetImpl<BasicBlock *> &Blocks) {
+  assert(PDT.properlyDominates(PostDomBB, BB) &&
+         "PostDomBB should post dominate BB");
+
+  BlockCacheKeyTy Key = std::make_pair(BB, PostDomBB);
+  if (ForwardBlockCache.count(Key)) {
+    Blocks.insert(ForwardBlockCache[Key].begin(), ForwardBlockCache[Key].end());
+  } else {
+    DomTreeNode *PDomNode = PDT.getNode(BB);
+    assert(PDomNode && "Post Dominator node not found??");
+    DomTreeNode *IDomNode = PDomNode->getIDom();
+    assert(IDomNode && IDomNode->getBlock() &&
+           "IDomNode should not be nullptr");
+
+    if (IDomNode->getBlock() == PostDomBB) {
+      SmallPtrSet<BasicBlock *, 8> ReachableBlocks;
+      collectForwardReachableBlocksSlowCase(BB, PostDomBB, ReachableBlocks);
+      ForwardBlockCache[Key] = ReachableBlocks;
+      Blocks.insert(ReachableBlocks.begin(), ReachableBlocks.end());
+    } else {
+
+      while (true) {
+        BasicBlock *NewPostDomBB = IDomNode->getBlock();
+        collectForwardReachableBlocks(BB, NewPostDomBB, Blocks);
+        if (NewPostDomBB == PostDomBB)
+          break;
+
+        IDomNode = IDomNode->getIDom();
+        assert(IDomNode && IDomNode->getBlock() &&
+               "IDomNode should not be nullptr");
+        BB = NewPostDomBB;
+      }
+    }
+  }
+}
+
+void JumpThreadingSinkHoist::collectBackwardReachableBlocksSlowCase(
+    BasicBlock *BB, BasicBlock *DomBB, SmallPtrSetImpl<BasicBlock *> &Blocks) {
+  assert(DT.properlyDominates(DomBB, BB) && "DomBB should dominate BB");
+
+  for (BasicBlock *Pred : predecessors(BB)) {
+    if (Pred == DomBB)
+      continue;
+
+    assert(DT.properlyDominates(DomBB, Pred) && "DomBB should dominate Pred");
+    if (Blocks.insert(Pred).second)
+      collectBackwardReachableBlocksSlowCase(Pred, DomBB, Blocks);
+  }
+
+  Blocks.insert(DomBB);
+}
+
+void JumpThreadingSinkHoist::collectBackwardReachableBlocks(
+    BasicBlock *BB, BasicBlock *DomBB, SmallPtrSetImpl<BasicBlock *> &Blocks) {
+  assert(DT.properlyDominates(DomBB, BB) && "DomBB should dominate BB");
+
+  BlockCacheKeyTy Key = std::make_pair(BB, DomBB);
+  if (BackwardBlockCache.count(Key)) {
+    Blocks.insert(BackwardBlockCache[Key].begin(),
+                  BackwardBlockCache[Key].end());
+  } else {
+    DomTreeNode *DomNode = DT.getNode(BB);
+    assert(DomNode && "Dominator node not found??");
+    DomTreeNode *IDomNode = DomNode->getIDom();
+    assert(IDomNode && IDomNode->getBlock() &&
+           "IDomNode should not be nullptr");
+
+    if (IDomNode->getBlock() == DomBB) {
+      SmallPtrSet<BasicBlock *, 8> ReachableBlocks;
+      collectBackwardReachableBlocksSlowCase(BB, DomBB, ReachableBlocks);
+      BackwardBlockCache[Key] = ReachableBlocks;
+      Blocks.insert(ReachableBlocks.begin(), ReachableBlocks.end());
+    } else {
+
+      while (true) {
+        BasicBlock *NewDomBB = IDomNode->getBlock();
+        collectBackwardReachableBlocks(BB, NewDomBB, Blocks);
+        if (NewDomBB == DomBB)
+          break;
+
+        IDomNode = IDomNode->getIDom();
+        assert(IDomNode && IDomNode->getBlock() &&
+               "IDomNode should not be nullptr");
+        BB = NewDomBB;
+      }
+    }
+  }
+}
+
+// check if the dependence allows to move instruction from \p MovedFrom to \p
+// MovedTo MovedTo must post dominate MovedFrom
+bool JumpThreadingSinkHoist::canSinkInst(Instruction *I, BasicBlock *MovedFrom,
+                                         BasicBlock *MovedTo) {
+  assert(PDT.properlyDominates(MovedTo, MovedFrom) &&
+         "MovedTo should post dominate MovedFrom");
+
+  SmallPtrSet<BasicBlock *, 8> ReachableBlocks;
+  collectForwardReachableBlocks(MovedFrom, MovedTo, ReachableBlocks);
+  ReachableBlocks.erase(MovedTo);
+
+  // 1. all the user should not in the path between MovedFrom to MovedTo
+  for (User *U : I->users()) {
+    if (Instruction *UI = dyn_cast<Instruction>(U)) {
+      if (ReachableBlocks.count(UI->getParent()))
+        return false;
+
+      if (UI->getParent() == I->getParent())
+        if (!MovedInsts.count(UI))
+          return false;
+
+      if (UI->getParent() == MovedTo)
+        if (isa<PHINode>(UI))
+          return false;
+    }
+  }
+
+  if (!I->mayReadOrWriteMemory())
+    return true;
+
+  // 2. there is no memory dependence along this path
+  DenseMap<Instruction *, unsigned> DFSNumber;
+  unsigned InstLoc = 0;
+  for (Instruction &I : *MovedFrom) {
+    DFSNumber[&I] = InstLoc++;
+  }
+
+  assert(DFSNumber.count(I) && "Expect instruction inside map");
+  Instruction *ScanPos = MovedFrom->getTerminator();
+  while (true) {
+
+    MemDepResult Res = getDependency(I, ScanPos, MDR, AA, TLI);
+    if (Res.isClobber() || Res.isDef()) {
+      Instruction *DepInst = Res.getInst();
+      assert(DepInst && "Dependended on instruction should not be nullptr");
+      if (MovedInsts.count(DepInst)) {
+        ScanPos = DepInst;
+        continue;
+      }
+
+      assert(DFSNumber.count(I) && DFSNumber.count(DepInst) &&
+             "Expect instruction inside map");
+
+      if (DFSNumber[I] >= DFSNumber[DepInst])
+        break;
+    }
+
+    if (!Res.isNonLocal() && !Res.isNonFuncLocal())
+      return false;
+
+    break;
+  }
+
+  for (BasicBlock *BB : ReachableBlocks) {
+    MemDepResult Res = getDependency(I, BB->getTerminator(), MDR, AA, TLI);
+    if (!Res.isNonLocal() && !Res.isNonFuncLocal())
+      return false;
+  }
+
+  return true;
+}
+
+bool JumpThreadingSinkHoist::canHoistInst(Instruction *I, BasicBlock *MovedFrom,
+                                          BasicBlock *MovedTo) {
+
+  assert(DT.properlyDominates(MovedTo, MovedFrom) &&
+         "MovedTo should dominate MovedFrom");
+
+  // 1. for instructions that may have sideeffects, we move it only if MovedFrom
+  // post dominate MovedTo
+  if (I->mayHaveSideEffects())
+    if (!PDT.properlyDominates(MovedFrom, MovedTo))
+      return false;
+
+  SmallPtrSet<BasicBlock *, 8> ReachableBlocks;
+  collectBackwardReachableBlocks(MovedFrom, MovedTo, ReachableBlocks);
+  ReachableBlocks.erase(MovedTo);
+
+  // 2. all the operand should not in the path between MovedFrom to MovedTo
+  for (unsigned i = 0; i < I->getNumOperands(); ++i) {
+    Value *Op = I->getOperand(i);
+    if (Instruction *OpI = dyn_cast<Instruction>(Op)) {
+      if (ReachableBlocks.count(OpI->getParent()))
+        return false;
+
+      if (OpI->getParent() == I->getParent())
+        if (!MovedInsts.count(OpI))
+          return false;
+    }
+  }
+
+  if (!I->mayReadOrWriteMemory())
+    return true;
+
+  // 3. there is no memory dependence along this path
+  Instruction *ScanPos = I;
+  while (true) {
+    MemDepResult Res = getDependency(I, ScanPos, MDR, AA, TLI);
+    if (Res.isClobber() || Res.isDef()) {
+      Instruction *DepInst = Res.getInst();
+      assert(DepInst && "Dependended on instruction should not be nullptr");
+      if (MovedInsts.count(DepInst)) {
+        ScanPos = DepInst;
+        continue;
+      }
+    }
+
+    if (!Res.isNonLocal() && !Res.isNonFuncLocal())
+      return false;
+
+    break;
+  }
+
+  for (BasicBlock *BB : ReachableBlocks) {
+    MemDepResult Res = getDependency(I, BB->getTerminator(), MDR, AA, TLI);
+    if (!Res.isNonLocal() && !Res.isNonFuncLocal())
+      return false;
+  }
+
+  return true;
+}
+
+BasicBlock *JumpThreadingSinkHoist::getSinkMoveBlock(BasicBlock *BB) {
+  DomTreeNode *PDomNode = PDT.getNode(BB);
+  assert(PDomNode && "Post Dominator node not found??");
+
+  BasicBlock *MovedTo = nullptr;
+  while (true) {
+    PDomNode = PDomNode->getIDom();
+    if (!PDomNode || !PDomNode->getBlock())
+      break;
+
+    BasicBlock *PDomBlock = PDomNode->getBlock();
+    if (DT.properlyDominates(BB, PDomBlock)) {
+      /// move should not accorss loop
+      if (LI.getLoopFor(PDomBlock) != LI.getLoopFor(BB))
+        continue;
+
+      MovedTo = PDomNode->getBlock();
+      break;
+    }
+  }
+
+  return MovedTo;
+}
+
+BasicBlock *JumpThreadingSinkHoist::getHoistMoveBlock(BasicBlock *BB) {
+  DomTreeNode *DomNode = DT.getNode(BB);
+  assert(DomNode && "Dominator node not found??");
+
+  BasicBlock *MovedTo = nullptr;
+  while (true) {
+    DomNode = DomNode->getIDom();
+    if (!DomNode || !DomNode->getBlock())
+      break;
+
+    BasicBlock *DomBlock = DomNode->getBlock();
+    if (PDT.properlyDominates(BB, DomBlock)) {
+      /// move should not accorss loop
+      if (LI.getLoopFor(DomBlock) != LI.getLoopFor(BB))
+        continue;
+
+      MovedTo = DomNode->getBlock();
+      break;
+    }
+  }
+
+  return MovedTo;
+}
+
+/// @brief try move instruction down to the immediate post dominator if dependence allows
+/// @param BB the instructions that should do move 
+void JumpThreadingSinkHoist::trySinkInstInBlock(BasicBlock *BB, BasicBlock *MovedTo) {
+  if (!MovedTo)
+    return;
+
+  assert(DT.properlyDominates(BB, MovedTo) &&
+         PDT.properlyDominates(MovedTo, BB) &&
+         "Dominator relationship not satisfied??");
+
+  for (BasicBlock::reverse_iterator it = BB->rbegin(), ie = BB->rend();
+       it != ie; ++it) {
+    Instruction *Inst = &*it;
+    if (!shouldMoveInst(Inst))
+      continue;
+
+    if (MovedInsts.count(Inst))
+      continue;
+
+    if (!canSinkInst(Inst, BB, MovedTo))
+      continue;
+
+    SinkInsts.push_back(Inst);
+    MovedInsts.insert(Inst);
+  }
+}
+
+void JumpThreadingSinkHoist::tryHoistInstInBlock(BasicBlock *BB, BasicBlock *MovedTo) {
+  if (!MovedTo)
+    return;
+
+  assert(DT.properlyDominates(MovedTo, BB) &&
+         PDT.properlyDominates(BB, MovedTo) &&
+         "Dominator relationship not satisfied??");
+
+  for (BasicBlock::iterator it = BB->begin(), ie = BB->end(); it != ie; ++it) {
+    Instruction *Inst = &*it;
+    if (!shouldMoveInst(Inst))
+      continue;
+
+    if (MovedInsts.count(Inst))
+      continue;
+
+    if (!canHoistInst(Inst, BB, MovedTo))
+      continue;
+
+    HoistInsts.push_back(Inst);
+    MovedInsts.insert(Inst);
+  }
+}
+
+bool JumpThreadingSinkHoist::doSinkHoistOnBlock(BasicBlock *BB) {
+  if (!VisitedBlocks.insert(BB).second)
+    return false;
+
+  DT.releaseMemory();
+  PDT.releaseMemory();
+  LI.releaseMemory();
+  DT.recalculate(*BB->getParent());
+  PDT.recalculate(*BB->getParent());
+  LI.analyze(DT);
+
+  DEBUG(dbgs() << "Do sink hoist on block: \n" << *BB << "\n");
+  SinkInsts.clear();
+  HoistInsts.clear();
+  MovedInsts.clear();
+
+  BasicBlock *HoistMovedTo = getHoistMoveBlock(BB);
+  BasicBlock *SinkMovedTo = getSinkMoveBlock(BB);
+  tryHoistInstInBlock(BB, HoistMovedTo);
+  trySinkInstInBlock(BB, SinkMovedTo);
+
+  unsigned JumpThreadCost = getJumpThreadDuplicationCost(
+      BB, BB->getTerminator(), BBDupThreshold, &MovedInsts);
+  if (JumpThreadCost > BBDupThreshold) {
+    DEBUG(dbgs() << "Sink hoist on block can not enable more jump threading\n");
+    return false;
+  }
+
+  if (!SinkInsts.empty()) {
+    assert(SinkMovedTo && "MovedTo should not be nullptr");
+
+    DEBUG(dbgs() << "Sink instruction to block: \n" << *SinkMovedTo << "\n");
+
+    for (Instruction *I : SinkInsts) {
+      DEBUG(dbgs() << "Sink instruction: " << *I << "\n");
+      I->moveBefore(SinkMovedTo->getFirstNonPHI());
+    }
+  }
+
+  if (!HoistInsts.empty()) {
+    assert(HoistMovedTo && "MovedTo should not be nullptr");
+
+    DEBUG(dbgs() << "Hoist instruction to block: \n" << *HoistMovedTo << "\n");
+    for (Instruction *I : HoistInsts) {
+      DEBUG(dbgs() << "Hoist instruction: " << *I << "\n");
+      I->moveBefore(HoistMovedTo->getTerminator());
+    }
+  }
+
   return true;
 }

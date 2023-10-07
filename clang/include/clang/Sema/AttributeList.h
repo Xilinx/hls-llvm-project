@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2020 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -176,7 +177,9 @@ private:
   /// The next attribute allocated in the current Pool.
   AttributeList *NextInPool;
 
+  //following is HLS special staff 
   IdentifierInfo *pragmaContext; 
+  Expr* HLSIfCond; 
 
   /// Arguments, if any, are stored immediately following the object.
   ArgsUnion *getArgsBuffer() { return reinterpret_cast<ArgsUnion *>(this + 1); }
@@ -257,7 +260,7 @@ private:
       SyntaxUsed(syntaxUsed), Invalid(false), UsedAsTypeAttr(false),
       IsAvailability(false), IsTypeTagForDatatype(false), IsProperty(false),
       HasParsedType(false), HasProcessingCache(false),
-      NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr) {
+      NextInPosition(nullptr), NextInPool(nullptr), pragmaContext(nullptr), HLSIfCond(nullptr) {
     if (numArgs) memcpy(getArgsBuffer(), args, numArgs * sizeof(ArgsUnion));
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -423,6 +426,15 @@ public:
   IdentifierInfo* getPragmaContext() const { 
     return pragmaContext; 
   }
+
+  Expr* getHLSIfCond() const{ 
+    return HLSIfCond; 
+  }
+
+  void setHLSIfCond(Expr* cond) { 
+    this->HLSIfCond = cond; 
+  }
+
 
 
   bool isPackExpansion() const { return EllipsisLoc.isValid(); }

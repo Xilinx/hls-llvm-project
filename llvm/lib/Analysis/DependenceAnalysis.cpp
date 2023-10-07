@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -254,6 +255,11 @@ FullDependence::FullDependence(Instruction *Source, Instruction *Destination,
 unsigned FullDependence::getDirection(unsigned Level) const {
   assert(0 < Level && Level <= Levels && "Level out of range");
   return DV[Level - 1].Direction;
+}
+
+void FullDependence::setDirection(unsigned Level, unsigned Dir) {
+  assert(0 < Level && Level <= Levels && "Level out of range");
+  DV[Level - 1].Direction = Dir;
 }
 
 
@@ -628,14 +634,33 @@ void Dependence::dump(raw_ostream &OS) const {
 }
 
 static AliasResult underlyingObjectsAlias(AliasAnalysis *AA,
-                                          const DataLayout &DL, const Value *A,
-                                          const Value *B) {
-  const Value *AObj = GetUnderlyingObject(A, DL);
-  const Value *BObj = GetUnderlyingObject(B, DL);
-  return AA->alias(AObj, DL.getTypeStoreSize(AObj->getType()),
-                   BObj, DL.getTypeStoreSize(BObj->getType()));
-}
+                                          const DataLayout &DL,
+                                          const MemoryLocation &LocA,
+                                          const MemoryLocation &LocB) {
+  // Check the original locations (minus size) for noalias, which can happen for
+  // tbaa, incompatible underlying object locations, etc.
+  MemoryLocation LocAS(LocA.Ptr, MemoryLocation::UnknownSize, LocA.AATags);
+  MemoryLocation LocBS(LocB.Ptr, MemoryLocation::UnknownSize, LocB.AATags);
+  if (AA->alias(LocAS, LocBS) == NoAlias)
+    return NoAlias;
 
+  // Check the underlying objects are the same
+  const Value *AObj = GetUnderlyingObject(LocA.Ptr, DL);
+  const Value *BObj = GetUnderlyingObject(LocB.Ptr, DL);
+
+  // If the underlying objects are the same, they must alias
+  if (AObj == BObj)
+    return MustAlias;
+
+  // We may have hit the recursion limit for underlying objects, or have
+  // underlying objects where we don't know they will alias.
+  if (!isIdentifiedObject(AObj) || !isIdentifiedObject(BObj))
+    return MayAlias;
+
+  // Otherwise we know the objects are different and both identified objects so
+  // must not alias.
+  return NoAlias;
+}
 
 // Returns true if the load or store can be analyzed. Atomic and volatile
 // operations have properties which this analysis does not understand.
@@ -3322,8 +3347,9 @@ DependenceInfo::depends(Instruction *Src, Instruction *Dst,
   Value *SrcPtr = getPointerOperand(Src);
   Value *DstPtr = getPointerOperand(Dst);
 
-  switch (underlyingObjectsAlias(AA, F->getParent()->getDataLayout(), DstPtr,
-                                 SrcPtr)) {
+  switch (underlyingObjectsAlias(AA, F->getParent()->getDataLayout(),
+                                 MemoryLocation::get(Dst),
+                                 MemoryLocation::get(Src))) {
   case MayAlias:
   case PartialAlias:
     // cannot analyse objects if we don't understand their aliasing.
@@ -3771,8 +3797,9 @@ const SCEV *DependenceInfo::getSplitIteration(const Dependence &Dep,
   assert(isLoadOrStore(Dst));
   Value *SrcPtr = getPointerOperand(Src);
   Value *DstPtr = getPointerOperand(Dst);
-  assert(underlyingObjectsAlias(AA, F->getParent()->getDataLayout(), DstPtr,
-                                SrcPtr) == MustAlias);
+  assert(underlyingObjectsAlias(AA, F->getParent()->getDataLayout(),
+                                MemoryLocation::get(Dst),
+                                MemoryLocation::get(Src)) == MustAlias);
 
   // establish loop nesting levels
   establishNestingLevels(Src, Dst);

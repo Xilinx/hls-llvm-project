@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -346,10 +347,16 @@ bool llvm::hasLoopMetadata(const Loop *L, StringRef Attr) {
 
 Optional<LoopTripCountMDInfo> llvm::getLoopTripCount(const Loop *L) {
   if (MDNode *MD = getLoopMetadata(L, "llvm.loop.tripcount")) {
+    std::string Source = "";
+    if (MD->getNumOperands() >= 5 && isa<MDString>(MD->getOperand(4)))
+      Source = cast<MDString>(MD->getOperand(4))->getString();
+    DILocation *DL = 
+        dyn_cast<DILocation>(MD->getOperand(MD->getNumOperands() - 1));
     return LoopTripCountMDInfo(
         mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue(),
         mdconst::extract<ConstantInt>(MD->getOperand(2))->getZExtValue(),
-        mdconst::extract<ConstantInt>(MD->getOperand(3))->getZExtValue());
+        mdconst::extract<ConstantInt>(MD->getOperand(3))->getZExtValue(),
+        Source, DL);
   }
   return None;
 }
@@ -379,6 +386,35 @@ bool llvm::isPipelineOff(const Loop *L) {
   if (MDNode *MD = getLoopMetadata(L, "llvm.loop.pipeline.enable"))
     return mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue() ==
            0;
+  return false;
+}
+
+bool llvm::dropPipeline(Loop *L) {
+  MDNode *LoopID = L->getLoopID();
+  if (!LoopID)
+    return false;
+
+  assert(LoopID->getNumOperands() > 0 && "requires at least one operand");
+  assert(LoopID->getOperand(0) == LoopID && "invalid loop id");
+
+  for (unsigned i = 1, e = LoopID->getNumOperands(); i < e; ++i) {
+    MDNode *MD = dyn_cast<MDNode>(LoopID->getOperand(i));
+    if (!MD)
+      continue;
+
+    MDString *S = dyn_cast<MDString>(MD->getOperand(0));
+    if (!S)
+      continue;
+
+    if (S->getString().equals("llvm.loop.pipeline.enable")) {
+       // replace with an meaningless one since we cannot drop one directly
+       LoopID->replaceOperandWith(
+           i, MDNode::get(LoopID->getContext(),
+                          {MDString::get(LoopID->getContext(), "None")}));
+       // assume only one pipeline pragma in the list
+       return true;
+    }
+  }
   return false;
 }
 
@@ -432,6 +468,45 @@ bool llvm::isFlattenOff(const Loop *L) {
            0;
   return false;
 }
+
+
+static int LoopHintPragmaValue(MDNode *MD) {
+  if (MD) {
+    assert(
+        MD->getNumOperands() >=2 &&
+        "loop unroll/pipeline/flatten hint metadata should have 2 operands.");
+    int Count =
+        mdconst::extract<ConstantInt>(MD->getOperand(1))->getSExtValue();
+    return Count;
+  }
+  return 0;
+}
+
+bool llvm::hasLoopPartialUnroll(const Loop *L) {
+  if (!L)
+    return false;
+  MDNode *LoopID = L->getLoopID();
+  if (!LoopID)
+    return false;
+  if (GetUnrollMetadata(LoopID, "llvm.loop.unroll.count")) {
+    int count = LoopHintPragmaValue(GetUnrollMetadata(LoopID, "llvm.loop.unroll.count"));
+    if (count > 1)
+      return true;
+  }
+  return false;
+}
+
+bool llvm::hasLoopTripCount(const Loop *L) {
+  if (!L)
+    return false;
+  MDNode *LoopID = L->getLoopID();
+  if (!LoopID)
+    return false;
+  if (GetUnrollMetadata(LoopID, "llvm.loop.tripcount"))
+    return true;
+  return false;
+}
+
 
 bool llvm::hasUnrollEnableMetadata(const Loop *L) {
   return hasLoopMetadata(L, "llvm.loop.unroll.count") ||
@@ -667,4 +742,26 @@ void llvm::ReflowCalculateTripCountAndMultiple(Loop *L, ScalarEvolution *SE,
     TripCount = SE->getSmallConstantTripCount(L, ExitingBlock);
     TripMultiple = SE->getSmallConstantTripMultiple(L, ExitingBlock);
   }
+}
+/// Given an llvm.loop loop id metadata node, returns the loop hint metadata
+/// node with the given name (for example, "llvm.loop.unroll.count"). If no
+/// such metadata node exists, then nullptr is returned.
+MDNode *llvm::GetUnrollMetadata(MDNode *LoopID, StringRef Name) {
+  // First operand should refer to the loop id itself.
+  assert(LoopID->getNumOperands() > 0 && "requires at least one operand");
+  assert(LoopID->getOperand(0) == LoopID && "invalid loop id");
+
+  for (unsigned i = 1, e = LoopID->getNumOperands(); i < e; ++i) {
+    MDNode *MD = dyn_cast<MDNode>(LoopID->getOperand(i));
+    if (!MD)
+      continue;
+
+    MDString *S = dyn_cast<MDString>(MD->getOperand(0));
+    if (!S)
+      continue;
+
+    if (Name.equals(S->getString()))
+      return MD;
+  }
+  return nullptr;
 }

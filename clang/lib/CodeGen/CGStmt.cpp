@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -35,6 +36,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/XILINXFPGAPlatformBasic.h"
 
+#include "clang/Basic/HLSDiagnostic.h"
 using namespace clang;
 using namespace CodeGen;
 
@@ -595,7 +597,21 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
   //HLS Attrirbute binding on NullStmt standfor HLSStmt, which will emit intrinsic 
   if (isa<NullStmt>(S.getSubStmt())) {
     for(auto* A: Attrs) {
-      getDebugInfo()->EmitLocation(Builder, A->getLocation()); 
+      // Function marked with 'nodebug' attribute has no debug info.
+      if (const Expr* ifCond = A->getHLSIfCond()) { 
+        if (!ifCond->isEvaluatable(getContext())) {
+          CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
+          continue; 
+        }
+        else { 
+          llvm::APSInt Value = ifCond->EvaluateKnownConstInt(getContext());
+          if (Value.getZExtValue() == 0){ 
+            continue; 
+          }
+        }
+      }
+      if (auto *DI = getDebugInfo())
+        DI->EmitLocation(Builder, A->getLocation());
       if (XlxDependenceAttr const *dep = dyn_cast<XlxDependenceAttr>(A)){
         EmitXlxDependenceIntrinsic(dep);
       }
@@ -676,6 +692,9 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
       }
       else if (auto const *reset = dyn_cast<XlxResetIntrinsicAttr>(A)){ 
         EmitResetIntrinsic(reset);
+      }
+      else if (auto const *cache = dyn_cast<XlxCacheAttr>(A)){ 
+        EmitXlxCacheIntrinsic(cache);
       }
     }
   }
@@ -1296,7 +1315,7 @@ void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
     EmitDecl(*I);
 
     if (BindOpScopeEntries.size()) { 
-      for( int i = 0; i < BindOpScopeEntries.size(); i++) { 
+      for( int i = BindOpScopeEntries.size() - 1; i >= 0; i --) { 
         auto *ScopeExit = llvm::Intrinsic::getDeclaration(
           CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
         Builder.CreateCall(ScopeExit, BindOpScopeEntries[i]);

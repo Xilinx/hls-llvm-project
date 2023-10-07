@@ -1,4 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -87,7 +88,15 @@ def int_fpga_pack_none: Intrinsic<[llvm_anyint_ty], [llvm_any_ty]>;
 // Multiplexer (generalize the select)
 // a_k = mux(k, a_0, a_1, a_2, ..., a_N)
 def int_fpga_mux : Intrinsic<[llvm_any_ty], [llvm_anyint_ty, llvm_vararg_ty]>;
+
+// Sparse Multiplexer (SSA equivalent to switch)
+// a_k = sparse.mux(k, cond_0, a_0, cond_1, a_1, cond_2, a_2, ..., cond_N, a_N)
+def int_fpga_sparse_mux : Intrinsic<[llvm_any_ty], [llvm_anyint_ty, llvm_vararg_ty]>;
 }
+
+//Intrinsics that are used to keep load/store for stream objects
+def int_fpga_ssa_keep : Intrinsic<[llvm_any_ty], [LLVMMatchType<0>],
+                                  [IntrInaccessibleMemOnly]>;
 
 // fpga.gmem.load(Ptr, volatile)
 def int_fpga_gmem_load : Intrinsic<[llvm_any_ty],

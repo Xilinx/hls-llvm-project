@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2150,6 +2151,13 @@ inline uint64_t UnsignedCeilMulDiv(uint64_t N, uint64_t P, uint64_t Q) {
 ///
 /// \returns the greatest common divisor of A and B.
 APInt GreatestCommonDivisor(APInt A, APInt B);
+
+/// \brief Compute LCM of two unsigned APInt values.
+///
+/// This function returns the least common multiple of the two APInt values.
+///
+/// \returns the least common multiple of A and B.
+APInt LeastCommonMultiple(APInt A, APInt B);
 
 /// \brief Converts the given APInt to a double value.
 ///

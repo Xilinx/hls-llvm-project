@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1390,6 +1391,8 @@ updateLoopMetadataOperandLocation(Metadata *LoopMD, DILocation *InlinedAt,
   SmallVector<Metadata *, 4> MDs;
   for (unsigned i = 0; i < LoopMDNode->getNumOperands(); ++i) {
     Metadata *MD = LoopMDNode->getOperand(i);
+    if (!MD)
+      continue; 
     if (DILocation *DL = dyn_cast<DILocation>(MD)) {
       if (DILocation *NewDL =
               inlineDebugLoc(DebugLoc(DL), InlinedAt, Ctx, IANodes).get())
@@ -1419,6 +1422,8 @@ updateLoopMetadataDebugLocation(Instruction &I, DILocation *InlinedAt,
   SmallVector<Metadata *, 4> MDs = {nullptr};
   for (unsigned i = 1; i < OrigLoopID->getNumOperands(); ++i) {
     Metadata *MD = OrigLoopID->getOperand(i);
+    if (!MD)
+      continue; 
     if (DILocation *DL = dyn_cast<DILocation>(MD)) {
       if (DILocation *NewDL =
               inlineDebugLoc(DebugLoc(DL), InlinedAt, Ctx, IANodes).get())
