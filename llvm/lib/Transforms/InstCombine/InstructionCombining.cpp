@@ -2303,6 +2303,36 @@ Instruction *InstCombiner::visitReturnInst(ReturnInst &RI) {
   return nullptr;
 }
 
+// WARNING: keep in sync with SimplifyCFGOpt::simplifyUnreachable()!
+Instruction *InstCombiner::visitUnreachableInst(UnreachableInst &I) {
+  // Try to remove the previous instruction if it must lead to unreachable.
+  // This includes instructions like stores and "llvm.assume" that may not get
+  // removed by simple dead code elimination.
+  while (Instruction *Prev = I.getPrevNonDebugInstruction()) {
+    // While we theoretically can erase EH, that would result in a block that
+    // used to start with an EH no longer starting with EH, which is invalid.
+    // To make it valid, we'd need to fixup predecessors to no longer refer to
+    // this block, but that changes CFG, which is not allowed in InstCombine.
+    if (Prev->isEHPad())
+      return nullptr; // Can not drop any more instructions. We're done here.
+
+    if (!isGuaranteedToTransferExecutionToSuccessor(Prev))
+      return nullptr; // Can not drop any more instructions. We're done here.
+    // Otherwise, this instruction can be freely erased,
+    // even if it is not side-effect free.
+
+    // A value may still have uses before we process it here (for example, in
+    // another unreachable block), so convert those to undef.
+    replaceInstUsesWith(*Prev, UndefValue::get(Prev->getType()));
+    eraseInstFromFunction(*Prev);
+  }
+  assert(!any_of(*I.getParent(), [](Instruction &I) {
+    return !isa<DbgInfoIntrinsic>(&I) && !isa<TerminatorInst>(&I);
+  }) && "The block is now empty.");
+  // FIXME: recurse into unconditional predecessors?
+  return nullptr;
+}
+
 Instruction *InstCombiner::visitBranchInst(BranchInst &BI) {
   // Change br (not X), label True, label False to: br X, label False, True
   Value *X = nullptr;
@@ -2892,7 +2922,7 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   assert(I->hasOneUse() && "Invariants didn't hold!");
 
   // Cannot move control-flow-involving, volatile loads, vaarg, etc.
-  if (isa<PHINode>(I) || I->isEHPad() || I->mayHaveSideEffects() ||
+  if (isa<PHINode>(I) || I->isEHPad() || I->mayThrow() || !I->willReturn() ||
       isa<TerminatorInst>(I))
     return false;
 

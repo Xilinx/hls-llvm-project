@@ -31,6 +31,7 @@
 #include "clang/Basic/HLSDiagnostic.h"
 
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/Support/XILINXFPGAPlatformBasic.h"
 
@@ -188,7 +189,7 @@ static int EvaluateInteger(Expr *E, const ASTContext &Ctx, int Default = -1) {
 }
 
 
-static int64_t HLSEvaluateDoubleAsInteger(Expr *E, CodeGenModule& CGM,  const ASTContext &Ctx) {
+static int64_t HLSEvaluateClockCycle(Expr *E, bool isSec, double clockPeriod, const char * option_name, CodeGenModule& CGM,  const ASTContext &Ctx) {
 
   if (!E)
     return 0;
@@ -199,28 +200,55 @@ static int64_t HLSEvaluateDoubleAsInteger(Expr *E, CodeGenModule& CGM,  const AS
   if (Result && !EvalResult.HasSideEffects) {
     if (EvalResult.Val.isInt()) {
       llvm::APSInt IntValue = EvalResult.Val.getInt();
-      return IntValue.getSExtValue();
+      if (isSec){ 
+        llvm::APFloat clockPeriod_Float(clockPeriod);
+        SmallString<32> clockPeriod_Str;
+        clockPeriod_Float.toString(clockPeriod_Str);
+
+        int64_t ret =  IntValue.getSExtValue() * 1000000000 / clockPeriod; 
+        if (ret == 0 && !IntValue.isNullValue()){ 
+          CGM.getDiags().Report(E->getLocStart(), diag::warn_xlx_performance_option_is_near_to_zero)
+          << option_name << clockPeriod_Str; 
+          return -1; 
+        }
+      }
+      else { 
+        return IntValue.getSExtValue();
+      }
     } else if (EvalResult.Val.isFloat()) {
       llvm::APFloat FloatVal = EvalResult.Val.getFloat();
+      if (isSec){ 
+        FloatVal = (FloatVal * llvm::APFloat((double)(1000000000))) / llvm::APFloat((double)clockPeriod); 
+      }
 
       llvm::APSInt IntValue(64, false);
       bool isExact = false;
       llvm::APFloat::opStatus status = FloatVal.convertToInteger(
-          IntValue, llvm::APFloat::rmTowardZero, &isExact);
+          IntValue, llvm::APFloat::rmNearestTiesToAway, &isExact);
 
-      if (status != llvm::APFloat::opOK && status != llvm::APFloat::opInexact) {
+      if (!isSec && status != llvm::APFloat::opOK && status != llvm::APFloat::opInexact) {
         /// error out this convert float to integer
         CGM.getDiags().Report(E->getExprLoc(), diag::err_xlx_float2int_failed);
         return 0;
       }
 
-      if (status == llvm::APFloat::opInexact) {
+      if (!isSec && status == llvm::APFloat::opInexact) {
         /// warning floating fraction truncate
         CGM.getDiags().Report(E->getExprLoc(),
                               diag::warn_xlx_float2int_inexact);
       }
 
-      return IntValue.getSExtValue();
+      int64_t ret = IntValue.getSExtValue();
+      if (isSec && ret == 0 && !EvalResult.Val.getFloat().isZero()){ 
+        llvm::APFloat clockPeriod_Float(clockPeriod);
+        SmallString<32> clockPeriod_Str;
+        clockPeriod_Float.toString(clockPeriod_Str);
+
+        CGM.getDiags().Report(E->getLocStart(), diag::warn_xlx_performance_option_is_near_to_zero)
+        << option_name << clockPeriod_Str.c_str();
+        return -1;
+      }
+      return ret; 
     }
   }
 
@@ -242,6 +270,20 @@ int CodeGenFunction::HLSEvaluateICE(Expr *E, StringRef optionName, StringRef pra
     return (int)Value.getSExtValue();
   }
   return Default; 
+}
+
+Optional<int> CodeGenFunction::HLSEvaluateICEResult(Expr *E)  
+{
+  if (!E)
+    return None;
+
+  if (!E->isEvaluatable(getContext())) {
+    return None;
+  }
+  else { 
+    llvm::APSInt Value = E->EvaluateKnownConstInt(getContext());
+    return (int)Value.getSExtValue();
+  }
 }
 
 
@@ -941,15 +983,17 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
     Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(DownwardInline)), Loc.getAsMDNode()}));
   }
 
-  if (auto AlwaysInline = FD->getAttr<AlwaysInlineAttr>()) { 
-    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(AlwaysInline->getLocation());
-    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(AlwaysInline)), Loc.getAsMDNode()}));
+  if (auto inlineAttr =  FD->getAttr<AlwaysInlineAttr>()) { 
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(inlineAttr->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(inlineAttr)), Loc.getAsMDNode()}));
   }
 
   if (auto NoInline = FD->getAttr<NoInlineAttr>()) { 
     llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(NoInline->getLocation());
     Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(NoInline)), Loc.getAsMDNode()}));
   }
+
+
 
   if (auto *A = FD->getAttr<XCLDataFlowAttr>()) {
     Fn->addFnAttr("fpga.dataflow.func", std::to_string(A->getPropagation()));
@@ -1283,9 +1327,10 @@ static Expr * GetBaseExpr( Expr* E)
 
 void CodeGenFunction::EmitBundleForScope(
     const Stmt *SubStmt, ArrayRef<const Attr *> Attrs,
-    SmallVectorImpl<llvm::OperandBundleDef> &BundleList,
-    SmallVectorImpl<llvm::MDNode*>  &pragmaLocs
-    ) {
+    SmallVectorImpl<llvm::OperandBundleDef> &DirectiveBundleList,
+    SmallVectorImpl<llvm::MDNode*> &DirectivePragmaLocs,
+    SmallVectorImpl<llvm::OperandBundleDef> &HintBundleList,
+    SmallVectorImpl<llvm::MDNode*> &HintPragmaLocs) {
   // auto &Ctx = Builder.getContext();
   SmallVector<llvm::Value*, 4> ComputeRegionPtrs;
   SourceLocation ComputeRegionLoc; 
@@ -1298,8 +1343,6 @@ void CodeGenFunction::EmitBundleForScope(
   StringRef computeRegionPragmaContext ; 
 
   for (auto *A : Attrs) {
-    bool isNormalKind = true;
-
     bool HLSIfCondRet = true; 
     if (const Expr* ifCond = A->getHLSIfCond()) { 
       if (!ifCond->isEvaluatable(getContext())) {
@@ -1316,12 +1359,17 @@ void CodeGenFunction::EmitBundleForScope(
       continue; 
     }
 
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    llvm::MDNode* MDN =
+        llvm::MDNode::get(getLLVMContext(),
+            {MDB.createString(A->getSpelling()),
+             MDB.createString(getPragmaContext(A)), Loc.get()});
     switch (A->getKind()) {
     default:
-      isNormalKind = false;
       break;
     case attr::XCLSingleWorkitem:{
-      BundleList.emplace_back(A->getSpelling(), None);
+      DirectiveBundleList.emplace_back(A->getSpelling(), None);
+      DirectivePragmaLocs.emplace_back(MDN);
     }
       break;
     case attr::XCLPipelineWorkitems: {
@@ -1330,13 +1378,15 @@ void CodeGenFunction::EmitBundleForScope(
                                   CGM.getDiags(), getContext(), /*LB*/ -1,
                                   /*UB*/ INT32_MAX, /*Default*/ -1);
 
-      BundleList.emplace_back(A->getSpelling(), Builder.getInt32(II));
+      DirectiveBundleList.emplace_back(A->getSpelling(), Builder.getInt32(II));
+      DirectivePragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XCLUnrollWorkitems:{
-      BundleList.emplace_back(
+      DirectiveBundleList.emplace_back(
           A->getSpelling(),
           Builder.getInt32(cast<XCLUnrollWorkitemsAttr>(A)->getUnrollHint()));
+      DirectivePragmaLocs.emplace_back(MDN);
     }
       break;
     case attr::XCLArrayView: {
@@ -1367,29 +1417,32 @@ void CodeGenFunction::EmitBundleForScope(
       auto *Copy = Builder.CreateCall(SSACopy, V, ScopeAttrs, V->getName());
       ComputeRegionPtrs.push_back(Copy);
       ComputeRegionLoc = A->getLocation();
-      isNormalKind = false;
       computeRegionPragmaContext = getPragmaContext(A); 
       break;
     }
     case attr::XCLOutline: {
       // auto Name = cast<XCLOutlineAttr>(A)->getName();
       // auto *Str = llvm::MDString::get(Ctx, Name);
-      BundleList.emplace_back(A->getSpelling(), None);
+      DirectiveBundleList.emplace_back(A->getSpelling(), None);
+      DirectivePragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XCLInline: {
       auto Recursive = cast<XCLInlineAttr>(A)->getRecursive();
-      BundleList.emplace_back(A->getSpelling(), Builder.getInt32(Recursive));
+      DirectiveBundleList.emplace_back(A->getSpelling(), Builder.getInt32(Recursive));
+      DirectivePragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XlxExprBalance: {
       auto Enabled = cast<XlxExprBalanceAttr>(A)->getEnabled();
-      BundleList.emplace_back(A->getSpelling(), Builder.getInt32(Enabled));
+      HintBundleList.emplace_back(A->getSpelling(), Builder.getInt32(Enabled));
+      HintPragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XlxMergeLoop: {
       auto Force = cast<XlxMergeLoopAttr>(A)->getForce();
-      BundleList.emplace_back(A->getSpelling(), Builder.getInt32(Force));
+      HintBundleList.emplace_back(A->getSpelling(), Builder.getInt32(Force));
+      HintPragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::FPGAResourceLimitHint: {
@@ -1402,20 +1455,24 @@ void CodeGenFunction::EmitBundleForScope(
                              llvm::ConstantDataArray::getString(getLLVMContext(), InstanceType),
                              Builder.getInt32(LimitInt)};
       SmallVector<llvm::OperandBundleDef, 1> bundleDefs;
-      BundleList.emplace_back(A->getSpelling(), Args);
+      HintBundleList.emplace_back(A->getSpelling(), Args);
+      HintPragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XlxOccurrence: {
       auto Cycle = cast<XlxOccurrenceAttr>(A)->getCycle();
       auto CycleInt = EvaluateInteger(Cycle, getContext(), /*Default*/ 1);
-      BundleList.emplace_back(A->getSpelling(), Builder.getInt32(CycleInt));
-    }; break;
+      HintBundleList.emplace_back(A->getSpelling(), Builder.getInt32(CycleInt));
+      HintPragmaLocs.emplace_back(MDN);
+      break;
+    }
     case attr::XlxProtocol: {
-      BundleList.emplace_back(
+      DirectiveBundleList.emplace_back(
           A->getSpelling(),
           Builder.getInt32(cast<XlxProtocolAttr>(A)->getProtocolMode()));
-    }
+      DirectivePragmaLocs.emplace_back(MDN);
       break;
+    }
     case attr::XCLLatency: {
       int Min = EvaluateInteger(cast<XCLLatencyAttr>(A)->getMin(), getContext(),
                                 /*Default*/ 0);
@@ -1426,22 +1483,38 @@ void CodeGenFunction::EmitBundleForScope(
                                      Builder.getInt32(Max)
       };
 
-      BundleList.emplace_back(A->getSpelling(), LatencyArray);
+      HintBundleList.emplace_back(A->getSpelling(), LatencyArray);
+      HintPragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XlxPerformance: {
+
       const XlxPerformanceAttr *PerformanceAttr = cast<XlxPerformanceAttr>(A);
       bool isLoop =
           PerformanceAttr->getPerformanceScope() == XlxPerformanceAttr::Loop;
 
-      int64_t TargetTI = HLSEvaluateDoubleAsInteger(
-          PerformanceAttr->getTargetTI(), CGM, getContext());
-      int64_t TargetTL = HLSEvaluateDoubleAsInteger(
-          PerformanceAttr->getTargetTL(), CGM, getContext());
-      int64_t AssumeTI = HLSEvaluateDoubleAsInteger(
-          PerformanceAttr->getAssumeTI(), CGM, getContext());
-      int64_t AssumeTL = HLSEvaluateDoubleAsInteger(
-          PerformanceAttr->getAssumeTL(), CGM, getContext());
+      bool isSec = PerformanceAttr->getUnit() == XlxPerformanceAttr::Seconds; 
+      if (getLangOpts().HLSClockPeriod == 0 && isSec){ 
+        CGM.getDiags().Report(PerformanceAttr->getLocation(),
+          diag::err_xlx_clock_period_is_invalid);
+      }
+      
+      int64_t TargetTI = HLSEvaluateClockCycle(PerformanceAttr->getTargetTI(), isSec, getLangOpts().HLSClockPeriod, "target_ti", CGM, getContext());
+      if (TargetTI < 0)
+        break;
+
+      int64_t TargetTL = HLSEvaluateClockCycle(
+          PerformanceAttr->getTargetTL(), isSec, getLangOpts().HLSClockPeriod, "target_tl", CGM, getContext());
+      if (TargetTL < 0)
+        break;
+      int64_t AssumeTI = HLSEvaluateClockCycle(
+          PerformanceAttr->getAssumeTI(), isSec, getLangOpts().HLSClockPeriod, "assume_ti", CGM, getContext());
+      if (AssumeTI < 0)
+        break;
+      int64_t AssumeTL = HLSEvaluateClockCycle(
+          PerformanceAttr->getAssumeTL(), isSec, getLangOpts().HLSClockPeriod, "assume_tl", CGM, getContext());
+      if (AssumeTL < 0)
+        break;
 
       llvm::Value *Args[] = {Builder.getInt32(isLoop),
                              Builder.getInt64(TargetTI),
@@ -1451,7 +1524,8 @@ void CodeGenFunction::EmitBundleForScope(
                              Builder.getInt32(0) /// 0 means for cycle
                             };
 
-      BundleList.emplace_back(A->getSpelling(), Args);
+      HintBundleList.emplace_back(A->getSpelling(), Args);
+      HintPragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XlxBindOpExpr: {
@@ -1474,15 +1548,21 @@ void CodeGenFunction::EmitBundleForScope(
                          Builder.getInt32(latency),
                        };
 
-      BundleList.emplace_back("fpga_resource_hint", args);
+      HintBundleList.emplace_back("fpga_resource_hint", args);
+      HintPragmaLocs.emplace_back(
+          llvm::MDNode::get(getLLVMContext(),
+                            {MDB.createString("fpga_resource_hint"),
+                             MDB.createString(getPragmaContext(A)),
+                             Loc.get()}));
       break;
     }
-    case attr::XlxTask: { 
+    case attr::XlxTask: {
       auto task = dyn_cast<XlxTaskAttr>(A);
       auto task_id = EmitScalarExpr(task->getTaskID());
 
       llvm::Value *args[] = {task_id};
-      BundleList.emplace_back("xlx_task_def", args);
+      HintBundleList.emplace_back("xlx_task_def", args);
+      HintPragmaLocs.emplace_back(MDN);
       break;
     }
     case attr::XlxInfiniteTask: { 
@@ -1490,24 +1570,17 @@ void CodeGenFunction::EmitBundleForScope(
       auto task_id = EmitScalarExpr(task->getTaskID());
 
       llvm::Value *args[] = {task_id};
-      BundleList.emplace_back("xlx_infinite_task_def", args);
+      HintBundleList.emplace_back("xlx_infinite_task_def", args);
+      HintPragmaLocs.emplace_back(MDN);
       break;
     }
-    }
-    if (isNormalKind) {
-      auto spelling = A->getSpelling();
-      if (A->getKind() == attr::XlxBindOpExpr) {
-        spelling = "fpga_resource_hint";
-      }
-      llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
-      pragmaLocs.push_back(llvm::MDNode::get(getLLVMContext(), {MDB.createString(spelling), MDB.createString(getPragmaContext(A)), Loc.get()}));
     }
   }
 
   if (!ComputeRegionPtrs.empty()){ 
-    BundleList.emplace_back("fpga_compute_region", ComputeRegionPtrs);
+    DirectiveBundleList.emplace_back("fpga_compute_region", ComputeRegionPtrs);
     llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(ComputeRegionLoc);
-    pragmaLocs.push_back(llvm::MDNode::get(getLLVMContext(), {MDB.createString("fpga_compute_region"), 
+    DirectivePragmaLocs.push_back(llvm::MDNode::get(getLLVMContext(), {MDB.createString("fpga_compute_region"), 
           MDB.createString(computeRegionPragmaContext), Loc.get()}));
   }
 }
@@ -1751,7 +1824,11 @@ std::pair<llvm::Value*, int64_t>  CodeGenFunction::EmitHLSVariableExpr( Expr *ex
     }
     llvm::Type *llvm_type = V->getType();
     assert(isa<llvm::PointerType>(llvm_type) && "unexpected");
-    int64_t port_width  = CGM.getDataLayout().getTypeAllocSizeInBits(llvm_type->getPointerElementType());
+    llvm_type = llvm_type->getPointerElementType();
+    int64_t port_width =
+        llvm_type->isSized()
+            ? CGM.getDataLayout().getTypeAllocSizeInBits(llvm_type)
+            : 0;
     return std::make_pair(V, port_width);
   }
 }
@@ -1917,6 +1994,9 @@ void CodeGenFunction::EmitArrayPartitionXFormIntrinsic(const XlxArrayPartitionXF
   */
   XlxArrayPartitionXFormAttr::XlxArrayPartitionXFormType xtype = A->getType();
   bool Dynamic = A->getDynamic();
+  if (A->getOff()) {
+    xtype = (XlxArrayPartitionXFormAttr::XlxArrayPartitionXFormType)999;
+  }
 
   llvm::Value *Args[] = {V, Builder.getInt32(xtype), EmitScalarExpr(FactorE),
                          EmitScalarExpr(DimE), Builder.getInt1(Dynamic)};
@@ -1952,6 +2032,9 @@ void CodeGenFunction::EmitArrayReshapeXFormIntrinsic(const XlxArrayReshapeXFormA
     };
   */
   XlxArrayReshapeXFormAttr::XlxArrayReshapeXFormType xtype = A->getType();
+  if (A->getOff()) {
+    xtype = (XlxArrayReshapeXFormAttr::XlxArrayReshapeXFormType)999;
+  }
 
   llvm::Value *Args[] = {V, Builder.getInt32(xtype), EmitScalarExpr(FactorE),
                          EmitScalarExpr(DimE)};
@@ -2432,11 +2515,13 @@ void CodeGenFunction::EmitAPScalarInterfaceIntrinsic(const APScalarInterfaceAttr
 
   bool isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
+  bool directIO = interface->getDirectIO();
 
   llvm::Value* Args[] = { 
     port_var,
     Builder.getInt1(isRegister), 
-    llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false)
+    llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false),
+    Builder.getInt1(directIO)
   };
 
   if (interface->getMode() != "ap_none" &&
@@ -2473,12 +2558,14 @@ void CodeGenFunction::EmitAPScalarInterruptInterfaceIntrinsic(const APScalarInte
   bool isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
   int interruptValue = HLSEvaluateICE(interface->getInterrupt(), "interrupt",  "interrupt" );
+  bool directIO = interface->getDirectIO();
 
   llvm::Value* Args[] = { 
     port_var,
     Builder.getInt1(isRegister), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
-    Builder.getInt64(interruptValue)
+    Builder.getInt64(interruptValue),
+    Builder.getInt1(directIO)
   };
 
   if (interface->getMode() != "ap_vld" &&
@@ -2721,6 +2808,20 @@ void  CodeGenFunction::EmitXCLDependenceIntrinsic( const XCLDependenceAttr*  XLX
   CreateCallSideEffect(CGM, Builder, "fpga.dependence", args, port_width, getPragmaContext(XLXDependence));
 }
 
+
+static bool must_be_power_of_2(int val, const char *option, SourceLocation Loc, DiagnosticsEngine &diag)
+{
+
+  if (val == 0 || (val & ~(val-1)) != val) {
+    diag.Report(Loc, diag::err_xlx_attribute_invalid_option_and_because)
+        << StringRef(llvm::formatv("'{0}'", option))
+        << StringRef(llvm::formatv("Valid value for the '{0}' option must be power of 2", option));
+    return false; 
+  }
+  return true; 
+}
+
+
 void CodeGenFunction::EmitXlxCacheIntrinsic(const XlxCacheAttr *cache)
 {
   if (!CurFuncDecl->hasAttr<SDxKernelAttr>()) { 
@@ -2766,12 +2867,61 @@ void CodeGenFunction::EmitXlxCacheIntrinsic(const XlxCacheAttr *cache)
     port_width = port_info.second;
   }
 
-  size_t lines = HLSEvaluateICE(cache->getLines(), "lines", "cache", 1);
-  size_t depth = HLSEvaluateICE(cache->getDepth(), "depth", "cache");
-  size_t ways = HLSEvaluateICE(cache->getWays(), "ways", "cache", 1);
-  size_t users = HLSEvaluateICE(cache->getUsers(), "users", "cache", 1);
+  size_t lines = 1;
+  size_t depth = 1; 
+  size_t ways = 1; 
+  size_t users = 1; 
+  bool invalidExpr = false; 
+  if (Optional<int> result = HLSEvaluateICEResult(cache->getLines()) ) { 
+    lines = result.getValue(); 
+  }
+  else { 
+    CGM.getDiags().Report(cache->getLines()->getExprLoc(), diag::err_xlx_option_not_ice)
+      << "lines" << "cache";
+    invalidExpr = true; 
+  }
+
+  if (Optional<int> result =  HLSEvaluateICEResult(cache->getDepth())){ 
+    depth = result.getValue(); 
+  }
+  else { 
+    CGM.getDiags().Report(cache->getDepth()->getExprLoc(), diag::err_xlx_option_not_ice)
+      << "depth" << "cache";
+    invalidExpr = true; 
+  }
+  if (Optional<int> result = HLSEvaluateICEResult(cache->getWays())) { 
+    ways = result.getValue(); 
+  }
+  else { 
+    CGM.getDiags().Report(cache->getWays()->getExprLoc(), diag::err_xlx_option_not_ice)
+      << "ways" << "cache";
+    invalidExpr = true; 
+  }
+
+  if (Optional<int> result =  HLSEvaluateICEResult(cache->getUsers())) { 
+    users = result.getValue(); 
+  }
+  else { 
+    CGM.getDiags().Report(cache->getUsers()->getExprLoc(), diag::err_xlx_option_not_ice)
+      << "users" << "cache";
+    invalidExpr = true; 
+  }
+
+  if (invalidExpr) 
+    return ; 
+
   size_t burst = (size_t)cache->getBurst();
   size_t write = (size_t)cache->getWrite();
+
+  bool validLines = must_be_power_of_2(lines, "Lines", cache->getLocation(), CGM.getDiags()); 
+
+  bool validDepth = true; 
+  if (!cache->getIsDefaultDepth()){ 
+    validDepth = must_be_power_of_2(depth, "Depth", cache->getLocation(), CGM.getDiags());
+  }
+
+  if (!validDepth || !validLines)
+    return ; 
 
   llvm::Value *Args[] = {
     port_var,

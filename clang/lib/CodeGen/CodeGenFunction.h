@@ -185,6 +185,8 @@ public:
   LoopInfoStack LoopStack;
   CGBuilderTy Builder;
 
+  llvm::BasicBlock * HLSScopeBreakPoint = nullptr ; 
+
   // Stores variables for which we can't generate correct lifetime markers
   // because of jumps.
   VarBypassDetector Bypasses;
@@ -3456,6 +3458,17 @@ public:
   RValue EmitBuiltinOCLPipeReadWrite(unsigned BuiltinID, llvm::Value *Pipe,
                                      Address ValPtr);
 
+  /// Mux builtins
+  llvm::Value *EmitBuiltinFPGAMux(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGASparseMux(unsigned BuiltinID, const CallExpr *E);
+
+  /// Floating Point builtins
+  llvm::Value *EmitBuiltinFPGAFloatUnary(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFloatBinary(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFloatTernary(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFloatConversion(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFloatCompare(unsigned BuiltinID, const CallExpr *E);
+
   /// FIFO builtins
   llvm::Value *EmitBuiltinFPGAFifoStatus(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitBuiltinFPGAFifoLength(unsigned BuiltinID, const CallExpr *E);
@@ -3481,6 +3494,9 @@ public:
   llvm::Value * EmitBuiltinFPGAIP(const CallExpr *E);
   llvm::Value * EmitBuiltinFPGAFence(const CallExpr *E);
 
+  /// Direct Input/Output builtins
+  llvm::Value *EmitBuiltinFPGADirectIOStatus(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGADirectIO(unsigned BuiltinID, const CallExpr *E);
 
   /// Legacy builtins
   RValue EmitBuiltinBitConcat(const CallExpr *E);
@@ -3633,6 +3649,7 @@ public:
   //===--------------------------------------------------------------------===//
 
   int HLSEvaluateICE(Expr *E, StringRef optionName, StringRef pragmaName, int Default = -1);
+  Optional<int> HLSEvaluateICEResult(Expr *E); 
   //HLS special handle for Top argument , because HLS changed the TopArgument's Calling Conversion, 
   //argument of struct type is passed by values, this cause EmitLValue of argument generate new alloca 
   //and  finnaly generate GEP basing on alloca instead of  function argument , it cause reflow Pragma Process
@@ -3787,9 +3804,27 @@ public:
   void EmitXlxParamAttributes(const ParmVarDecl *D, llvm::Value* V);
   void EmitXlxFunctionAttributes(const FunctionDecl *FD, llvm::Function *F);
   void EmitXlxFunctionBodyAttributes( ArrayRef<const Attr*> attrs);
-  void EmitBundleForScope(const Stmt *SubStmt, ArrayRef<const Attr *> Attrs,
-                          SmallVectorImpl<llvm::OperandBundleDef> &BundleList, 
-                          SmallVectorImpl<llvm::MDNode*> &pragmaLocs);
+  void EmitScopeExit(SmallVectorImpl<llvm::CallInst *> &DirectiveEntries,
+                     SmallVectorImpl<llvm::CallInst *> &HintEntries);
+  void EmitScopeExit(llvm::Intrinsic::ID IID,
+                     SmallVectorImpl<llvm::CallInst *> &Entries);
+  void EmitScopeEntry(llvm::Intrinsic::ID IID,
+                      SmallVectorImpl<llvm::OperandBundleDef> &ScopeBundleDefs,
+                      SmallVectorImpl<llvm::MDNode *> &pragmaLocs,
+		      SmallVectorImpl<llvm::CallInst *> &Entries);
+  void EmitScopeEntry(
+      SmallVectorImpl<llvm::OperandBundleDef> &DirectiveBundleList,
+      SmallVectorImpl<llvm::MDNode*> &DirectivePragmaLocs,
+      SmallVectorImpl<llvm::CallInst *> &DirectiveEntries,
+      SmallVectorImpl<llvm::OperandBundleDef> &HintBundleList,
+      SmallVectorImpl<llvm::MDNode*> &HintPragmaLocs,
+      SmallVectorImpl<llvm::CallInst *> &HintEntries);
+  void EmitBundleForScope(
+      const Stmt *SubStmt, ArrayRef<const Attr *> Attrs,
+      SmallVectorImpl<llvm::OperandBundleDef> &DirectiveBundleList,
+      SmallVectorImpl<llvm::MDNode*> &DirectivePragmaLocs,
+      SmallVectorImpl<llvm::OperandBundleDef> &HintBundleList,
+      SmallVectorImpl<llvm::MDNode*> &HintPragmaLocs); 
 
   void  EmitReqdPipeDepthIntrinsic( const XlxReqdPipeDepthAttr *A);
   //void  EmitArrayXFormIntrinsic( const XlxArrayXFormAttr *A);

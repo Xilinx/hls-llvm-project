@@ -4,6 +4,8 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// (C) Copyright 2016-2022 Xilinx, Inc. 
+// All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,6 +16,7 @@
 #ifndef LLVM_ADT_DENSEMAPINFO_H
 #define LLVM_ADT_DENSEMAPINFO_H
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/StringRef.h"
@@ -259,6 +262,29 @@ template <typename T> struct DenseMapInfo<ArrayRef<T>> {
     if (RHS.data() == getTombstoneKey().data())
       return LHS.data() == getTombstoneKey().data();
     return LHS == RHS;
+  }
+};
+
+/// Provide DenseMapInfo for APInt.
+template <> struct DenseMapInfo<APInt> {
+  static inline APInt getEmptyKey() {
+    APInt V(nullptr, 0);
+    V.U.VAL = 0;
+    return V;
+  }
+
+  static inline APInt getTombstoneKey() {
+    APInt V(nullptr, 0);
+    V.U.VAL = 1;
+    return V;
+  }
+
+  static unsigned getHashValue(const APInt &Key) {
+    return static_cast<unsigned>(hash_value(Key));
+  }
+
+  static bool isEqual(const APInt &LHS, const APInt &RHS) {
+    return LHS.getBitWidth() == RHS.getBitWidth() && LHS == RHS;
   }
 };
 

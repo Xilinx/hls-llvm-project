@@ -38,6 +38,8 @@
 #include "clang/Sema/SemaInternal.h"
 #include "clang/Basic/HLSDiagnostic.h"
 
+#include "clang/AST/RecursiveASTVisitor.h"
+
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -139,53 +141,6 @@ static bool HLSCanEvaluateAsDouble(Expr *E, const ASTContext &Ctx) {
   return false;
 }
 
-static bool IsHLSStreamType(Expr *expr) {
-  if (!expr)
-    return false;
-
-  auto Ty = expr->getType().getCanonicalType(); 
-  if (isa<DecayedType>(Ty)) { 
-    Ty = cast<DecayedType>(Ty)->getOriginalType();
-    Ty = Ty.getCanonicalType();
-  }
-
-  auto *BTy = Ty->isReferenceType() ? Ty->getPointeeType().getTypePtr()
-                                    : Ty->getPointeeOrArrayElementType();
-
-  if (BTy->isClassType() && !BTy->getAsCXXRecordDecl()
-                                 ->getCanonicalDecl()
-                                 ->getQualifiedNameAsString()
-                                 .compare("hls::stream"))
-    return true;
-
-  // hls::stream<type> with template in type
-  if (dyn_cast<TemplateSpecializationType>(BTy)) {
-    TemplateName name =
-        dyn_cast<TemplateSpecializationType>(BTy)->getTemplateName();
-    if (TemplateDecl *decl = name.getAsTemplateDecl()) {
-      std::string base_name = decl->getQualifiedNameAsString();
-      if (base_name == "hls::stream")
-        return true;
-    }
-  }
-  return false;
-}
-
-static bool IsStreamable(Expr *expr) {
-  if (!expr)
-    return false;
-
-  auto Ty = expr->getType();
-  if (isa<DeclRefExpr>(expr)) {
-    ValueDecl *decl = dyn_cast<DeclRefExpr>(expr)->getDecl();
-    if (isa<ParmVarDecl>(decl)) {
-      Ty = dyn_cast<ParmVarDecl>(decl)->getOriginalType();
-    }
-  }
-
-  return Ty->isArrayType();
-}
-
 
 static void handleXCLArrayXForm(Sema &S, Decl *D, const AttributeList &Attr) {
   assert(Attr.getKind() == AttributeList::AT_XCLArrayXForm);
@@ -265,14 +220,14 @@ static Attr *handleXlxArrayPartitionXForm(Sema &S, Stmt *stmt, const AttributeLi
   // partition/reshape is not "complete" e.g. xcl_array_partition(block, 2, 1),
   // the factor is the second one while dim becomes the third one.
   if (T == XlxArrayPartitionXFormAttr::Cyclic || T == XlxArrayPartitionXFormAttr::Block) {
-    if (Attr.getNumArgs() != 5) {
+    if (Attr.getNumArgs() != 6) {
       S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments) << 3;
       return nullptr;
     }
     Factor = Attr.getArgAsExpr(2);
   } else {
     // When the partition type is complete, Factor is not necessary.
-    if (Attr.getNumArgs() != 5) {
+    if (Attr.getNumArgs() != 6) {
       S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments) << 2;
       return nullptr;
     }
@@ -282,12 +237,27 @@ static Attr *handleXlxArrayPartitionXForm(Sema &S, Stmt *stmt, const AttributeLi
     isDynamic = true;
   }
 
+  bool isOff;
+  {
+    auto res = EvaluateInteger(S, Attr.getArgAsExpr(5), 5, "isOff", Attr.getLoc(), 0, 1);
+    if (res.hasValue()) {
+      isOff = (bool)res.getValue();
+    }
+    else {
+      isOff = false;
+    }
+  }
+
+  if (isOff) {
+    Factor = createIntegerLiteral(1, S, Attr.getLoc());
+  }
+
 
   if (Factor == nullptr)
     Factor = createIntegerLiteral(/*Default*/ 0, S, Attr.getLoc());
 
   return new (S.Context)
-      XlxArrayPartitionXFormAttr(Attr.getRange(), S.Context, Variable, T, Factor, Dim, isDynamic,
+      XlxArrayPartitionXFormAttr(Attr.getRange(), S.Context, Variable, T, Factor, Dim, isDynamic, isOff,
                         Attr.getAttributeSpellingListIndex());
 }
 
@@ -319,25 +289,40 @@ static Attr *handleXlxArrayReshapeXForm(Sema &S, Stmt *stmt, const AttributeList
   // partition/reshape is not "complete" e.g. xcl_array_partition(block, 2, 1),
   // the factor is the second one while dim becomes the third one.
   if (T == XlxArrayReshapeXFormAttr::Cyclic || T == XlxArrayReshapeXFormAttr::Block) {
-    if (Attr.getNumArgs() != 4) {
+    if (Attr.getNumArgs() != 5) {
       S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments) << 3;
       return nullptr;
     }
     Factor = Attr.getArgAsExpr(2);
   } else {
     // When the partition type is complete, Factor is not necessary.
-    if (Attr.getNumArgs() != 4) {
+    if (Attr.getNumArgs() != 5) {
       S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments) << 2;
       return nullptr;
     }
   }
   Dim = Attr.getArgAsExpr(3);
 
+  bool isOff;
+  {
+    auto res = EvaluateInteger(S, Attr.getArgAsExpr(4), 4, "isOff", Attr.getLoc(), 0, 1);
+    if (res.hasValue()) {
+      isOff = (bool)res.getValue();
+    }
+    else {
+      isOff = false;
+    }
+  }
+
+  if (isOff) {
+    Factor = createIntegerLiteral(1, S, Attr.getLoc());
+  }
+
   if (Factor == nullptr)
     Factor = createIntegerLiteral(/*Default*/ 0, S, Attr.getLoc());
 
   return new (S.Context)
-      XlxArrayReshapeXFormAttr(Attr.getRange(), S.Context, Variable, T, Factor, Dim,
+      XlxArrayReshapeXFormAttr(Attr.getRange(), S.Context, Variable, T, Factor, Dim, isOff,
                         Attr.getAttributeSpellingListIndex());
 }
 
@@ -590,7 +575,7 @@ static Attr *handleXlxPipelineAttr(Sema &S, Stmt *St, const AttributeList &A,
   II = A.getArgAsExpr(0);
 
   int Style = ExtractInteger(S, A, 1, /*LB*/ -1, /*UB*/ 2).getValue();
-  bool Rewind = ExtractInteger(S, A, 2, /*LB*/ 0, /*UB*/ 1).getValue();
+  int Rewind = ExtractInteger(S, A, 2, /*LB*/ 0, /*UB*/ 2).getValue();
 
   return ::new (S.Context)
       XlxPipelineAttr(A.getRange(), S.Context, II, Style, Rewind,
@@ -1082,9 +1067,9 @@ static Attr *handleXlxProtocolAttr(Sema &S, Stmt *St, const AttributeList &A,
 
 static Attr *handleXlxPerformanceAttr(Sema &S, Stmt *St, const AttributeList &A,
                                   SourceRange Range) {
-  if (A.getNumArgs() != 5) {
+  if (A.getNumArgs() != 6) {
     S.Diag(A.getLoc(), diag::err_attribute_wrong_number_arguments)
-        << A.getName() << 5;
+        << A.getName() << 6;
     return nullptr;
   }
 
@@ -1092,7 +1077,8 @@ static Attr *handleXlxPerformanceAttr(Sema &S, Stmt *St, const AttributeList &A,
   Expr *TargetTLExpr = A.getArgAsExpr(1);
   Expr *AssumeTIExpr = A.getArgAsExpr(2);
   Expr *AssumeTLExpr = A.getArgAsExpr(3);
-  IdentifierInfo *ScopeKind = A.getArgAsIdent(4)->Ident;
+  IdentifierInfo *unit = A.getArgAsIdent(4)->Ident;
+  IdentifierInfo *ScopeKind = A.getArgAsIdent(5)->Ident;
   if (!ScopeKind)
     return nullptr;
 
@@ -1101,9 +1087,14 @@ static Attr *handleXlxPerformanceAttr(Sema &S, Stmt *St, const AttributeList &A,
           ScopeKind->getName(), ScopeType))
     return nullptr;
 
+  XlxPerformanceAttr::UnitType UnitType; 
+
+  XlxPerformanceAttr::ConvertStrToUnitType(
+          unit->getName(), UnitType); 
+
   return (::new (S.Context) XlxPerformanceAttr(
       A.getRange(), S.Context, TargetTIExpr, TargetTLExpr, AssumeTIExpr,
-      AssumeTLExpr, ScopeType, A.getAttributeSpellingListIndex()));
+      AssumeTLExpr, UnitType, ScopeType, A.getAttributeSpellingListIndex()));
 }
 
 
@@ -1575,11 +1566,6 @@ static Attr *handleXlxCrossDependence(Sema &S, Stmt *St, const AttributeList &A,
 
 static Attr *handleXCLInlineAttr(Sema &S, Stmt *St, const AttributeList &A,
                                  SourceRange Range) {
-  if (!isa<CompoundStmt>(St)) {
-    S.Diag(A.getRange().getBegin(), diag::err_attr_in_wrong_scope)
-        << "xcl_inline";
-    return nullptr;
-  }
   if (A.getNumArgs() > 1) {
     S.Diag(A.getLoc(), diag::err_attribute_wrong_number_arguments)
         << A.getName() << 1;
@@ -1591,6 +1577,22 @@ static Attr *handleXCLInlineAttr(Sema &S, Stmt *St, const AttributeList &A,
 
   return ::new (S.Context)
       XCLInlineAttr(A.getRange(), S.Context, Recursive.getValueOr(0),
+                    A.getAttributeSpellingListIndex());
+}
+
+static Attr *handleXlxInlineAttr(Sema &S, Stmt *St, const AttributeList &A,
+                                 SourceRange Range) {
+  if (A.getNumArgs() > 1) {
+    S.Diag(A.getLoc(), diag::err_attribute_wrong_number_arguments)
+        << A.getName() << 1;
+    return nullptr;
+  }
+  llvm::Optional<int64_t> inlineOn;
+  if (A.getNumArgs() == 1)
+    inlineOn = ExtractInteger(S, A, 0, /*LB*/ 0, /*UB*/ 2);
+
+  return ::new (S.Context)
+      XlxInlineAttr(A.getRange(), S.Context, inlineOn.getValueOr(0),
                     A.getAttributeSpellingListIndex());
 }
 
@@ -1756,7 +1758,7 @@ Attr *handleMAXIInterface(Sema &S, Stmt*stm, const AttributeList &A, SourceRange
     if (!MAXIInterfaceAttr::ConvertStrToOffsetModeType(id->Ident->getName(), offset_type)){
       S.Diag(id->Loc, diag::err_xlx_attribute_invalid_option_and_because)
           <<"'Offset'"
-          << "valid 'offet' value is [off, slave,  direct]";
+          << "Valid values for the 'Offset' option are [off, slave, direct]";
     }
   }
 
@@ -1937,7 +1939,28 @@ Attr *handleAPScalarInterface( Sema &S, Stmt *stmt, const AttributeList &A, Sour
   if (A.getArg(3)) { 
     signal_name = A.getArgAsIdent(3)->Ident->getName();
   }
-  return new (S.Context) APScalarInterfaceAttr(A.getRange(), S.Context, port, mode, isRegister, signal_name, A.getAttributeSpellingListIndex());
+
+  bool directIO = false;
+  if (A.getArg(4)) {
+    Expr *expr = A.getArgAsExpr(4);
+    auto res = EvaluateInteger(S, expr, 4, "DirectIO", A.getLoc(), 0, 1);
+    if (res.hasValue()) {
+      directIO = (bool)res.getValue();
+    }
+    if (directIO == true) {
+      ParmVarDecl *param {cast<ParmVarDecl>(cast<DeclRefExpr>(port)->getDecl())};
+      QualType Ty {param->getOriginalType().getCanonicalType()};
+      if (!Ty->isPointerType() && !Ty->isReferenceType()) {
+        S.Diag(A.getLoc(), diag::err_invalid_option_unless)
+            << "direct_io"
+            << "'port' is pointer or reference type";
+      }
+    }
+  }
+
+  return new (S.Context) APScalarInterfaceAttr(
+    A.getRange(), S.Context, port, mode, isRegister, signal_name, directIO,
+    A.getAttributeSpellingListIndex());
 
 }
 
@@ -1965,7 +1988,27 @@ Attr *handleAPScalarInterruptInterface( Sema &S, Stmt *stmt, const AttributeList
     interrupt = createIntegerLiteral(-1, S, SourceLocation());
   }
 
-  return new (S.Context) APScalarInterruptInterfaceAttr(A.getRange(), S.Context, port, mode, isRegister, signal_name, interrupt, A.getAttributeSpellingListIndex());
+  bool directIO = false;
+  if (A.getArg(5)) {
+    Expr *expr = A.getArgAsExpr(5);
+    auto res = EvaluateInteger(S, expr, 5, "DirectIO", A.getLoc(), 0, 1);
+    if (res.hasValue()) {
+      directIO = (bool)res.getValue();
+    }
+    if (directIO == true) {
+      ParmVarDecl *param {cast<ParmVarDecl>(cast<DeclRefExpr>(port)->getDecl())};
+      QualType Ty {param->getOriginalType().getCanonicalType()};
+      if (!Ty->isPointerType() && !Ty->isReferenceType()) {
+        S.Diag(A.getLoc(), diag::err_invalid_option_unless)
+            << "direct_io"
+            << "'port' is pointer or reference type";
+      }
+    }
+  }
+
+  return new (S.Context) APScalarInterruptInterfaceAttr(
+    A.getRange(), S.Context, port, mode, isRegister, signal_name, interrupt,
+    directIO, A.getAttributeSpellingListIndex());
 
 }
 
@@ -2060,48 +2103,36 @@ Attr* handleMemoryInterface(Sema &S, Stmt* stmt, const AttributeList &A, SourceR
   return new (S.Context) MemoryInterfaceAttr(A.getRange(), S.Context, port, mode, storage_type, latency, signal_name, depth, A.getAttributeSpellingListIndex());
 }
 
-static int64_t must_be_integer(Expr *expr, const char *option, Sema &S)
-{
-  llvm::APSInt Int(32);
-  if (S.HLSVerifyIntegerConstantExpression(expr, &Int).isInvalid()) {
-    S.Diag(expr->getLocStart(), diag::err_xlx_attribute_invalid_option_and_because)
-        << StringRef(llvm::formatv("'{0}'", option))
-        << StringRef(llvm::formatv("valid '{0}' must be integer", option));
-  }
-  return Int.getSExtValue();
-}
-
-static void must_be_power_of_2(Expr *expr, const char *option, Sema &S)
-{
-
-  int64_t n = must_be_integer(expr, option, S);
-  if (n == 0 || (n & ~(n-1)) != n) {
-    S.Diag(expr->getLocStart(), diag::err_xlx_attribute_invalid_option_and_because)
-        << StringRef(llvm::formatv("'{0}'", option))
-        << StringRef(llvm::formatv("valid '{0}' must be power of 2", option));
-  }
-}
 
 Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange range) 
 {
   Expr *port = A.getArgAsExpr(0);
+  if (port) {
+    QualType Ty = port->getType();
+    if (Ty->isPointerType()) {
+      Ty = Ty->getPointeeType();
+    }
+    if (Ty.isVolatileQualified()) {
+      S.Diag(A.getLoc(), diag::err_cache_on_volatile_port);
+    }
+  }
 
   Expr *lines = nullptr;
   if (A.getArg(1)) {
     lines = A.getArgAsExpr(1);
-    must_be_power_of_2(lines, "lines", S);
   }
   else { 
     lines = createIntegerLiteral(1, S, SourceLocation());
   }
 
+  bool isDefaultDepth = false; 
   Expr *depth = nullptr;
   if (A.getArg(2)) {
     depth = A.getArgAsExpr(2);
-    must_be_power_of_2(depth, "depth", S);
   }
   else { 
     depth = createIntegerLiteral(0, S, SourceLocation());
+    isDefaultDepth = true; 
   }
 
   Expr *ways = nullptr;
@@ -2125,8 +2156,8 @@ Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange ran
     auto id = A.getArgAsIdent(5);
     if (!XlxCacheAttr::ConvertStrToBurstMode(id->Ident->getName(), burst)) {
       S.Diag(id->Loc, diag::err_xlx_attribute_invalid_option_and_because)
-          <<"'burst'"
-          << "valid 'burst' value is [off, on]";
+          <<"'Burst'"
+          << "Valid values for the 'Burst' option are [off, on]";
 //        << "valid 'burst' value is [off, on, adaptive]";
     }
   }
@@ -2139,13 +2170,13 @@ Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange ran
     auto id = A.getArgAsIdent(6);
     if (!XlxCacheAttr::ConvertStrToWriteMode(id->Ident->getName(), write)) {
       S.Diag(id->Loc, diag::err_xlx_attribute_invalid_option_and_because)
-          <<"'write_mode'"
-          << "valid 'write_mode' value is [write_back, write_through]";
+          <<"'Write_mode'"
+          << "Valid values for the 'write_mode' option are [write_back, write_through]";
     }
   }
 
   return new (S.Context)XlxCacheAttr(A.getRange(), S.Context, 
-    port, lines, depth, ways, users, burst, write,
+    port, lines, depth, isDefaultDepth, ways, users, burst, write,
     A.getAttributeSpellingListIndex());
 }
 
@@ -2221,6 +2252,8 @@ Attr *Sema::ProcessXlxStmtAttributes(Stmt *S, const AttributeList &A,
     return handleXCLLatencyAttr(*this, S, A, Range);
   case AttributeList::AT_XCLInline:
     return handleXCLInlineAttr(*this, S, A, Range);
+  case AttributeList::AT_XlxInline:
+    return handleXlxInlineAttr(*this, S, A, Range); 
   case AttributeList::AT_XlxMergeLoop:
     return handleXlxMergeLoopAttr(*this, S, A, Range);
   case AttributeList::AT_XlxDependence:
@@ -3382,9 +3415,33 @@ static bool CheckDataflowLoop(Sema &S,
   return false;
 }
 
+
+class FindGoto : public RecursiveASTVisitor<FindGoto> {
+public:
+  bool Found = false;
+
+  FindGoto(Stmt* S) {
+    TraverseStmt(S);
+  }
+
+  bool VisitGotoStmt(const GotoStmt *Node) {
+    Found = true;
+    return true;
+  }
+};
+
+
+
 //========================== finish dataflow lawyer checker
 //========================//
 void GenerateDataFlowProc(CompoundStmt *dataflow_region, ASTContext &Context) {
+  // SLX begin: Avoid crash in outlining,
+  // see libraries/llvm-project/clang/test/CodeGenHLS/directives_scope_goto.c
+  if (FindGoto(dataflow_region).Found)
+    return;
+  // SLX end
+
+
   for (auto &iter : dataflow_region->body()) {
     if (isa<ReturnStmt>(iter))
       continue;
@@ -3603,15 +3660,28 @@ static Stmt *hoistXlxAttrs(
               << "dataflow"
               << "'for' loop or function body" << FixItHint::CreateRemoval(attr->getRange());
         }
-      } else if (isa<XlxReqdPipeDepthAttr>(attr)) {
-        auto pipeDepth = cast<XlxReqdPipeDepthAttr>(attr);
-        Expr *expr = pipeDepth->getVariable();
-        if (!IsHLSStreamType(expr) && !IsStreamable(expr)) {
-          Diags.Report(expr->getLocStart(), diag::warn_implicit_hls_stream)
-              << "stream"
-              << "hls::stream or array";
-          continue;
+      } 
+      else if (isa<XlxInlineAttr>(attr)) { 
+        auto xlxInline = cast<XlxInlineAttr>(attr);
+        hoistedAttrs[nullptr].push_back(xlxInline);
+      }
+      else if(isa<XCLInlineAttr>(attr)){ 
+        int off = 0;
+        for (off = 1; off < parent_size; off++) {
+          if (!isa<AttributedStmt>(parents[parent_size - off])) {
+            break;
+          }
         }
+        if (off == parent_size) {
+          // it is function latency
+          hoistedAttrs[nullptr].push_back(attr);
+        } else {
+          // it is latency attribute in for loop
+          hoistedAttrs[parents[parent_size - off]].push_back(attr);
+        }
+      }
+      else if (isa<XlxReqdPipeDepthAttr>(attr)) {
+        auto pipeDepth = cast<XlxReqdPipeDepthAttr>(attr);
         //check  depth 
         if (!EvaluateInteger(S, pipeDepth->getDepth(), 1, "STREAM", pipeDepth->getLocation(), -1, INT32_MAX)) { 
           continue;
@@ -3842,16 +3912,6 @@ static Stmt *hoistXlxAttrs(
         FIFO_SRL,
         FIFO_URAM,
         */
-        if (platform::PlatformBasic::FIFO_MEMORY <= impl_enum && impl_enum <= platform::PlatformBasic::FIFO_URAM) { 
-          // FIFO core only work on hls::stream
-          Expr* var = bindStorage->getVariable();
-          if (!IsHLSStreamType(var) && !IsStreamable(var)){ 
-            S.Diag(bindStorage->getVariable()->getExprLoc(), diag::warn_implicit_hls_stream) 
-                 << "bind_storage"
-                 << "hls::stream or array";
-            continue;
-          }
-        }
         left.push_back(attr);
       }
       else if(auto interface = dyn_cast<MAXIInterfaceAttr>(attr)) {
@@ -4427,7 +4487,7 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
         } else {
           s = func_body_attrs.erase(s);
         }
-      } else if (isa<XlxPipelineAttr>(*s)) {
+      } else if (isa<XlxInlineAttr>(*s)) {
         if (!find_inline) {
           find_inline = true;
           s++;
@@ -4469,12 +4529,29 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
             GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()),
                                  context);
           } else {
-            // Dataflow strict check failed, skip XCLDataflow attributed
+            // Dataflow strict check failed, skip XCLDataflow 
             continue;
           }
         } else {
           GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()),
                                context);
+        }
+      }
+      else if(isa<XlxInlineAttr>(func_body_attrs[i])) { 
+        XlxInlineAttr *xlxInline = const_cast<XlxInlineAttr*>(cast<XlxInlineAttr>(func_body_attrs[i])); 
+        if (xlxInline->getOn()) { 
+          AlwaysInlineAttr* alwaysInlineAttr =  ::new (S.Context)
+                AlwaysInlineAttr(xlxInline->getRange(), S.Context, xlxInline->getSpellingListIndex());
+          alwaysInlineAttr->setPragmaContext(xlxInline->getPragmaContext()); 
+          alwaysInlineAttr->setHLSIfCond(xlxInline->getHLSIfCond()); 
+          func_body_attrs[i] = alwaysInlineAttr; 
+        }
+        else { 
+          NoInlineAttr* noInlineAttr =  ::new (S.Context)
+                NoInlineAttr(xlxInline->getRange(), S.Context, xlxInline->getSpellingListIndex());
+          noInlineAttr->setPragmaContext(xlxInline->getPragmaContext()); 
+          noInlineAttr->setHLSIfCond(xlxInline->getHLSIfCond()); 
+          func_body_attrs[i] = noInlineAttr; 
         }
       }
       funcDecl->addAttr(const_cast<Attr *>(func_body_attrs[i]));

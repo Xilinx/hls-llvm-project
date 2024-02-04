@@ -572,27 +572,99 @@ void CodeGenFunction::EmitLabelStmt(const LabelStmt &S) {
   EmitStmt(S.getSubStmt());
 }
 
+void CodeGenFunction::EmitScopeEntry(
+    llvm::Intrinsic::ID IID,
+    SmallVectorImpl<llvm::OperandBundleDef> &ScopeBundleDefs,
+    SmallVectorImpl<llvm::MDNode *> &pragmaLocs,
+    SmallVectorImpl<llvm::CallInst *> &Entries) {
+  assert(pragmaLocs.size() == ScopeBundleDefs.size() &&
+         "each operand Bundle should have one location");
+
+  if (ScopeBundleDefs.empty())
+    return;
+
+  for(int i = 0; i < ScopeBundleDefs.size(); i++) {
+    auto *ScopeEntry = llvm::Intrinsic::getDeclaration(CurFn->getParent(), IID);
+    llvm::CallInst* Entry =
+        Builder.CreateCall(ScopeEntry, None, ScopeBundleDefs[i]);
+    Entry->setMetadata("pragma.location", pragmaLocs[i]);
+    Entries.push_back(Entry);
+  }
+}
+
+void CodeGenFunction::EmitScopeExit(
+    llvm::Intrinsic::ID IID, SmallVectorImpl<llvm::CallInst *> &Entries) {
+  if (Entries.empty())
+    return;
+
+  for(int i = Entries.size() - 1; i >= 0;  i--) {
+    llvm::CallInst *Entry = Entries[i];
+    if (Builder.GetInsertBlock()) { 
+      auto *ScopeExit = llvm::Intrinsic::getDeclaration(CurFn->getParent(),
+                                                      IID);
+      Builder.CreateCall(ScopeExit, Entry);
+    }
+    else if (HLSScopeBreakPoint){
+      //if the region contains 'break/continue/return', we need insert the 'region directive scope exit' before the
+      //terminator instruction , 'HLSScopeBreakPoint' is used to record basic block containing the 'break/continue/return'
+      //so,  insert 'directive scope exit' before the corresponding terminator instruction 
+      auto savedIP = Builder.saveIP(); 
+      Builder.SetInsertPoint(&HLSScopeBreakPoint->back()); 
+      auto *ScopeExit = llvm::Intrinsic::getDeclaration(CurFn->getParent(),
+                                                      IID);
+      Builder.CreateCall(ScopeExit, Entry);
+      Builder.restoreIP(savedIP);
+    }
+    else { 
+      //due to following reasons,  CodeGenBuilder haven't created basic block to hold region end 
+      //1. 'infinit loop' will not create basic block following the loop 
+      //2. ...
+      // to be simple  and safe, we ignore the region directive directly, 
+      //FIXME, in future, the possible solution may be create new "basic block" to hold the region
+      Entry->removeFromParent(); 
+      Entry->dropAllReferences(); 
+    }
+  }
+}
+
+void CodeGenFunction::EmitScopeEntry(
+    SmallVectorImpl<llvm::OperandBundleDef> &DirectiveBundleList,
+    SmallVectorImpl<llvm::MDNode*> &DirectivePragmaLocs,
+    SmallVectorImpl<llvm::CallInst *> &DirectiveEntries,
+    SmallVectorImpl<llvm::OperandBundleDef> &HintBundleList,
+    SmallVectorImpl<llvm::MDNode*> &HintPragmaLocs,
+    SmallVectorImpl<llvm::CallInst *> &HintEntries) {
+  EmitScopeEntry(llvm::Intrinsic::directive_scope_entry, DirectiveBundleList,
+                 DirectivePragmaLocs, DirectiveEntries);
+  EmitScopeEntry(llvm::Intrinsic::hint_scope_entry, HintBundleList,
+                 HintPragmaLocs, HintEntries);
+}
+
+void CodeGenFunction::EmitScopeExit(
+    SmallVectorImpl<llvm::CallInst *> &DirectiveEntries,
+    SmallVectorImpl<llvm::CallInst *> &HintEntries) {
+  EmitScopeExit(llvm::Intrinsic::directive_scope_exit, DirectiveEntries);
+  EmitScopeExit(llvm::Intrinsic::hint_scope_exit, HintEntries);
+}
+
 void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
   auto Attrs = S.getAttrs();
 
-  SmallVector<llvm::MDNode*, 4>  pragmaLocs ; 
-  SmallVector<llvm::OperandBundleDef, 4> ScopeBundleDefs;
+  SmallVector<llvm::MDNode*, 4> DirectivePragmaLocs, HintPragmaLocs;
+  SmallVector<llvm::OperandBundleDef, 4> DirectiveBundleList, HintBundleList;
   if (getLangOpts().HLSExt)
-    EmitBundleForScope(S.getSubStmt(), Attrs, ScopeBundleDefs, pragmaLocs);
-
-  assert( pragmaLocs.size() == ScopeBundleDefs.size() && "each operand Bundle should have one location");
-
-  SmallVector<llvm::CallInst*, 4> Entrys ; 
-  // Build the single-entry-single-exit region for the AttributedBlock
-  if (!ScopeBundleDefs.empty()) {
-    for( int i = 0; i < ScopeBundleDefs.size(); i++ ) { 
-      auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
-          CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
-      llvm::CallInst* Entry = Builder.CreateCall(ScopeEntry, None, ScopeBundleDefs[i]);
-      Entry->setMetadata("pragma.location", pragmaLocs[i]);
-      Entrys.push_back(Entry);
+    if (getLangOpts().EmitHintScope) {
+      EmitBundleForScope(S.getSubStmt(), Attrs, DirectiveBundleList,
+                         DirectivePragmaLocs, HintBundleList, HintPragmaLocs);
+    } else {
+      EmitBundleForScope(S.getSubStmt(), Attrs, DirectiveBundleList,
+                         DirectivePragmaLocs, DirectiveBundleList,
+                         DirectivePragmaLocs);
     }
-  }
+
+  SmallVector<llvm::CallInst*, 4> DirectiveEntries, HintEntries;
+  EmitScopeEntry(DirectiveBundleList, DirectivePragmaLocs, DirectiveEntries,
+		 HintBundleList, HintPragmaLocs, HintEntries);
 
   //HLS Attrirbute binding on NullStmt standfor HLSStmt, which will emit intrinsic 
   if (isa<NullStmt>(S.getSubStmt())) {
@@ -699,24 +771,9 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
     }
   }
 
-  EmitStmt(S.getSubStmt(), S.getAttrs());
 
-  // Emit scope exit intrinsic
-  if (Entrys.size() > 0) {
-    for( int i = Entrys.size() - 1; i >= 0;  i-- ) { 
-      llvm::CallInst *Entry = Entrys[i];
-      // Do not insert scope if we met terminate instruction (goto/break/return)
-      if (!Builder.GetInsertBlock()) {
-        Entry->removeFromParent();
-        Entry->dropAllReferences();
-      } else {
-        //Builder.SetCurrentDebugLocation(PragmaSourceLocToDebugLoc( locations[i] ));
-        auto *ScopeExit = llvm::Intrinsic::getDeclaration(
-            CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
-        Builder.CreateCall(ScopeExit, Entry);
-      }
-    }
-  } 
+  EmitStmt(S.getSubStmt(), S.getAttrs());
+  EmitScopeExit(DirectiveEntries, HintEntries);
 }
 
 void CodeGenFunction::EmitGotoStmt(const GotoStmt &S) {
@@ -725,6 +782,8 @@ void CodeGenFunction::EmitGotoStmt(const GotoStmt &S) {
   // "simple" statement path.
   if (HaveInsertPoint())
     EmitStopPoint(&S);
+
+  HLSScopeBreakPoint = Builder.GetInsertBlock();
 
   EmitBranchThroughCleanup(getJumpDestForLabel(S.getLabel()));
 }
@@ -1178,6 +1237,9 @@ void CodeGenFunction::EmitReturnOfRValue(RValue RV, QualType Ty) {
 /// if the function returns void, or may be missing one if the function returns
 /// non-void.  Fun stuff :).
 void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
+
+  HLSScopeBreakPoint = Builder.GetInsertBlock();
+
   if (requiresReturnValueCheck()) {
     llvm::Constant *SLoc = EmitCheckSourceLocation(S.getLocStart());
     auto *SLocPtr =
@@ -1305,8 +1367,12 @@ void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
         llvm::MDBuilder MDB(getLLVMContext());
         llvm::MDNode *dbgLoc = llvm::MDNode::get(getLLVMContext(), {MDB.createString("fpga_resource_hint"), MDB.createString(getPragmaContext(bindOp)), Loc.get()});
 
-        auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
-          CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
+        auto ScopeEntry =
+            getLangOpts().EmitHintScope ?
+                llvm::Intrinsic::getDeclaration(
+                    CurFn->getParent(), llvm::Intrinsic::hint_scope_entry) :
+                llvm::Intrinsic::getDeclaration(
+                    CurFn->getParent(), llvm::Intrinsic::directive_scope_entry);
         Entry = Builder.CreateCall(ScopeEntry, None, llvm::OperandBundleDef("fpga_resource_hint", args));
         Entry->setMetadata("pragma.location", dbgLoc);
         BindOpScopeEntries.push_back( Entry );
@@ -1314,13 +1380,16 @@ void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
     }
     EmitDecl(*I);
 
-    if (BindOpScopeEntries.size()) { 
-      for( int i = BindOpScopeEntries.size() - 1; i >= 0; i --) { 
-        auto *ScopeExit = llvm::Intrinsic::getDeclaration(
-          CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
+    if (BindOpScopeEntries.size())
+      for( int i = BindOpScopeEntries.size() - 1; i >= 0; i --) {
+        auto ScopeExit =
+            getLangOpts().EmitHintScope ?
+                llvm::Intrinsic::getDeclaration(
+                    CurFn->getParent(), llvm::Intrinsic::hint_scope_exit) :
+                llvm::Intrinsic::getDeclaration(
+                    CurFn->getParent(), llvm::Intrinsic::directive_scope_exit);
         Builder.CreateCall(ScopeExit, BindOpScopeEntries[i]);
       }
-    }
   }
 }
 
@@ -1333,6 +1402,9 @@ void CodeGenFunction::EmitBreakStmt(const BreakStmt &S) {
   if (HaveInsertPoint())
     EmitStopPoint(&S);
 
+
+  HLSScopeBreakPoint = Builder.GetInsertBlock();
+
   EmitBranchThroughCleanup(BreakContinueStack.back().BreakBlock);
 }
 
@@ -1344,6 +1416,8 @@ void CodeGenFunction::EmitContinueStmt(const ContinueStmt &S) {
   // "simple" statement path.
   if (HaveInsertPoint())
     EmitStopPoint(&S);
+
+  HLSScopeBreakPoint = Builder.GetInsertBlock(); 
 
   EmitBranchThroughCleanup(BreakContinueStack.back().ContinueBlock);
 }

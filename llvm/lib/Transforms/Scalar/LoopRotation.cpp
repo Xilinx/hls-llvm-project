@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -52,8 +52,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop-rotate"
 
-static cl::opt<unsigned> DefaultRotationThreshold(
-    "rotation-max-header-size", cl::init(16), cl::Hidden,
+static cl::opt<unsigned> HLSDefaultRotationThreshold(
+    "hls-rotation-max-header-size", cl::init(-1), cl::Hidden,
     cl::desc("The default maximum header size for automatic loop rotation"));
 
 STATISTIC(NumRotated, "Number of loops rotated");
@@ -651,7 +651,7 @@ LoopRotatePass::LoopRotatePass(bool EnableHeaderDuplication)
 PreservedAnalyses LoopRotatePass::run(Loop &L, LoopAnalysisManager &AM,
                                       LoopStandardAnalysisResults &AR,
                                       LPMUpdater &) {
-  int Threshold = EnableHeaderDuplication ? DefaultRotationThreshold : 0;
+  int Threshold = EnableHeaderDuplication ? HLSDefaultRotationThreshold : 0;
   const DataLayout &DL = L.getHeader()->getModule()->getDataLayout();
   const SimplifyQuery SQ = getBestSimplifyQuery(AR, DL);
   LoopRotate LR(Threshold, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE,
@@ -674,7 +674,7 @@ public:
   LoopRotateLegacyPass(int SpecifiedMaxHeaderSize = -1) : LoopPass(ID) {
     initializeLoopRotateLegacyPassPass(*PassRegistry::getPassRegistry());
     if (SpecifiedMaxHeaderSize == -1)
-      MaxHeaderSize = DefaultRotationThreshold;
+      MaxHeaderSize = HLSDefaultRotationThreshold;
     else
       MaxHeaderSize = unsigned(SpecifiedMaxHeaderSize);
   }
@@ -707,12 +707,7 @@ public:
     if (LoopPass::skipLoop(L))
       return true;
 
-    MDNode *LoopMD = L->getLoopID();
-    // Skip rotating the loop if the loop attribute disables it.
-    if (LoopMD && GetUnrollMetadata(LoopMD, "llvm.loop.rotate.disable"))
-      return true;
-
-    return false;
+    return isRotateOff(L);
   }
 };
 }

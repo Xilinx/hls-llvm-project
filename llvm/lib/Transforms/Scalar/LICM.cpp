@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -53,6 +54,7 @@
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -85,10 +87,31 @@ STATISTIC(NumMovedCalls, "Number of call insts hoisted or sunk");
 STATISTIC(NumPromoted, "Number of memory locations promoted to registers");
 
 extern cl::opt<bool> HLS;
+
+static cl::opt<bool> WeakAlwaysExecuteCheck(
+    "must-execute-weak-check", cl::Hidden, cl::desc("Weak must execute check"),
+    cl::init(false));
+
 /// Memory promotion is enabled by default.
 static cl::opt<bool>
     DisablePromotion("disable-licm-promotion", cl::Hidden, cl::init(false),
                      cl::desc("Disable memory promotion in LICM pass"));
+
+static cl::opt<bool>
+    HLSDisablePromotionOnForLoop("hls-disable-licm-promotion-for-loop",
+                                 cl::Hidden, cl::init(true),
+                                 cl::desc("Disable memory promotion in LICM "
+                                          "pass on for-loop form loop"));
+static cl::opt<bool>
+    EnableInDataflowRegion("hls-enable-licm-in-dataflow-region", cl::Hidden,
+                           cl::init(false),
+                           cl::desc("Enable LICM in dataflow region"));
+
+static cl::opt<bool>
+    EnableOnVariableLTCRewindLoop("hls-enable-licm-on-variableltc-rewind-loop",
+                                  cl::Hidden, cl::init(false),
+                                  cl::desc("Enable LICM om variable loop trip"
+                                           " count rewind loop"));
 
 static cl::opt<uint32_t> MaxNumUsesTraversed(
     "licm-max-num-uses-traversed", cl::Hidden, cl::init(8),
@@ -110,6 +133,7 @@ static bool isSafeToExecuteUnconditionally(Instruction &Inst,
                                            const Loop *CurLoop,
                                            const LoopSafetyInfo *SafetyInfo,
                                            OptimizationRemarkEmitter *ORE,
+                                           bool MayBlockHLSIfMoveNonSpeculativeI,
                                            const Instruction *CtxI = nullptr);
 static bool pointerInvalidatedByLoop(Value *V, uint64_t Size,
                                      const AAMDNodes &AAInfo,
@@ -118,6 +142,10 @@ static Instruction *
 CloneInstructionInExitBlock(Instruction &I, BasicBlock &ExitBlock, PHINode &PN,
                             const LoopInfo *LI,
                             const LoopSafetyInfo *SafetyInfo);
+
+/* HLS Code Metric */
+static bool enableStorePromotion(Loop *L);
+static bool mayBlockHLSIfMoveNonSpeculativeInst(ScalarEvolution *SE, Loop *L);
 
 namespace {
 struct LoopInvariantCodeMotion {
@@ -262,8 +290,8 @@ bool LoopInvariantCodeMotion::runOnLoop(
   BasicBlock *Preheader = L->getLoopPreheader();
 
   // Compute loop safety information.
-  LoopSafetyInfo SafetyInfo;
-  computeLoopSafetyInfo(&SafetyInfo, L);
+  SimpleLoopSafetyInfo SafetyInfo;
+  SafetyInfo.computeLoopSafetyInfo(L);
 
   // We want to visit all of the instructions in this loop... that are not parts
   // of our subloops (they have already had their invariants hoisted out of
@@ -277,10 +305,10 @@ bool LoopInvariantCodeMotion::runOnLoop(
   //
   if (L->hasDedicatedExits())
     Changed |= sinkRegion(DT->getNode(L->getHeader()), AA, LI, DT, TLI, TTI, L,
-                          CurAST, &SafetyInfo, ORE);
+                          CurAST, &SafetyInfo, ORE, SE);
   if (Preheader)
     Changed |= hoistRegion(DT->getNode(L->getHeader()), AA, LI, DT, TLI, L,
-                           CurAST, &SafetyInfo, ORE);
+                           CurAST, &SafetyInfo, ORE, SE);
 
   // Now that all loop invariants have been removed from the loop, promote any
   // memory references to scalars that we can.
@@ -289,7 +317,7 @@ bool LoopInvariantCodeMotion::runOnLoop(
   // make sure we catch that. An additional load may be generated in the
   // preheader for SSA updater, so also avoid sinking when no preheader
   // is available.
-  if (!DisablePromotion && Preheader && L->hasDedicatedExits()) {
+  if (enableStorePromotion(L) && Preheader && L->hasDedicatedExits()) {
     // Figure out the loop exits and their insertion points
     SmallVector<BasicBlock *, 8> ExitBlocks;
     L->getUniqueExitBlocks(ExitBlocks);
@@ -328,7 +356,8 @@ bool LoopInvariantCodeMotion::runOnLoop(
 
         Promoted |= promoteLoopAccessesToScalars(PointerMustAliases, ExitBlocks,
                                                  InsertPts, PIC, LI, DT, TLI, L,
-                                                 CurAST, &SafetyInfo, ORE, AA);
+                                                 CurAST, &SafetyInfo, ORE, AA,
+                                                 SE);
       }
 
       // Once we have promoted values across the loop body we have to
@@ -372,7 +401,7 @@ bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
                       DominatorTree *DT, TargetLibraryInfo *TLI,
                       TargetTransformInfo *TTI, Loop *CurLoop,
                       AliasSetTracker *CurAST, LoopSafetyInfo *SafetyInfo,
-                      OptimizationRemarkEmitter *ORE) {
+                      OptimizationRemarkEmitter *ORE, ScalarEvolution *SE) {
 
   // Verify inputs.
   assert(N != nullptr && AA != nullptr && LI != nullptr && DT != nullptr &&
@@ -385,6 +414,8 @@ bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
   SmallVector<DomTreeNode *, 16> Worklist = collectChildrenInLoop(N, CurLoop);
 
   bool Changed = false;
+  bool MayBlockHLSIfMoveNonSpeculativeI =
+      HLS && mayBlockHLSIfMoveNonSpeculativeInst(SE, CurLoop);
   for (DomTreeNode *DTN : reverse(Worklist)) {
     BasicBlock *BB = DTN->getBlock();
     // Only need to process the contents of this block if it is not part of a
@@ -412,8 +443,11 @@ bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
       // operands of the instruction are loop invariant.
       //
       bool FreeInLoop = false;
-      if (isNotUsedOrFreeInLoop(I, CurLoop, SafetyInfo, TTI, FreeInLoop) &&
-          canSinkOrHoistInst(I, AA, DT, CurLoop, CurAST, SafetyInfo, ORE)) {
+      if (!I.mayHaveSideEffects() &&
+          isNotUsedOrFreeInLoop(I, CurLoop, SafetyInfo, TTI, FreeInLoop) &&
+          canSinkOrHoistInst(
+              I, AA, DT, CurLoop, CurAST, SafetyInfo, ORE,
+              MayBlockHLSIfMoveNonSpeculativeI)) {
         if (sink(I, LI, DT, CurLoop, SafetyInfo, ORE, FreeInLoop)) {
           if (!FreeInLoop) {
             ++II;
@@ -436,7 +470,7 @@ bool llvm::sinkRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
 bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
                        DominatorTree *DT, TargetLibraryInfo *TLI, Loop *CurLoop,
                        AliasSetTracker *CurAST, LoopSafetyInfo *SafetyInfo,
-                       OptimizationRemarkEmitter *ORE) {
+                       OptimizationRemarkEmitter *ORE, ScalarEvolution *SE) {
   // Verify inputs.
   assert(N != nullptr && AA != nullptr && LI != nullptr && DT != nullptr &&
          CurLoop != nullptr && CurAST != nullptr && SafetyInfo != nullptr &&
@@ -447,6 +481,8 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
   SmallVector<DomTreeNode *, 16> Worklist = collectChildrenInLoop(N, CurLoop);
 
   bool Changed = false;
+  bool MayBlockHLSIfMoveNonSpeculativeI =
+      HLS && mayBlockHLSIfMoveNonSpeculativeInst(SE, CurLoop);
   for (DomTreeNode *DTN : Worklist) {
     BasicBlock *BB = DTN->getBlock();
     // Only need to process the contents of this block if it is not part of a
@@ -498,52 +534,18 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
         // if it is safe to hoist the instruction.
         //
         if (CurLoop->hasLoopInvariantOperands(&I) &&
-            canSinkOrHoistInst(I, AA, DT, CurLoop, CurAST, SafetyInfo, ORE) &&
+            canSinkOrHoistInst(
+                I, AA, DT, CurLoop, CurAST, SafetyInfo, ORE,
+                MayBlockHLSIfMoveNonSpeculativeI) &&
             isSafeToExecuteUnconditionally(
                 I, DT, CurLoop, SafetyInfo, ORE,
+                MayBlockHLSIfMoveNonSpeculativeI,
                 CurLoop->getLoopPreheader()->getTerminator()))
           Changed |= hoist(I, DT, CurLoop, SafetyInfo, ORE);
       }
   }
 
   return Changed;
-}
-
-/// Computes loop safety information, checks loop body & header
-/// for the possibility of may throw exception.
-///
-void llvm::computeLoopSafetyInfo(LoopSafetyInfo *SafetyInfo, Loop *CurLoop) {
-  assert(CurLoop != nullptr && "CurLoop cant be null");
-  BasicBlock *Header = CurLoop->getHeader();
-  // Setting default safety values.
-  SafetyInfo->MayThrow = false;
-  SafetyInfo->HeaderMayThrow = false;
-  // Iterate over header and compute safety info.
-  for (BasicBlock::iterator I = Header->begin(), E = Header->end();
-       (I != E) && !SafetyInfo->HeaderMayThrow; ++I)
-    SafetyInfo->HeaderMayThrow |=
-        !isGuaranteedToTransferExecutionToSuccessor(&*I);
-
-  SafetyInfo->MayThrow = SafetyInfo->HeaderMayThrow;
-  // Iterate over loop instructions and compute safety info.
-  // Skip header as it has been computed and stored in HeaderMayThrow.
-  // The first block in loopinfo.Blocks is guaranteed to be the header.
-  assert(Header == *CurLoop->getBlocks().begin() &&
-         "First block must be header");
-  for (Loop::block_iterator BB = std::next(CurLoop->block_begin()),
-                            BBE = CurLoop->block_end();
-       (BB != BBE) && !SafetyInfo->MayThrow; ++BB)
-    for (BasicBlock::iterator I = (*BB)->begin(), E = (*BB)->end();
-         (I != E) && !SafetyInfo->MayThrow; ++I)
-      SafetyInfo->MayThrow |= !isGuaranteedToTransferExecutionToSuccessor(&*I);
-
-  // Compute funclet colors if we might sink/hoist in a function with a funclet
-  // personality routine.
-  Function *Fn = CurLoop->getHeader()->getParent();
-  if (Fn->hasPersonalityFn())
-    if (Constant *PersonalityFn = Fn->getPersonalityFn())
-      if (isFuncletEHPersonality(classifyEHPersonality(PersonalityFn)))
-        SafetyInfo->BlockColors = colorEHFunclets(*Fn);
 }
 
 // Return true if LI is invariant within scope of the loop. LI is invariant if
@@ -602,7 +604,8 @@ static bool isLoadInvariantInLoop(LoadInst *LI, DominatorTree *DT,
 bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
                               Loop *CurLoop, AliasSetTracker *CurAST,
                               LoopSafetyInfo *SafetyInfo,
-                              OptimizationRemarkEmitter *ORE) {
+                              OptimizationRemarkEmitter *ORE,
+                              bool MayBlockHLSIfMoveNonSpeculativeI) {
   // SafetyInfo is nullptr if we are checking for sinking from preheader to
   // loop body.
   const bool SinkingToLoopBody = !SafetyInfo;
@@ -706,7 +709,9 @@ bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
   // TODO: Plumb the context instruction through to make hoisting and sinking
   // more powerful. Hoisting of loads already works due to the special casing
   // above.
-  return isSafeToExecuteUnconditionally(I, DT, CurLoop, SafetyInfo, nullptr);
+  return isSafeToExecuteUnconditionally(
+      I, DT, CurLoop, SafetyInfo, nullptr,
+      MayBlockHLSIfMoveNonSpeculativeI);
 }
 
 /// Returns true if a PHINode is a trivially replaceable with an
@@ -754,7 +759,7 @@ static bool isFreeInLoop(const Instruction &I, const Loop *CurLoop,
 static bool isNotUsedOrFreeInLoop(const Instruction &I, const Loop *CurLoop,
                                   const LoopSafetyInfo *SafetyInfo,
                                   TargetTransformInfo *TTI, bool &FreeInLoop) {
-  const auto &BlockColors = SafetyInfo->BlockColors;
+  const auto &BlockColors = SafetyInfo->getBlockColors();
   bool IsFree = isFreeInLoop(I, CurLoop, TTI);
   for (const User *U : I.users()) {
     const Instruction *UI = cast<Instruction>(U);
@@ -789,7 +794,7 @@ CloneInstructionInExitBlock(Instruction &I, BasicBlock &ExitBlock, PHINode &PN,
                             const LoopSafetyInfo *SafetyInfo) {
   Instruction *New;
   if (auto *CI = dyn_cast<CallInst>(&I)) {
-    const auto &BlockColors = SafetyInfo->BlockColors;
+    const auto &BlockColors = SafetyInfo->getBlockColors();
 
     // Sinking call-sites need to be handled differently from other
     // instructions.  The cloned call-site needs a funclet bundle operand
@@ -1052,7 +1057,8 @@ static bool hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
       // The check on hasMetadataOtherThanDebugLoc is to prevent us from burning
       // time in isGuaranteedToExecute if we don't actually have anything to
       // drop.  It is a compile time optimization, not required for correctness.
-      !isGuaranteedToExecute(I, DT, CurLoop, SafetyInfo))
+      !const_cast<LoopSafetyInfo *>(SafetyInfo)->isGuaranteedToExecute(
+          I, DT, CurLoop, WeakAlwaysExecuteCheck))
     I.dropUnknownNonDebugMetadata();
 
   // Move the new node to the Preheader, before its terminator.
@@ -1074,20 +1080,25 @@ static bool hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
   return true;
 }
 
-/// Only sink or hoist an instruction if it is not a trapping instruction,
-/// or if the instruction is known not to trap when moved to the preheader.
-/// or if it is a trapping instruction and is guaranteed to execute.
+/// Only sink or hoist an instruction if it's an speculative instruction,
+/// or the instruction is guaranteed to execute and the code motion will not
+/// block later HLS transformation.
 static bool isSafeToExecuteUnconditionally(Instruction &Inst,
                                            const DominatorTree *DT,
                                            const Loop *CurLoop,
                                            const LoopSafetyInfo *SafetyInfo,
                                            OptimizationRemarkEmitter *ORE,
+                                           bool MayBlockHLSIfMoveNonSpeculativeI,
                                            const Instruction *CtxI) {
   if (isSafeToSpeculativelyExecute(&Inst, CtxI, DT))
     return true;
 
+  if (MayBlockHLSIfMoveNonSpeculativeI)
+    return false;
+
   bool GuaranteedToExecute =
-      isGuaranteedToExecute(Inst, DT, CurLoop, SafetyInfo);
+      const_cast<LoopSafetyInfo *>(SafetyInfo)->isGuaranteedToExecute(
+          Inst, DT, CurLoop, WeakAlwaysExecuteCheck);
 
   if (!GuaranteedToExecute) {
     auto *LI = dyn_cast<LoadInst>(&Inst);
@@ -1101,6 +1112,33 @@ static bool isSafeToExecuteUnconditionally(Instruction &Inst,
   }
 
   return GuaranteedToExecute;
+}
+
+/// HLS Code Metric
+/// Return true if store promotion is enabled on loop \p L
+static bool enableStorePromotion(Loop *L) {
+  // Store promotion on for loop can block other loop transformation, such as
+  // loop deletion due to phi node introduction.
+  return !DisablePromotion && (!HLSDisablePromotionOnForLoop || !isForLoop(L));
+}
+
+/// Return true when LICM may block HLS transformation.
+static bool mayBlockHLSIfMoveNonSpeculativeInst(ScalarEvolution *SE, Loop *L) {
+  if (!HLS || !isForLoop(L))
+    return false;
+
+  // Skip dataflow loop and loop in dataflow region.
+  if (!EnableInDataflowRegion && mayExposeInDataFlowRegion(*SE, L))
+    return true;
+
+  if (!isPipelineRewind(L))
+    return false;
+
+  // Skip variable trip count rewind loop.
+  LoopIndexInfoTy Info;
+  return !EnableOnVariableLTCRewindLoop &&
+         (!getLoopIndexInfo(L, true, Info) || Info.ExitIdx != Info.PN ||
+          !isa<Constant>(Info.Upper) || !isa<Constant>(Info.Init));
 }
 
 namespace {
@@ -1255,7 +1293,7 @@ bool llvm::promoteLoopAccessesToScalars(
     SmallVectorImpl<Instruction *> &InsertPts, PredIteratorCache &PIC,
     LoopInfo *LI, DominatorTree *DT, const TargetLibraryInfo *TLI,
     Loop *CurLoop, AliasSetTracker *CurAST, LoopSafetyInfo *SafetyInfo,
-    OptimizationRemarkEmitter *ORE, AliasAnalysis *AA) {
+    OptimizationRemarkEmitter *ORE, AliasAnalysis *AA, ScalarEvolution *SE) {
   // Verify inputs.
   assert(LI != nullptr && DT != nullptr && CurLoop != nullptr &&
          CurAST != nullptr && SafetyInfo != nullptr &&
@@ -1317,12 +1355,12 @@ bool llvm::promoteLoopAccessesToScalars(
   const DataLayout &MDL = Preheader->getModule()->getDataLayout();
 
   bool IsKnownThreadLocalObject = false;
-  if (SafetyInfo->MayThrow) {
+  if (SafetyInfo->anyBlockMayThrow()) {
     // If a loop can throw, we have to insert a store along each unwind edge.
     // That said, we can't actually make the unwind edge explicit. Therefore,
     // we have to prove that the store is dead along the unwind edge.  We do
     // this by proving that the caller can't have a reference to the object
-    // after return and thus can't possibly load from the object.  
+    // after return and thus can't possibly load from the object.
     Value *Object = GetUnderlyingObject(SomePtr, MDL);
     if (!isKnownNonEscaping(Object, TLI))
       return false;
@@ -1333,6 +1371,8 @@ bool llvm::promoteLoopAccessesToScalars(
 
   bool AlreadyHasWriteInLoopPreheader =
       checkWriteInLoopPreheader(SomePtr, Preheader, AA);
+  bool MayBlockHLSIfMoveNonSpeculativeI =
+      HLS && mayBlockHLSIfMoveNonSpeculativeInst(SE, CurLoop);
   // Check that all of the pointers in the alias set have the same type.  We
   // cannot (yet) promote a memory location that is loaded and stored in
   // different sizes.  While we are at it, collect alignment and AA info.
@@ -1361,7 +1401,8 @@ bool llvm::promoteLoopAccessesToScalars(
 
         if (!DereferenceableInPH)
           DereferenceableInPH = isSafeToExecuteUnconditionally(
-              *Load, DT, CurLoop, SafetyInfo, ORE, Preheader->getTerminator());
+              *Load, DT, CurLoop, SafetyInfo, ORE,
+              MayBlockHLSIfMoveNonSpeculativeI, Preheader->getTerminator());
       } else if (const StoreInst *Store = dyn_cast<StoreInst>(UI)) {
         // Stores *of* the pointer are not interesting, only stores *to* the
         // pointer.
@@ -1387,7 +1428,9 @@ bool llvm::promoteLoopAccessesToScalars(
         if (!DereferenceableInPH || !SafeToInsertStore ||
             (InstAlignment > Alignment)) {
           if ((HLS && AlreadyHasWriteInLoopPreheader) ||
-              isGuaranteedToExecute(*UI, DT, CurLoop, SafetyInfo)) {
+              (!MayBlockHLSIfMoveNonSpeculativeI &&
+              SafetyInfo->isGuaranteedToExecute(
+                  *UI, DT, CurLoop, WeakAlwaysExecuteCheck))) {
             DereferenceableInPH = true;
             SafeToInsertStore = true;
             Alignment = std::max(Alignment, InstAlignment);

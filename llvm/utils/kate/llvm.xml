@@ -89,6 +89,7 @@
       <item> ssp </item>
       <item> sspreq </item>
       <item> sspstrong </item>
+      <item> willreturn </item>
     </list>
     <list name="types">
       <item> float </item>

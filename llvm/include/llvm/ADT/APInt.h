@@ -37,6 +37,7 @@ class raw_ostream;
 
 template <typename T> class SmallVectorImpl;
 template <typename T> class ArrayRef;
+template <typename T> struct DenseMapInfo;
 
 class APInt;
 
@@ -102,7 +103,7 @@ private:
 
   unsigned BitWidth; ///< The number of bits in this APInt.
 
-  friend struct DenseMapAPIntKeyInfo;
+  friend struct DenseMapInfo<APInt>;
 
   friend class APSInt;
 

@@ -9,6 +9,8 @@ set(LLVM_LINK_COMPONENTS
 set(XILINXHLSIRSources
   TestUtils.cpp
   XILINXBRAMIntrinsicsTest.cpp
+  XILINXDirectIOIntrinsicsTest.cpp
+  XILINXFloatIntrinsicsTest.cpp
   XILINXFunctionUtils.cpp
   XILINXLoopUtils.cpp
   XILINXPragmasTest.cpp

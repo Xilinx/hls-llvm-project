@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -78,6 +78,8 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeMemoryDependenceWrapperPassPass(Registry);
   initializeModuleDebugInfoPrinterPass(Registry);
   initializeModuleSummaryIndexWrapperPassPass(Registry);
+  initializeMustExecutePrinterPass(Registry);
+  initializeMustBeExecutedContextPrinterPass(Registry);
   initializeObjCARCAAWrapperPassPass(Registry);
   initializeOptimizationRemarkEmitterWrapperPassPass(Registry);
   initializePostDominatorTreeWrapperPassPass(Registry);

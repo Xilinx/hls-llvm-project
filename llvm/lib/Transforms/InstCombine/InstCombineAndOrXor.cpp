@@ -21,6 +21,7 @@
 using namespace llvm;
 using namespace PatternMatch;
 
+extern cl::opt<bool> HLS;
 #define DEBUG_TYPE "instcombine"
 
 /// Similar to getICmpCode but for FCmpInst. This encodes a fcmp predicate into
@@ -466,7 +467,19 @@ static Value *foldLogOpOfMaskedICmps(ICmpInst *LHS, ICmpInst *RHS, bool IsAnd,
     Mask = conjugateICmpMask(Mask);
   }
 
-  if (Mask & Mask_AllZeros) {
+  // HLS begin: avoid fold icmps into operations with wider bit width and block
+  // all HLS predicate analysis.
+  //
+  // For example,
+  // %c0 = icmp sge i64 %indvar0, 0
+  // %c1 = icmp sge i64 %indvar1, 0
+  // and i1 %c0, %c1
+  // Block the folding into below.
+  // %v = or i64 %indvar0, %indvar1
+  // %c = and i64 %v, -9223372036854775808(=2^63, the significant bit)
+  // icmp eq i64 %c, 0
+  //
+  if (!HLS && Mask & Mask_AllZeros) {
     // (icmp eq (A & B), 0) & (icmp eq (A & D), 0)
     // -> (icmp eq (A & (B|D)), 0)
     Value *NewOr = Builder.CreateOr(B, D);
@@ -477,6 +490,7 @@ static Value *foldLogOpOfMaskedICmps(ICmpInst *LHS, ICmpInst *RHS, bool IsAnd,
     Value *Zero = Constant::getNullValue(A->getType());
     return Builder.CreateICmp(NewCC, NewAnd, Zero);
   }
+  // HLS end
   if (Mask & BMask_AllOnes) {
     // (icmp eq (A & B), B) & (icmp eq (A & D), D)
     // -> (icmp eq (A & (B|D)), (B|D))

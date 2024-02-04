@@ -682,6 +682,392 @@ static bool checkOpenCLPipeArg(Sema &S, CallExpr *Call) {
 }
 
 // \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinMux(Sema &S, CallExpr *Call) {
+  unsigned argCount = Call->getNumArgs();
+  if (argCount < 2)
+    return S.Diag(Call->getLocEnd(), diag::err_typecheck_call_too_few_args)
+        << 0 /*function call*/ << 2 << argCount << Call->getSourceRange();
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+        << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *Sel = Call->getArg(1);
+  QualType SelTy = Sel->getType();
+  if (!SelTy->isIntegerType()) {
+    return S.Diag(Sel->getLocStart(), diag::err_builtin_expected_type)
+        << "integer" << SelTy << Sel->getSourceRange();
+  }
+
+  for (unsigned i = 2; i < argCount; ++i) {
+    const auto *Val = Call->getArg(i);
+    QualType ValTy = Val->getType();
+    if (!ValTy->isPointerType()) {
+      return S.Diag(Val->getLocStart(), diag::err_builtin_expected_type)
+        << "pointer" << ValTy << Val->getSourceRange();
+    }
+
+#if 0
+    if (RetTy->getPointeeOrArrayElementType() !=
+        ValTy->getPointeeOrArrayElementType()) {
+      return S.Diag(Arg->getLocStart(), diag::err_builtin_expected_type)
+          << RetTy << ValTy << Val->getSourceRange();
+    }
+#endif
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinSparseMux(Sema &S, CallExpr *Call) {
+  unsigned argCount = Call->getNumArgs();
+  if (argCount < 3)
+    return S.Diag(Call->getLocEnd(), diag::err_typecheck_call_too_few_args)
+        << 0 /*function call*/ << 3 << argCount << Call->getSourceRange();
+
+  if (argCount % 2 != 1)
+    return S.Diag(Call->getLocEnd(), diag::err_typecheck_call_too_few_args)
+        << 0 /*function call*/ << argCount+1 << argCount << Call->getSourceRange();
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+        << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *Sel = Call->getArg(1);
+  QualType SelTy = Sel->getType();
+  if (!SelTy->isIntegerType()) {
+    return S.Diag(Sel->getLocStart(), diag::err_builtin_expected_type)
+        << "integer" << SelTy << Sel->getSourceRange();
+  }
+
+  const auto *Def = Call->getArg(2);
+  QualType DefTy = Def->getType();
+  if (!DefTy->isPointerType()) {
+    return S.Diag(Def->getLocStart(), diag::err_builtin_expected_type)
+        << "pointer" << DefTy << Def->getSourceRange();
+  }
+
+#if 0
+  if (RetTy->getPointeeOrArrayElementType() !=
+      DefTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Def->getLocStart(), diag::err_builtin_expected_type)
+        << RetTy << DefTy << Def->getSourceRange();
+  }
+#endif
+
+  for (unsigned i = 3; i < argCount; i+=2) {
+    const auto *Lbl = Call->getArg(i);
+    QualType LblTy = Lbl->getType();
+    if (!LblTy->isIntegerType()) {
+      return S.Diag(Lbl->getLocStart(), diag::err_builtin_expected_type)
+        << "integer" << LblTy << Lbl->getSourceRange();
+    }
+
+    if (SelTy != LblTy) {
+      return S.Diag(Lbl->getLocStart(), diag::err_builtin_expected_type)
+          << SelTy << LblTy << Lbl->getSourceRange();
+    }
+
+    const auto *Val = Call->getArg(i+1);
+    QualType ValTy = Val->getType();
+    if (!ValTy->isPointerType()) {
+      return S.Diag(Val->getLocStart(), diag::err_builtin_expected_type)
+        << "pointer" << ValTy << Val->getSourceRange();
+    }
+
+#if 0
+    if (RetTy->getPointeeOrArrayElementType() !=
+        ValTy->getPointeeOrArrayElementType()) {
+      return S.Diag(Val->getLocStart(), diag::err_builtin_expected_type)
+          << RetTy << ValTy << Val->getSourceRange();
+    }
+#endif
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFloatUnary(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 4))
+    return true;
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *Arg = Call->getArg(1);
+  QualType ArgTy = Arg->getType();
+  if (!ArgTy->isPointerType() || ArgTy.isConstQualified()) {
+    return S.Diag(Arg->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << ArgTy << Arg->getSourceRange();
+  }
+
+  const auto *Width = Call->getArg(2);
+  QualType WidthTy = Width->getType();
+  if (!WidthTy->isIntegerType()) {
+    return S.Diag(Width->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << WidthTy << Width->getSourceRange();
+  }
+
+  const auto *Exp = Call->getArg(3);
+  QualType ExpTy = Exp->getType();
+  if (!ExpTy->isIntegerType()) {
+    return S.Diag(Exp->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << ExpTy << Exp->getSourceRange();
+  }
+
+#if 0
+  if (RetTy->getPointeeOrArrayElementType() !=
+      ArgTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Arg->getLocStart(), diag::err_builtin_expected_type)
+           << RetTy << ArgTy << Arg->getSourceRange();
+  }
+#endif
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFloatBinary(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 5))
+    return true;
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *Lhs = Call->getArg(1);
+  QualType LhsTy = Lhs->getType();
+  if (!LhsTy->isPointerType()) {
+    return S.Diag(Lhs->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << LhsTy << Lhs->getSourceRange();
+  }
+
+  const auto *Rhs = Call->getArg(2);
+  QualType RhsTy = Rhs->getType();
+  if (!RhsTy->isPointerType()) {
+    return S.Diag(Rhs->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << RhsTy << Rhs->getSourceRange();
+  }
+
+  const auto *Width = Call->getArg(3);
+  QualType WidthTy = Width->getType();
+  if (!WidthTy->isIntegerType()) {
+    return S.Diag(Width->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << WidthTy << Width->getSourceRange();
+  }
+
+  const auto *Exp = Call->getArg(4);
+  QualType ExpTy = Exp->getType();
+  if (!ExpTy->isIntegerType()) {
+    return S.Diag(Exp->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << ExpTy << Exp->getSourceRange();
+  }
+
+#if 0
+  if (RetTy->getPointeeOrArrayElementType() !=
+      LhsTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Lhs->getLocStart(), diag::err_builtin_expected_type)
+           << RetTy << LhsTy << Lhs->getSourceRange();
+  }
+
+  if (RetTy->getPointeeOrArrayElementType() !=
+      RhsTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Rhs->getLocStart(), diag::err_builtin_expected_type)
+           << RetTy << RhsTy << Rhs->getSourceRange();
+  }
+#endif
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFloatTernary(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 6))
+    return true;
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *Lhs = Call->getArg(1);
+  QualType LhsTy = Lhs->getType();
+  if (!LhsTy->isPointerType()) {
+    return S.Diag(Lhs->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << LhsTy << Lhs->getSourceRange();
+  }
+
+  const auto *Rhs = Call->getArg(2);
+  QualType RhsTy = Rhs->getType();
+  if (!RhsTy->isPointerType()) {
+    return S.Diag(Rhs->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << RhsTy << Rhs->getSourceRange();
+  }
+
+  const auto *Add = Call->getArg(3);
+  QualType AddTy = Add->getType();
+  if (!AddTy->isPointerType()) {
+    return S.Diag(Add->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << AddTy << Add->getSourceRange();
+  }
+
+  const auto *Width = Call->getArg(4);
+  QualType WidthTy = Width->getType();
+  if (!WidthTy->isIntegerType()) {
+    return S.Diag(Width->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << WidthTy << Width->getSourceRange();
+  }
+
+  const auto *Exp = Call->getArg(5);
+  QualType ExpTy = Exp->getType();
+  if (!ExpTy->isIntegerType()) {
+    return S.Diag(Exp->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << ExpTy << Exp->getSourceRange();
+  }
+
+#if 0
+  if (RetTy->getPointeeOrArrayElementType() !=
+      LhsTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Lhs->getLocStart(), diag::err_builtin_expected_type)
+           << RetTy << LhsTy << Lhs->getSourceRange();
+  }
+
+  if (RetTy->getPointeeOrArrayElementType() !=
+      RhsTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Rhs->getLocStart(), diag::err_builtin_expected_type)
+           << RetTy << RhsTy << Rhs->getSourceRange();
+  }
+
+  if (RetTy->getPointeeOrArrayElementType() !=
+      AddTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Add->getLocStart(), diag::err_builtin_expected_type)
+           << RetTy << AddTy << Add->getSourceRange();
+  }
+#endif
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFloatConversion(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 6))
+    return true;
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *Arg = Call->getArg(1);
+  QualType ArgTy = Arg->getType();
+  if (!ArgTy->isPointerType()) {
+    return S.Diag(Arg->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << ArgTy << Arg->getSourceRange();
+  }
+
+  const auto *ArgWidth = Call->getArg(2);
+  QualType ArgWidthTy = ArgWidth->getType();
+  if (!ArgWidthTy->isIntegerType()) {
+    return S.Diag(ArgWidth->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << ArgWidthTy << ArgWidth->getSourceRange();
+  }
+
+  const auto *ArgExp = Call->getArg(3);
+  QualType ArgExpTy = ArgExp->getType();
+  if (!ArgExpTy->isIntegerType()) {
+    return S.Diag(ArgExp->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << ArgExpTy << ArgExp->getSourceRange();
+  }
+
+  const auto *RetWidth = Call->getArg(4);
+  QualType RetWidthTy = RetWidth->getType();
+  if (!RetWidthTy->isIntegerType()) {
+    return S.Diag(RetWidth->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << RetWidthTy << RetWidth->getSourceRange();
+  }
+
+  const auto *RetExp = Call->getArg(5);
+  QualType RetExpTy = RetExp->getType();
+  if (!RetExpTy->isIntegerType()) {
+    return S.Diag(RetExp->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << RetExpTy << RetExp->getSourceRange();
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFloatCompare(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 4))
+    return true;
+
+  const auto *Lhs = Call->getArg(0);
+  QualType LhsTy = Lhs->getType();
+  if (!LhsTy->isPointerType()) {
+    return S.Diag(Lhs->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << LhsTy << Lhs->getSourceRange();
+  }
+
+  const auto *Rhs = Call->getArg(1);
+  QualType RhsTy = Rhs->getType();
+  if (!RhsTy->isPointerType()) {
+    return S.Diag(Rhs->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << RhsTy << Rhs->getSourceRange();
+  }
+
+  const auto *Width = Call->getArg(2);
+  QualType WidthTy = Width->getType();
+  if (!WidthTy->isIntegerType()) {
+    return S.Diag(Width->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << WidthTy << Width->getSourceRange();
+  }
+
+  const auto *Exp = Call->getArg(3);
+  QualType ExpTy = Exp->getType();
+  if (!ExpTy->isIntegerType()) {
+    return S.Diag(Exp->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << ExpTy << Exp->getSourceRange();
+  }
+
+#if 0
+  if (LhsTy->getPointeeOrArrayElementType() !=
+      RhsTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Rhs->getLocStart(), diag::err_builtin_expected_type)
+           << LhsTy << RhsTy << Rhs->getSourceRange();
+  }
+#endif
+
+  Call->setType(S.Context.BoolTy);
+  return false;
+}
+
+
+// \return True if a semantic error has been found, false otherwise.
 static bool SemaBuiltinFIFOStatus(Sema &S, CallExpr *Call) {
   if (checkArgCount(S, Call, 1))
     return true;
@@ -967,8 +1353,76 @@ bool Sema::CheckFPGABuiltinIP(CallExpr *Call) {
   return false;
 }
 
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinDirectIOStatus(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 1))
+    return true;
+
+  const auto *DirectIO = Call->getArg(0);
+  QualType DirectIOTy = DirectIO->getType();
+  if (!DirectIOTy->isPointerType()) {
+    return S.Diag(DirectIO->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << DirectIOTy << DirectIO->getSourceRange();
+  }
+
+  Call->setType(S.Context.BoolTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinDirectIO(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 2))
+    return true;
+
+  const auto *DirectIO = Call->getArg(0);
+  QualType DirectIOTy = DirectIO->getType();
+  if (!DirectIOTy->isPointerType()) {
+    return S.Diag(DirectIO->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << DirectIOTy << DirectIO->getSourceRange();
+  }
+
+  const auto *Data = Call->getArg(1);
+  QualType DataTy = Data->getType();
+  if (!DataTy->isPointerType()) {
+    return S.Diag(Data->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << DataTy << Data->getSourceRange();
+  }
+
+  if (DirectIOTy->getPointeeOrArrayElementType() !=
+      DataTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Data->getLocStart(), diag::err_builtin_expected_type)
+           << DirectIOTy << DataTy << Data->getSourceRange();
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
 bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   switch (BuiltinID) {
+  case FPGA::BI__fpga_mux:
+    return SemaBuiltinMux(*this, Call);
+  case FPGA::BI__fpga_sparse_mux:
+    return SemaBuiltinSparseMux(*this, Call);
+  case FPGA::BI__fpga_float_sqrt:
+    return SemaBuiltinFloatUnary(*this, Call);
+  case FPGA::BI__fpga_float_add:
+  case FPGA::BI__fpga_float_sub:
+  case FPGA::BI__fpga_float_mul:
+  case FPGA::BI__fpga_float_div:
+    return SemaBuiltinFloatBinary(*this, Call);
+  case FPGA::BI__fpga_float_fma:
+    return SemaBuiltinFloatTernary(*this, Call);
+  case FPGA::BI__fpga_float_from_fixed:
+  case FPGA::BI__fpga_float_to_fixed:
+  case FPGA::BI__fpga_float_to_float:
+    return SemaBuiltinFloatConversion(*this, Call);
+  case FPGA::BI__fpga_float_compare_eq:
+  case FPGA::BI__fpga_float_compare_le:
+  case FPGA::BI__fpga_float_compare_lt:
+  case FPGA::BI__fpga_float_compare_ne:
+  case FPGA::BI__fpga_float_compare_uo:
+    return SemaBuiltinFloatCompare(*this, Call);
   case FPGA::BI__fpga_set_stream_depth:
   case FPGA::BI__fpga_set_stream_of_blocks_depth:
     return SemaBuiltinSetStreamDepth(*this, Call);
@@ -1010,6 +1464,12 @@ bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
     return SemaBuiltinFPGANPortChannel(*this, Call);
   case FPGA::BI__fpga_ip:
     return CheckFPGABuiltinIP(Call);
+  case FPGA::BI__fpga_direct_valid:
+  case FPGA::BI__fpga_direct_ready:
+    return SemaBuiltinDirectIOStatus(*this, Call);
+  case FPGA::BI__fpga_direct_load:
+  case FPGA::BI__fpga_direct_store:
+    return SemaBuiltinDirectIO(*this, Call);
   default:
     break;
   }

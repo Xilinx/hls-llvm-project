@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -27,6 +28,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/InstructionPrecedenceTracking.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstrTypes.h"
@@ -164,9 +166,7 @@ private:
   SetVector<BasicBlock *> DeadBlocks;
   OptimizationRemarkEmitter *ORE;
   LoopInfo *LInfo;
-  // Maps a block to the topmost instruction with implicit control flow in it.
-  DenseMap<const BasicBlock *, const Instruction *>
-      FirstImplicitControlFlowInsts;
+  ImplicitControlFlowTracking *ICF;
 
   OrderedInstructions *OI;
   ValueTable VN;
@@ -186,6 +186,7 @@ private:
   // to the remaining instructions in the block.
   SmallMapVector<Value *, Constant *, 4> ReplaceWithConstMap;
   SmallVector<Instruction *, 8> InstrsToErase;
+  DenseMap<LoadInst *, Value*> LoadCache;
 
   // Map the block to reversed postorder traversal number. It is used to
   // find back edge easily.

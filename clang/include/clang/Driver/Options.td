@@ -690,6 +690,16 @@ def device_name_info : Joined<["-"], "device-name-info=">,
   Flags<[CC1Option]>,
   HelpText<"pass device name information to hls compilation.">;
 
+def hls_emit_hint_scope :  Joined<["-"], "hls-emit-hint-scope">,
+  Group<f_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"Emit hint scope for region annotation"> ;
+
+def hls_clock_period :  Joined<["-"], "hls-clock-period=">,
+  Group<f_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"HLS synthesis clock period"> ;
+
 def fgnu_inline_asm : Flag<["-"], "fgnu-inline-asm">, Group<f_Group>, Flags<[DriverOption]>;
 def fno_gnu_inline_asm : Flag<["-"], "fno-gnu-inline-asm">, Group<f_Group>,
   Flags<[DriverOption, CC1Option]>,

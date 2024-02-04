@@ -7,8 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -373,6 +373,8 @@ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const AttributeList &A,
   // this attribute has been transformed into AT_OpenCLUnrollHint
   case AttributeList::AT_XlxUnrollRegionHint:
     return nullptr;
+  case AttributeList::AT_XCLInline:
+  case AttributeList::AT_XlxInline:
   case AttributeList::AT_XCLLatency:
     return nullptr;
   case AttributeList::AT_Suppress:

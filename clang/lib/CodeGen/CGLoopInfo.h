@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -83,7 +84,7 @@ struct LoopAttributes {
   /// \brief Value for llvm.loop.pipeline metadata.
   int PipelineStyle;
 
-  bool Rewind;
+  int Rewind;
 
   /// \brief Value for llvm.loop.tripcount metadata.
   llvm::SmallVector<int, 3> TripCount;
@@ -201,7 +202,7 @@ public:
 
   void setPipelineStyle(int C = -1) { StagedAttrs.PipelineStyle = C; }
 
-  void setRewind(bool Enable = true) { StagedAttrs.Rewind = Enable; }
+  void setRewind(int Rewind = 0) { StagedAttrs.Rewind = Rewind; }
 
   void setTripCount(llvm::SmallVector<int, 3> C) { StagedAttrs.TripCount = C; }
 

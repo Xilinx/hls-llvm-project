@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -264,7 +264,7 @@ FunctionPass *createReassociatePass();
 // preds always go to some succ. Thresholds other than minus one override the
 // internal BB duplication default threshold.
 //
-FunctionPass *createJumpThreadingPass(int Threshold = -1, bool enableSinkHoist = false);
+FunctionPass *createJumpThreadingPass(int Threshold = -1);
 
 //===----------------------------------------------------------------------===//
 //

@@ -27,162 +27,8 @@
 
 using namespace llvm;
 
-static bool isTrivialBlock( BasicBlock* bb) 
-{
-  for ( auto &inst : *bb) { 
-    if (isa<IntrinsicInst>(inst)) { 
-      Intrinsic::ID id = cast<IntrinsicInst>(inst).getIntrinsicID() ; 
-      if (id == Intrinsic::fpga_seq_load_begin  ||
-          id == Intrinsic::fpga_seq_load_end ||
-          id == Intrinsic::fpga_seq_store_begin || 
-          id == Intrinsic::fpga_seq_store_end) { 
-        continue; 
-      }
-    }
-    if (inst.mayWriteToMemory()) { 
-      return false; 
-    }
-  }
-  return true; 
-}
-
-bool llvm::isPerfectNestLoop(Loop* L, ScalarEvolution* SE , std::string  &info) 
-{
-  info = Twine("checking  loop nest for parent Loop<" + getLoopName(L).getValueOr("unknown name") + ">").str(); 
-
-  BasicBlock * latch = L->getLoopLatch();
-  if (!latch) {
-    info += Twine("Loop<" + getLoopName(L).getValueOr("unknown name") + "> contains multi latch").str(); 
-    return false; 
-  }
-  //1. only one sub loop
-  SmallVector<Loop*, 4> subLoops(L->begin(), L->end()); 
-  if (subLoops.size() != 1 ) { 
-    info += Twine("Loop<" + getLoopName(L).getValueOr("unknown name") + "> contains multi sub Loops").str(); 
-    return false ; 
-  }
-
-  Loop *subLoop  = subLoops[0]; 
-  BasicBlock * subLatch = subLoop->getLoopLatch(); 
-  if (!subLatch) {
-    info += Twine("sub Loop<" + getLoopName(subLoop).getValueOr("unknown name") + ">  in parent Loop <" + getLoopName(L).getValueOr("unknown name")+ ">. has multi Latch blocks").str(); 
-    return false; 
-  }
-
-  //2. here, we will not check doWhile/or While-loop structure,  because  there is loop-unrotation  pass at the end of reflow 
-
-#if 0
-  BasicBlock * exitBlock = L->getExitingBlock(); 
-  if (!exitBlock){ 
-    info += Twine("Loop<" + getLoopName(L).getValueOr("unkown name") + "> contains multi forward jump").str(); 
-    return false; 
-  }
-
-  for( BasicBlock* suc : successors(exitBlock)) { 
-    if (L->contains(suc) && suc != L->getHeader()) { 
-      info += Twine("Loop<" + getLoopName(L).getValueOr("unknown name")  + "> contains multi forward jump").str(); 
-      return false; 
-    }
-  }
-
-  BasicBlock *subExitBlock = subLoop->getExitingBlock(); 
-  if (!subExitBlock){ 
-    info += Twine("Loop<" + getLoopName(subLoop).getValueOr("unknown name")  + "> contains multi forward jump").str(); 
-    return false; 
-  }
-  for( BasicBlock* suc : successors(subExitBlock)) { 
-    if (subLoop->contains(suc) && suc != subLoop->getHeader()) { 
-      info += Twine("Loop<" + getLoopName(subLoop).getValueOr("unknown name")  + "> contains multi forward jump").str(); 
-      return false; 
-    }
-  }
-#endif 
-
-
-  //3. check loop step of inner loop and outer loop 
-  const SCEV* tripCount = SE->getBackedgeTakenCount(L);
-  const SCEV* subTripCount = SE->getBackedgeTakenCount(subLoop); 
-
-  if (isa<SCEVUnknown>(tripCount) || isa<SCEVUnknown>(subTripCount) || 
-      isa<SCEVCouldNotCompute>(tripCount)  || isa<SCEVCouldNotCompute>(subTripCount)) { 
-    info += Twine("loop <" + getLoopName(L).getValueOr("unknown name") +"> , loop <" + getLoopName(subLoop).getValueOr("unknown name") + "> 's tripcount is varying").str(); 
-    return false; 
-  }
-
-  if (ScalarEvolution::LoopInvariant != SE->getLoopDisposition(subTripCount, L)) { 
-    info += Twine("loop <" + getLoopName(L).getValueOr("unknown name") + ">, loop <" + getLoopName(subLoop).getValueOr("unknown name") + "> 's tripcount is varying").str(); 
-    return false; 
-  }
-
-  //4.check exiting block of innerLoop will branch to latch of outerloop 
-  BasicBlock *subExit = subLoop->getExitBlock(); 
-  if (subExit != latch || !latch->getSinglePredecessor()) { 
-    info += Twine("subLoop<" + getLoopName(subLoop).getValueOr("unknown name") + "> contains multi forward jump").str(); 
-    return false; 
-  }
-
-  if (!isTrivialBlock(latch)) { 
-    return false; 
-  }
-
-
-  //5. 
-  //  if the blocks between [header of outer , header of inner) can not sink into inner header, 
-  //  or, if the blocks between (latch of inner, latch of outer] can not hoist to latch of inner , 
-  //the loop nest is not perfect nest loop 
-  //check header 
-  //
-
-
-  BasicBlock *header = L->getHeader(); 
-  BasicBlock *subPredecessor = subLoop->getLoopPredecessor(); 
-  if (header != subPredecessor) { 
-    //check from header to subPredecessor , if there is some instructions can not sink into inner loop 
-    BasicBlock *pathBB = subPredecessor->getSinglePredecessor() ;
-    if (pathBB != header || !isTrivialBlock(pathBB)) { 
-      info += Twine("parent Loop<" + getLoopName(L).getValueOr("unknown name") +"> contain extract code before subLoop<" + getLoopName(subLoop).getValueOr("unknown name") + ">").str();
-      return false ; 
-    }
-  }
-
-
-
-  //6. check we can move the header of outerloop to inner loop 
-  //this include two conds: 
-  //a.  the block in the header of outerloop should be trivialBlock
-  //b.  the value produced in header of outerloop should not be used by phi node of inner node
-
-  if (!isTrivialBlock(header)) { 
-    info += Twine("parent Loop<" + getLoopName(L).getValueOr("unknown name") +"> contain extract code before subLoop<" + getLoopName(subLoop).getValueOr("unkown name") + ">").str();
-    return false; 
-  }
-  for( auto &inst: *header){ 
-    if (isa<PHINode>(inst)){ 
-      /*
-       * ouer_loop_header: 
-       * a = phi( a1, a2) 
-       * inner_loop_header: 
-       *    b = phi( a, b1) 
-       * the phi node in outer loop that is used by innner loop
-       */
-      continue; 
-    }
-    for( auto user: inst.users()) { 
-      if (isa<PHINode>(user) && subLoop->contains(cast<PHINode>(user)->getParent()) ) { 
-        info = Twine("parent Loop<" + getLoopName(L).getValueOr("unknown name") +"> contain extract code before subLoop<" + getLoopName(subLoop).getValueOr("unknown name") + 
-            ">, so, they are not perfect nesting").str();
-        return false; 
-      }
-    }
-  }
-
-  info += Twine(", get perfect nesting Loop, parent Loop<" + getLoopName(L).getValueOr("unknown name") + "> nesting sub Loop<"+ getLoopName(subLoop).getValueOr("unknown name") + ">").str() ; 
-
-  return true; 
-}
-
-bool llvm::isForLoop(Loop *L) {
-  BasicBlock *Latch = L->getLoopLatch();
+bool llvm::isForLoop(const Loop *L) {
+  const BasicBlock *Latch = L->getLoopLatch();
   return Latch && !L->isLoopExiting(Latch) && L->isLoopExiting(L->getHeader());
 }
 
@@ -456,6 +302,10 @@ Optional<PipelineStyle> llvm::getPipelineStyle(const Loop *L) {
   return None;
 }
 
+bool llvm::isRotateOff(const Loop *L) {
+  return hasLoopMetadata(L, "llvm.loop.rotate.disable");
+}
+
 bool llvm::isFlatten(const Loop *L) {
   if (MDNode *MD = getLoopMetadata(L, "llvm.loop.flatten.enable"))
     return mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
@@ -468,7 +318,6 @@ bool llvm::isFlattenOff(const Loop *L) {
            0;
   return false;
 }
-
 
 static int LoopHintPragmaValue(MDNode *MD) {
   if (MD) {
@@ -703,7 +552,7 @@ DebugLoc llvm::getLoopDataflowPragmaLoc( const Loop *L ) {
 /// the rule for the returning exiting block is that:
 /// 1. latch is the prior to header
 /// 2. constant tripcount exiting is high priority
-BasicBlock *llvm::getExitingBlock(Loop *L, ScalarEvolution *SE) {
+BasicBlock *llvm::getExitingBlock(const Loop *L, ScalarEvolution *SE) {
   BasicBlock *Latch = L->getLoopLatch();
   bool LatchIsExiting = Latch && L->isLoopExiting(Latch);
   unsigned LatchTripCount =

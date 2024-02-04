@@ -5,11 +5,6 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
-// And has the following additional copyright:
-//
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
-// All Rights Reserved.
-//
 //===----------------------------------------------------------------------===//
 //
 // This file is used as the registry of passes that are part of the core LLVM
@@ -73,6 +68,7 @@ MODULE_PASS("print-callgraph", CallGraphPrinterPass(dbgs()))
 MODULE_PASS("print", PrintModulePass(dbgs()))
 MODULE_PASS("print-lcg", LazyCallGraphPrinterPass(dbgs()))
 MODULE_PASS("print-lcg-dot", LazyCallGraphDOTPrinterPass(dbgs()))
+MODULE_PASS("print-must-be-executed-contexts", MustBeExecutedContextPrinterPass(dbgs()))
 MODULE_PASS("rewrite-statepoints-for-gc", RewriteStatepointsForGC())
 MODULE_PASS("rewrite-symbols", RewriteSymbolPass())
 MODULE_PASS("rpo-functionattrs", ReversePostOrderFunctionAttrsPass())
@@ -200,6 +196,7 @@ FUNCTION_PASS("print<loops>", LoopPrinterPass(dbgs()))
 FUNCTION_PASS("print<memoryssa>", MemorySSAPrinterPass(dbgs()))
 FUNCTION_PASS("print<regions>", RegionInfoPrinterPass(dbgs()))
 FUNCTION_PASS("print<scalar-evolution>", ScalarEvolutionPrinterPass(dbgs()))
+FUNCTION_PASS("print-mustexecute", MustExecutePrinterPass(dbgs()))
 FUNCTION_PASS("reassociate", ReassociatePass())
 FUNCTION_PASS("sccp", SCCPPass())
 FUNCTION_PASS("simplify-cfg", SimplifyCFGPass())

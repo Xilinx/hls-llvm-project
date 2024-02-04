@@ -1852,6 +1852,12 @@ public:
     removeAttribute(AttributeList::FunctionIndex, Attribute::Convergent);
   }
 
+  /// Determine if the call will return
+  bool willReturn() const { return hasFnAttr(Attribute::WillReturn); }
+  void setWillReturn() {
+    addAttribute(AttributeList::FunctionIndex, Attribute::WillReturn);
+  }
+
   /// Determine if the call returns a structure through first
   /// pointer argument.
   bool hasStructRetAttr() const {
@@ -3950,6 +3956,12 @@ public:
   }
   void setNotConvergent() {
     removeAttribute(AttributeList::FunctionIndex, Attribute::Convergent);
+  }
+
+  /// Determine if the call will return
+  bool willReturn() const { return hasFnAttr(Attribute::WillReturn); }
+  void setWillReturn() {
+    addAttribute(AttributeList::FunctionIndex, Attribute::WillReturn);
   }
 
   /// Determine if the call returns a structure through first

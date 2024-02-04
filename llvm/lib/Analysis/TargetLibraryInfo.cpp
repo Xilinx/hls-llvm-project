@@ -1299,6 +1299,7 @@ bool TargetLibraryInfoImpl::isValidProtoForLibFunc(const FunctionType &FTy,
       return false;
   }
   case LibFunc::NumLibFuncs:
+  case LibFunc::NotLibFunc:
     break;
   }
 

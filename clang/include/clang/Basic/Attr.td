@@ -2914,7 +2914,7 @@ def XlxPipeline : StmtAttr {
   let LangOpts = [HLSExt];
   let TemplateDependent = 1;
   let Documentation = [Undocumented];
-  let Args = [ExprArgument<"II">, DefaultIntArgument<"Style", -1>, DefaultBoolArgument<"Rewind", 0>];
+  let Args = [ExprArgument<"II">, DefaultIntArgument<"Style", -1>, DefaultIntArgument<"Rewind", 0>];
 }
 
 def XCLUnrollWorkitems : StmtAttr {
@@ -3208,7 +3208,17 @@ def XCLInline : InheritableAttr {
   let Spellings = [GNU<"xcl_inline">];
   let LangOpts = [HLSExt];
   let Subjects = SubjectList<[Function], ErrorDiag>;
+  let TemplateDependent = 1;
   let Args = [DefaultIntArgument<"Recursive", 0>];
+  let Documentation = [Undocumented];
+}
+
+def XlxInline : InheritableAttr {
+  let Spellings = [GNU<"xlx_inline">];
+  let LangOpts = [HLSExt];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let TemplateDependent = 1;
+  let Args = [DefaultIntArgument<"On", 0>];
   let Documentation = [Undocumented];
 }
 
@@ -3299,7 +3309,8 @@ def XlxArrayPartitionXForm : InheritableAttr {
                            ["Cyclic", "Block", "Complete"]>,
               ExprArgument<"Factor", 1>, // here 1 means optional
               ExprArgument<"Dim", 1>, // here 1 means optional
-              BoolArgument<"Dynamic">]; 
+              BoolArgument<"Dynamic">,
+              BoolArgument<"Off">];
   let TemplateDependent = 1;
 }
 
@@ -3313,7 +3324,8 @@ def XlxArrayReshapeXForm : InheritableAttr {
                            ["cyclic", "block", "complete"],
                            ["Cyclic", "Block", "Complete"]>,
               ExprArgument<"Factor", 1>, // here 1 means optional
-              ExprArgument<"Dim", 1>]; // here 1 means optional
+              ExprArgument<"Dim", 1>, // here 1 means optional
+              BoolArgument<"Off">];
   let TemplateDependent = 1;
 }
 
@@ -3440,6 +3452,8 @@ def XlxPerformance : Attr {
               ExprArgument<"TargetTL">,
               ExprArgument<"AssumeTI">,
               ExprArgument<"AssumeTL">,
+              EnumArgument<"Unit", "UnitType", ["sec", "cycle"], ["Seconds", "Cycle"]>,
+
               EnumArgument<"PerformanceScope", 
                            "PerformanceScopeType",
                            ["loop", "region"],
@@ -3638,7 +3652,8 @@ def APScalarInterface: InheritableAttr{
               ExprArgument<"Port">,
               StringArgument<"Mode">,
               BoolArgument<"IsRegister">,
-              StringArgument<"SignalName">
+              StringArgument<"SignalName">,
+              BoolArgument<"DirectIO">
              ];
 
 }
@@ -3654,7 +3669,8 @@ def APScalarInterruptInterface: InheritableAttr{
               StringArgument<"Mode">,
               BoolArgument<"IsRegister">,
               StringArgument<"SignalName">,
-              ExprArgument<"Interrupt">
+              ExprArgument<"Interrupt">,
+              BoolArgument<"DirectIO">
              ];
 
 }
@@ -3756,6 +3772,7 @@ def XlxCache: Attr {
               ExprArgument<"Port">,
               ExprArgument<"Lines">,
               ExprArgument<"Depth">,
+              DefaultBoolArgument<"IsDefaultDepth", 0>, 
               ExprArgument<"Ways">,
               ExprArgument<"Users">,
               EnumArgument<"Burst", "BurstMode",

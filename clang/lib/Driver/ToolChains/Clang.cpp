@@ -3374,6 +3374,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     A->claim();
   }
 
+  if (Arg *A = Args.getLastArg(options::OPT_hls_clock_period)) {
+    CmdArgs.push_back(Args.MakeArgString("-hls-clock-period=" + StringRef(A->getValue())));
+    A->claim();
+  }
+
+  Args.AddLastArg(CmdArgs, options::OPT_hls_emit_hint_scope);
+
   Args.AddLastArg(CmdArgs, options::OPT_fveclib);
 
   if (!Args.hasFlag(options::OPT_fmerge_all_constants,

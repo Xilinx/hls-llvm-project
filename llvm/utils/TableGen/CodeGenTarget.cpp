@@ -487,14 +487,21 @@ ComplexPattern::ComplexPattern(Record *R) {
 
 CodeGenIntrinsicTable::CodeGenIntrinsicTable(const RecordKeeper &RC,
                                              bool TargetOnly) {
-  std::vector<Record*> Defs = RC.getAllDerivedDefinitions("Intrinsic");
+  std::vector<Record *> IntrProperties =
+      RC.getAllDerivedDefinitions("IntrinsicProperty");
 
+  std::vector<Record *> DefaultProperties;
+  for (Record *Rec : IntrProperties)
+    if (Rec->getValueAsBit("IsDefault"))
+      DefaultProperties.push_back(Rec);
+
+  std::vector<Record *> Defs = RC.getAllDerivedDefinitions("Intrinsic");
   Intrinsics.reserve(Defs.size());
 
   for (unsigned I = 0, e = Defs.size(); I != e; ++I) {
     bool isTarget = Defs[I]->getValueAsBit("isTarget");
     if (isTarget == TargetOnly)
-      Intrinsics.push_back(CodeGenIntrinsic(Defs[I]));
+      Intrinsics.push_back(CodeGenIntrinsic(Defs[I], DefaultProperties));
   }
   std::sort(Intrinsics.begin(), Intrinsics.end(),
             [](const CodeGenIntrinsic &LHS, const CodeGenIntrinsic &RHS) {
@@ -510,7 +517,8 @@ CodeGenIntrinsicTable::CodeGenIntrinsicTable(const RecordKeeper &RC,
   Targets.back().Count = Intrinsics.size() - Targets.back().Offset;
 }
 
-CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
+CodeGenIntrinsic::CodeGenIntrinsic(Record *R,
+                                   std::vector<Record *> DefaultProperties) {
   TheDef = R;
   std::string DefName = R->getName();
   ModRef = ReadWriteMem;
@@ -519,6 +527,7 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
   isCommutative = false;
   canThrow = false;
   isNoReturn = false;
+  isWillReturn = false;
   isNoDuplicate = false;
   isConvergent = false;
   isSpeculatable = false;
@@ -631,6 +640,9 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
     IS.ParamTypeDefs.push_back(TyEl);
   }
 
+  // Set default properties to true.
+  setDefaultProperties(R, DefaultProperties);
+
   // Parse the intrinsic properties.
   ListInit *PropList = R->getValueAsListInit("IntrProperties");
   for (unsigned i = 0, e = PropList->size(); i != e; ++i) {
@@ -638,50 +650,7 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
     assert(Property->isSubClassOf("IntrinsicProperty") &&
            "Expected a property!");
 
-    if (Property->getName() == "IntrNoMem")
-      ModRef = NoMem;
-    else if (Property->getName() == "IntrReadMem")
-      ModRef = ModRefBehavior(ModRef & ~MR_Mod);
-    else if (Property->getName() == "IntrWriteMem")
-      ModRef = ModRefBehavior(ModRef & ~MR_Ref);
-    else if (Property->getName() == "IntrArgMemOnly")
-      ModRef = ModRefBehavior((ModRef & ~MR_Anywhere) | MR_ArgMem);
-    else if (Property->getName() == "IntrInaccessibleMemOnly")
-      ModRef = ModRefBehavior((ModRef & ~MR_Anywhere) | MR_InaccessibleMem);
-    else if (Property->getName() == "IntrInaccessibleMemOrArgMemOnly")
-      ModRef = ModRefBehavior((ModRef & ~MR_Anywhere) | MR_ArgMem |
-                              MR_InaccessibleMem);
-    else if (Property->getName() == "Commutative")
-      isCommutative = true;
-    else if (Property->getName() == "Throws")
-      canThrow = true;
-    else if (Property->getName() == "IntrNoDuplicate")
-      isNoDuplicate = true;
-    else if (Property->getName() == "IntrConvergent")
-      isConvergent = true;
-    else if (Property->getName() == "IntrNoReturn")
-      isNoReturn = true;
-    else if (Property->getName() == "IntrSpeculatable")
-      isSpeculatable = true;
-    else if (Property->getName() == "IntrHasSideEffects")
-      hasSideEffects = true;
-    else if (Property->isSubClassOf("NoCapture")) {
-      unsigned ArgNo = Property->getValueAsInt("ArgNo");
-      ArgumentAttributes.push_back(std::make_pair(ArgNo, NoCapture));
-    } else if (Property->isSubClassOf("Returned")) {
-      unsigned ArgNo = Property->getValueAsInt("ArgNo");
-      ArgumentAttributes.push_back(std::make_pair(ArgNo, Returned));
-    } else if (Property->isSubClassOf("ReadOnly")) {
-      unsigned ArgNo = Property->getValueAsInt("ArgNo");
-      ArgumentAttributes.push_back(std::make_pair(ArgNo, ReadOnly));
-    } else if (Property->isSubClassOf("WriteOnly")) {
-      unsigned ArgNo = Property->getValueAsInt("ArgNo");
-      ArgumentAttributes.push_back(std::make_pair(ArgNo, WriteOnly));
-    } else if (Property->isSubClassOf("ReadNone")) {
-      unsigned ArgNo = Property->getValueAsInt("ArgNo");
-      ArgumentAttributes.push_back(std::make_pair(ArgNo, ReadNone));
-    } else
-      llvm_unreachable("Unknown property!");
+    setProperty(Property);
   }
 
   // Also record the SDPatternOperator Properties.
@@ -691,3 +660,61 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
   std::sort(ArgumentAttributes.begin(), ArgumentAttributes.end());
 }
 
+void CodeGenIntrinsic::setDefaultProperties(
+    Record *R, std::vector<Record *> DefaultProperties) {
+  // opt-out of using default attributes.
+  if (R->getValueAsBit("DisableDefaultAttributes"))
+    return;
+
+  for (Record *Rec : DefaultProperties)
+    setProperty(Rec);
+}
+
+void CodeGenIntrinsic::setProperty(Record *R) {
+  if (R->getName() == "IntrNoMem")
+    ModRef = NoMem;
+  else if (R->getName() == "IntrReadMem")
+    ModRef = ModRefBehavior(ModRef & ~MR_Mod);
+  else if (R->getName() == "IntrWriteMem")
+    ModRef = ModRefBehavior(ModRef & ~MR_Ref);
+  else if (R->getName() == "IntrArgMemOnly")
+    ModRef = ModRefBehavior((ModRef & ~MR_Anywhere) | MR_ArgMem);
+  else if (R->getName() == "IntrInaccessibleMemOnly")
+    ModRef = ModRefBehavior((ModRef & ~MR_Anywhere) | MR_InaccessibleMem);
+  else if (R->getName() == "IntrInaccessibleMemOrArgMemOnly")
+    ModRef = ModRefBehavior((ModRef & ~MR_Anywhere) | MR_ArgMem |
+                            MR_InaccessibleMem);
+  else if (R->getName() == "Commutative")
+    isCommutative = true;
+  else if (R->getName() == "Throws")
+    canThrow = true;
+  else if (R->getName() == "IntrNoDuplicate")
+    isNoDuplicate = true;
+  else if (R->getName() == "IntrConvergent")
+    isConvergent = true;
+  else if (R->getName() == "IntrNoReturn")
+    isNoReturn = true;
+  else if (R->getName() == "IntrWillReturn")
+    isWillReturn = !isNoReturn;
+  else if (R->getName() == "IntrSpeculatable")
+    isSpeculatable = true;
+  else if (R->getName() == "IntrHasSideEffects")
+    hasSideEffects = true;
+  else if (R->isSubClassOf("NoCapture")) {
+    unsigned ArgNo = R->getValueAsInt("ArgNo");
+    ArgumentAttributes.push_back(std::make_pair(ArgNo, NoCapture));
+  } else if (R->isSubClassOf("Returned")) {
+    unsigned ArgNo = R->getValueAsInt("ArgNo");
+    ArgumentAttributes.push_back(std::make_pair(ArgNo, Returned));
+  } else if (R->isSubClassOf("ReadOnly")) {
+    unsigned ArgNo = R->getValueAsInt("ArgNo");
+    ArgumentAttributes.push_back(std::make_pair(ArgNo, ReadOnly));
+  } else if (R->isSubClassOf("WriteOnly")) {
+    unsigned ArgNo = R->getValueAsInt("ArgNo");
+    ArgumentAttributes.push_back(std::make_pair(ArgNo, WriteOnly));
+  } else if (R->isSubClassOf("ReadNone")) {
+    unsigned ArgNo = R->getValueAsInt("ArgNo");
+    ArgumentAttributes.push_back(std::make_pair(ArgNo, ReadNone));
+  } else
+    llvm_unreachable("Unknown property!");
+}

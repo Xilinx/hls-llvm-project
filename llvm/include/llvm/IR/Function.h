@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -542,6 +543,10 @@ public:
   void setDoesNotRecurse() {
     addFnAttr(Attribute::NoRecurse);
   }
+
+  /// Determine if the function will return.
+  bool willReturn() const { return hasFnAttribute(Attribute::WillReturn); }
+  void setWillReturn() { addFnAttr(Attribute::WillReturn); }
 
   /// @brief True if the ABI mandates (or the user requested) that this
   /// function be in a unwind table.

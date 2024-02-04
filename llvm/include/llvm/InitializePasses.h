@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -282,6 +282,8 @@ void initializeMergedLoadStoreMotionLegacyPassPass(PassRegistry&);
 void initializeMetaRenamerPass(PassRegistry&);
 void initializeModuleDebugInfoPrinterPass(PassRegistry&);
 void initializeModuleSummaryIndexWrapperPassPass(PassRegistry&);
+void initializeMustExecutePrinterPass(PassRegistry&);
+void initializeMustBeExecutedContextPrinterPass(PassRegistry&);
 void initializeNameAnonGlobalLegacyPassPass(PassRegistry&);
 void initializeNaryReassociateLegacyPassPass(PassRegistry&);
 void initializeNewGVNLegacyPassPass(PassRegistry&);

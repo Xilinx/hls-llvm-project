@@ -38,6 +38,7 @@ add_llvm_library(LLVMAnalysis
   IndirectCallPromotionAnalysis.cpp
   InlineCost.cpp
   InstCount.cpp
+  InstructionPrecedenceTracking.cpp
   InstructionSimplify.cpp
   Interval.cpp
   IntervalPartition.cpp
@@ -62,6 +63,7 @@ add_llvm_library(LLVMAnalysis
   MemorySSAUpdater.cpp
   ModuleDebugInfoPrinter.cpp
   ModuleSummaryAnalysis.cpp
+  MustExecute.cpp
   ObjCARCAliasAnalysis.cpp
   ObjCARCAnalysisUtils.cpp
   ObjCARCInstKind.cpp

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -1391,6 +1391,7 @@ Verifier::visitModuleFlag(const MDNode *Op,
 static bool isFuncOnlyAttr(Attribute::AttrKind Kind) {
   switch (Kind) {
   case Attribute::NoReturn:
+  case Attribute::WillReturn:
   case Attribute::NoUnwind:
   case Attribute::NoInline:
   case Attribute::AlwaysInline:
@@ -4493,6 +4494,29 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
      Assert(isa<IntrinsicInst>(arg) , "directive.scope.exit 's argument must be token result from directive.scope.entry");
      IntrinsicInst *call = dyn_cast<IntrinsicInst>(arg);
      Assert(call->getIntrinsicID() == Intrinsic::directive_scope_entry, "directive.scope.exit 's argument must be token result from directive.scope.entry");
+     break;
+  }
+  case Intrinsic::hint_scope_entry:{
+     Assert(CS.isCall(), "hint_scope_entry can not be invoked");
+     auto C = dyn_cast<IntrinsicInst>(CS.getInstruction());
+
+     for (Use &U : C->uses()) {
+       CallSite UCS(U.getUser());
+
+       Assert(UCS.getIntrinsicID() == Intrinsic::hint_scope_exit ||
+              UCS.isBundleOperand(&U),
+              "hint.scope.entry can only be used in an operand bundle or by a "
+              "hint.scope.exit");
+     }
+     break;
+  }
+  case Intrinsic::hint_scope_exit:{
+     Assert(CS.isCall(), "hint_scope_exit can not be invoked");
+     IntrinsicInst *C = dyn_cast<IntrinsicInst>(CS.getArgOperand(0));
+
+     Assert(C && C->getIntrinsicID() == Intrinsic::hint_scope_entry,
+            "Expect hint.scope.entry returned token as hint.scope.exit "
+                "argument");
      break;
   }
   };

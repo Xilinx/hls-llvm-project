@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -36,6 +37,7 @@
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/Argument.h"
@@ -391,6 +393,12 @@ bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
     return true;
   }
 
+  if (isAllocLikeFn(I, TLI))
+    return true;
+
+  if (!I->willReturn())
+    return false;
+
   if (!I->mayHaveSideEffects())
     return true;
 
@@ -418,9 +426,6 @@ bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
       return false;
     }
   }
-
-  if (isAllocLikeFn(I, TLI))
-    return true;
 
   if (CallInst *CI = isFreeCall(I, TLI))
     if (Constant *C = dyn_cast<Constant>(CI->getArgOperand(0)))
@@ -472,6 +477,48 @@ llvm::RecursivelyDeleteTriviallyDeadInstructions(Value *V,
   return true;
 }
 
+void llvm::RecursivelyDeleteTriviallyDeadInstructions(
+    SmallVectorImpl<WeakTrackingVH> &DeadInsts, const TargetLibraryInfo *TLI,
+    MemorySSAUpdater *MSSAU,
+    std::function<void(Value *)> AboutToDeleteCallback) {
+  // Process the dead instruction list until empty.
+  while (!DeadInsts.empty()) {
+    Value *V = DeadInsts.pop_back_val();
+    Instruction *I = cast_or_null<Instruction>(V);
+    if (!I)
+      continue;
+    assert(isInstructionTriviallyDead(I, TLI) &&
+           "Live instruction found in dead worklist!");
+    assert(I->use_empty() && "Instructions with uses are not dead.");
+
+    // Don't lose the debug info while deleting the instructions.
+    salvageDebugInfo(*I);
+
+    if (AboutToDeleteCallback)
+      AboutToDeleteCallback(I);
+
+    // Null out all of the instruction's operands to see if any operand becomes
+    // dead as we go.
+    for (Use &OpU : I->operands()) {
+      Value *OpV = OpU.get();
+      OpU.set(nullptr);
+
+      if (!OpV->use_empty())
+        continue;
+
+      // If the operand is an instruction that became dead as we nulled out the
+      // operand, and if it is 'trivially' dead, delete it in a future loop
+      // iteration.
+      if (Instruction *OpI = dyn_cast<Instruction>(OpV))
+        if (isInstructionTriviallyDead(OpI, TLI))
+          DeadInsts.push_back(OpI);
+    }
+    if (MSSAU)
+      MSSAU->removeMemoryAccess(I);
+
+    I->eraseFromParent();
+  }
+}
 /// areAllUsesEqual - Check whether the uses of a value are all the same.
 /// This is similar to Instruction::hasOneUse() except this will also return
 /// true when there are no uses or multiple uses that all refer to the same
@@ -1608,12 +1655,11 @@ unsigned llvm::removeAllNonTerminatorAndEHPadInstructions(BasicBlock *BB) {
   while (EndInst != &BB->front()) {
     // Delete the next to last instruction.
     Instruction *Inst = &*--EndInst->getIterator();
-    bool isDirectiveScope = isa<IntrinsicInst>(Inst) && 
-        (dyn_cast<IntrinsicInst>(Inst)->getIntrinsicID() == Intrinsic::directive_scope_entry || dyn_cast<IntrinsicInst>(Inst)->getIntrinsicID() == Intrinsic::directive_scope_exit);
+    bool IsScope = isa<ScopeEntry>(Inst) || isa<ScopeExit>(Inst);
 
-    if (!Inst->use_empty() && (!Inst->getType()->isTokenTy()|| isDirectiveScope))
+    if (!Inst->use_empty() && (!Inst->getType()->isTokenTy()|| IsScope))
       Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
-    if (Inst->isEHPad() || (Inst->getType()->isTokenTy() && !isDirectiveScope)) {
+    if (Inst->isEHPad() || (Inst->getType()->isTokenTy() && !IsScope)) {
       EndInst = Inst;
       continue;
     }

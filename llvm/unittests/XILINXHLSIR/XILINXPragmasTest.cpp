@@ -227,6 +227,7 @@ TEST_F(HLSIRBuilderTest, Allocation) {
 
   XlxFunctionAllocationInst *LAI = XlxFunctionAllocationInst::get(SubF);
   EXPECT_EQ(LAI, LAV);
+  EXPECT_TRUE(LAI->willReturn());
 
   EXPECT_EQ(LAI->getFunction(), SubF);
   EXPECT_EQ(LAI->getFunctionString(), StringRef("function"));

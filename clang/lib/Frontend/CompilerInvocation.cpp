@@ -2086,12 +2086,23 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
     Opts.HLSSLX = 1; 
   }
 
+  if (Arg * A = Args.getLastArg(OPT_hls_clock_period)){ 
+    double result = 0; 
+    if (!StringRef(A->getValue()).getAsDouble(result)) { 
+      Opts.HLSClockPeriod = result; 
+    }
+  }
+
   if (Args.hasArg(options::OPT_fstrict_dataflow))
     Opts.StrictDataflow = 1;
 
   // -fxmc option enable Model Composer specific language extensions
   if (Args.hasArg(options::OPT_fxmc))
     Opts.XMCExt = 1;
+
+  // -hls-emit-hint-scope option enables hint scope code gen for region
+  // annotation
+  Opts.EmitHintScope = Args.hasArg(OPT_hls_emit_hint_scope);
 
   Opts.IncludeDefaultHeader = Args.hasArg(OPT_finclude_default_header);
 

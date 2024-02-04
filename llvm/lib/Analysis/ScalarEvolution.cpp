@@ -1482,7 +1482,7 @@ static const SCEV *getPreStartForExtend(const SCEVAddRecExpr *AR, Type *Ty,
       // If we know `AR` == {`PreStart`+`Step`,+,`Step`} is `WrapType` (FlagNSW
       // or FlagNUW) and that `PreStart` + `Step` is `WrapType` too, then
       // `PreAR` == {`PreStart`,+,`Step`} is also `WrapType`.  Cache this fact.
-      const_cast<SCEVAddRecExpr *>(PreAR)->setNoWrapFlags(WrapType);
+      SE->setNoWrapFlags(const_cast<SCEVAddRecExpr *>(PreAR), WrapType);
     }
     return PreStart;
   }
@@ -1654,7 +1654,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
 
       if (!AR->hasNoUnsignedWrap()) {
         auto NewFlags = proveNoWrapViaConstantRanges(AR);
-        const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(NewFlags);
+        setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), NewFlags);
       }
 
       // If we have special knowledge that this addrec won't overflow,
@@ -1703,7 +1703,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
                        SCEV::FlagAnyWrap, Depth + 1);
           if (ZAdd == OperandExtendedAdd) {
             // Cache knowledge of AR NUW, which is propagated to this AddRec.
-            const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNUW);
+            setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNUW);
             // Return the expression with the addrec on the outside.
             return getAddRecExpr(
                 getExtendAddRecStart<SCEVZeroExtendExpr>(AR, Ty, this,
@@ -1722,7 +1722,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
           if (ZAdd == OperandExtendedAdd) {
             // Cache knowledge of AR NW, which is propagated to this AddRec.
             // Negative step causes unsigned wrap, but it still can't self-wrap.
-            const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNW);
+            setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNW);
             // Return the expression with the addrec on the outside.
             return getAddRecExpr(
                 getExtendAddRecStart<SCEVZeroExtendExpr>(AR, Ty, this,
@@ -1756,7 +1756,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
                                            AR->getPostIncExpr(*this), N))) {
             // Cache knowledge of AR NUW, which is propagated to this
             // AddRec.
-            const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNUW);
+            setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNUW);
             // Return the expression with the addrec on the outside.
             return getAddRecExpr(
                 getExtendAddRecStart<SCEVZeroExtendExpr>(AR, Ty, this,
@@ -1774,7 +1774,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
             // Cache knowledge of AR NW, which is propagated to this
             // AddRec.  Negative step causes unsigned wrap, but it
             // still can't self-wrap.
-            const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNW);
+            setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNW);
             // Return the expression with the addrec on the outside.
             return getAddRecExpr(
                 getExtendAddRecStart<SCEVZeroExtendExpr>(AR, Ty, this,
@@ -1786,7 +1786,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
       }
 
       if (proveNoWrapByVaryingStart<SCEVZeroExtendExpr>(Start, Step, L)) {
-        const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNUW);
+        setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNUW);
         return getAddRecExpr(
             getExtendAddRecStart<SCEVZeroExtendExpr>(AR, Ty, this, Depth + 1),
             getZeroExtendExpr(Step, Ty, Depth + 1), L, AR->getNoWrapFlags());
@@ -1913,7 +1913,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
 
       if (!AR->hasNoSignedWrap()) {
         auto NewFlags = proveNoWrapViaConstantRanges(AR);
-        const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(NewFlags);
+        setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), NewFlags);
       }
 
       // If we have special knowledge that this addrec won't overflow,
@@ -1962,7 +1962,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
                        SCEV::FlagAnyWrap, Depth + 1);
           if (SAdd == OperandExtendedAdd) {
             // Cache knowledge of AR NSW, which is propagated to this AddRec.
-            const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNSW);
+            setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNSW);
             // Return the expression with the addrec on the outside.
             return getAddRecExpr(
                 getExtendAddRecStart<SCEVSignExtendExpr>(AR, Ty, this,
@@ -1987,7 +1987,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
             // Thus (AR is not NW => SAdd != OperandExtendedAdd) <=>
             // (SAdd == OperandExtendedAdd => AR is NW)
 
-            const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNW);
+            setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNW);
 
             // Return the expression with the addrec on the outside.
             return getAddRecExpr(
@@ -2023,7 +2023,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
               isLoopBackedgeGuardedByCond(L, Pred, AR->getPostIncExpr(*this),
                                           OverflowLimit)))) {
           // Cache knowledge of AR NSW, then propagate NSW to the wide AddRec.
-          const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNSW);
+          setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNSW);
           return getAddRecExpr(
               getExtendAddRecStart<SCEVSignExtendExpr>(AR, Ty, this, Depth + 1),
               getSignExtendExpr(Step, Ty, Depth + 1), L, AR->getNoWrapFlags());
@@ -2049,7 +2049,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
       }
 
       if (proveNoWrapByVaryingStart<SCEVSignExtendExpr>(Start, Step, L)) {
-        const_cast<SCEVAddRecExpr *>(AR)->setNoWrapFlags(SCEV::FlagNSW);
+        setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), SCEV::FlagNSW);
         return getAddRecExpr(
             getExtendAddRecStart<SCEVSignExtendExpr>(AR, Ty, this, Depth + 1),
             getSignExtendExpr(Step, Ty, Depth + 1), L, AR->getNoWrapFlags());
@@ -2725,6 +2725,29 @@ ScalarEvolution::getOrCreateAddExpr(SmallVectorImpl<const SCEV *> &Ops,
 }
 
 const SCEV *
+ScalarEvolution::getOrCreateAddRecExpr(SmallVectorImpl<const SCEV *> &Ops,
+                                       const Loop *L, SCEV::NoWrapFlags Flags) {
+  FoldingSetNodeID ID;
+  ID.AddInteger(scAddRecExpr);
+  for (unsigned i = 0, e = Ops.size(); i != e; ++i)
+    ID.AddPointer(Ops[i]);
+  ID.AddPointer(L);
+  void *IP = nullptr;
+  SCEVAddRecExpr *S =
+      static_cast<SCEVAddRecExpr *>(UniqueSCEVs.FindNodeOrInsertPos(ID, IP));
+  if (!S) {
+    const SCEV **O = SCEVAllocator.Allocate<const SCEV *>(Ops.size());
+    std::uninitialized_copy(Ops.begin(), Ops.end(), O);
+    S = new (SCEVAllocator)
+        SCEVAddRecExpr(ID.Intern(SCEVAllocator), O, Ops.size(), L);
+    UniqueSCEVs.InsertNode(S, IP);
+    addToLoopUseLists(S);
+  }
+  setNoWrapFlags(S, Flags);
+  return S;
+}
+
+const SCEV *
 ScalarEvolution::getOrCreateMulExpr(SmallVectorImpl<const SCEV *> &Ops,
                                     SCEV::NoWrapFlags Flags) {
   FoldingSetNodeID ID;
@@ -3366,25 +3389,7 @@ ScalarEvolution::getAddRecExpr(SmallVectorImpl<const SCEV *> &Operands,
 
   // Okay, it looks like we really DO need an addrec expr.  Check to see if we
   // already have one, otherwise create a new one.
-  FoldingSetNodeID ID;
-  ID.AddInteger(scAddRecExpr);
-  for (unsigned i = 0, e = Operands.size(); i != e; ++i)
-    ID.AddPointer(Operands[i]);
-  ID.AddPointer(L);
-  void *IP = nullptr;
-  SCEVAddRecExpr *S =
-    static_cast<SCEVAddRecExpr *>(UniqueSCEVs.FindNodeOrInsertPos(ID, IP));
-  if (!S) {
-    const SCEV **O = SCEVAllocator.Allocate<const SCEV *>(Operands.size());
-    std::uninitialized_copy(Operands.begin(), Operands.end(), O);
-    S = new (SCEVAllocator) SCEVAddRecExpr(ID.Intern(SCEVAllocator),
-                                           O, Operands.size(), L);
-    UniqueSCEVs.InsertNode(S, IP);
-    addToLoopUseLists(S);
-    registerUser(S, Operands);
-  }
-  S->setNoWrapFlags(Flags);
-  return S;
+  return getOrCreateAddRecExpr(Operands, L, Flags);
 }
 
 const SCEV *
@@ -3970,7 +3975,7 @@ const SCEV *ScalarEvolution::getMinusSCEV(const SCEV *LHS, const SCEV *RHS,
   auto AddFlags = SCEV::FlagAnyWrap;
   const bool RHSIsNotMinSigned =
       !getSignedRangeMin(RHS).isMinSignedValue();
-  if (maskFlags(Flags, SCEV::FlagNSW) == SCEV::FlagNSW) {
+  if (hasFlags(Flags, SCEV::FlagNSW)) {
     // Let M be the minimum representable signed value. Then (-1)*RHS
     // signed-wraps if and only if RHS is M. That can happen even for
     // a NSW subtraction because e.g. (-1)*M signed-wraps even though
@@ -5445,6 +5450,15 @@ uint32_t ScalarEvolution::GetMinTrailingZeros(const SCEV *S) {
   return InsertPair.first->second;
 }
 
+void ScalarEvolution::setNoWrapFlags(SCEVAddRecExpr *AddRec,
+                                     SCEV::NoWrapFlags Flags) {
+  if (AddRec->getNoWrapFlags(Flags) != Flags) {
+    AddRec->setNoWrapFlags(Flags);
+    UnsignedRanges.erase(AddRec);
+    SignedRanges.erase(AddRec);
+  }
+}
+
 /// HINT_RANGE_UNSIGNED (resp. HINT_RANGE_SIGNED) then getRange prefers ranges
 /// with a "cleaner" unsigned (resp. signed) representation.
 ConstantRange 
@@ -5978,7 +5992,7 @@ ScalarEvolution::getLoopProperties(const Loop *L) {
       if (auto *SI = dyn_cast<StoreInst>(I))
         return !SI->isSimple();
 
-      return I->mayHaveSideEffects();
+      return I->mayThrow() || I->mayWriteToMemory();
     };
 
     LoopProperties LP = {/* HasNoAbnormalExits */ true,
@@ -6000,6 +6014,11 @@ ScalarEvolution::getLoopProperties(const Loop *L) {
   }
 
   return Itr->second;
+}
+
+bool ScalarEvolution::loopIsFiniteByAssumption(const Loop *L) {
+  // TODO: Update when port in mustprogress.
+  return isFinite(L);
 }
 
 const SCEV *ScalarEvolution::createSCEV(Value *V) {
@@ -7287,6 +7306,32 @@ ScalarEvolution::computeExitLimitFromICmp(const Loop *L,
         const SCEV *Ret = AddRec->getNumIterationsInRange(CompRange, *this);
         if (!isa<SCEVCouldNotCompute>(Ret)) return Ret;
       }
+
+  // If this loop must exit based on this condition (or execute undefined
+  // behaviour), and we can prove the test sequence produced must repeat
+  // the same values on self-wrap of the IV, then we can infer that IV
+  // doesn't self wrap because if it did, we'd have an infinite (undefined)
+  // loop.
+  if (ControlsExit && isLoopInvariant(RHS, L) && loopHasNoAbnormalExits(L) &&
+      loopIsFiniteByAssumption(L)) {
+
+    // TODO: We can peel off any functions which are invertible *in L*.  Loop
+    // invariant terms are effectively constants for our purposes here.
+    auto *InnerLHS = LHS;
+    if (auto *ZExt = dyn_cast<SCEVZeroExtendExpr>(LHS))
+      InnerLHS = ZExt->getOperand();
+    if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(InnerLHS)) {
+      auto *StrideC = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*this));
+      if (!AR->hasNoSelfWrap() && AR->getLoop() == L && AR->isAffine() && 
+          StrideC && StrideC->getAPInt().isPowerOf2()) {
+        auto Flags = AR->getNoWrapFlags();
+        Flags = setFlags(Flags, SCEV::FlagNW);
+        SmallVector<const SCEV*, 2> Operands{AR->operands()};
+        Flags = StrengthenNoWrapFlags(this, scAddRecExpr, Operands, Flags);
+        setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), Flags);
+      }
+    }
+  }
 
   switch (Pred) {
   case ICmpInst::ICMP_NE: {                     // while (X != Y)
@@ -9942,11 +9987,9 @@ bool ScalarEvolution::isImpliedCondOperandsViaRanges(ICmpInst::Predicate Pred,
   return SatisfyingLHSRange.contains(LHSRange);
 }
 
-bool ScalarEvolution::doesIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
-                                         bool IsSigned, bool NoWrap) {
+bool ScalarEvolution::canIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
+                                        bool IsSigned) {
   assert(isKnownPositive(Stride) && "Positive stride expected!");
-
-  if (NoWrap) return false;
 
   unsigned BitWidth = getTypeSizeInBits(RHS->getType());
   const SCEV *One = getOne(Stride->getType());
@@ -9968,9 +10011,8 @@ bool ScalarEvolution::doesIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
   return (std::move(MaxValue) - MaxStrideMinusOne).ult(MaxRHS);
 }
 
-bool ScalarEvolution::doesIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
-                                         bool IsSigned, bool NoWrap) {
-  if (NoWrap) return false;
+bool ScalarEvolution::canIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
+                                        bool IsSigned) {
 
   unsigned BitWidth = getTypeSizeInBits(RHS->getType());
   const SCEV *One = getOne(Stride->getType());
@@ -10060,6 +10102,62 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   const SCEVAddRecExpr *IV = dyn_cast<SCEVAddRecExpr>(LHS);
   bool PredicatedIV = false;
 
+  auto canAssumeNoSelfWrap = [&](const SCEVAddRecExpr *AR) {
+    // Can we prove this loop *must* be UB if overflow of IV occurs?
+    // Reasoning goes as follows:
+    // * Suppose the IV did self wrap.
+    // * If Stride evenly divides the iteration space, then once wrap
+    //   occurs, the loop must revisit the same values.
+    // * We know that RHS is invariant, and that none of those values
+    //   caused this exit to be taken previously.  Thus, this exit is
+    //   dynamically dead.
+    // * If this is the sole exit, then a dead exit implies the loop
+    //   must be infinite if there are no abnormal exits.
+    // * If the loop were infinite, then it must either not be mustprogress
+    //   or have side effects. Otherwise, it must be UB.
+    // * It can't (by assumption), be UB so we have contradicted our
+    //   premise and can conclude the IV did not in fact self-wrap.
+    if (!isLoopInvariant(RHS, L))
+      return false;
+
+    auto *StrideC = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*this));
+    if (!StrideC || !StrideC->getAPInt().isPowerOf2())
+      return false;
+
+    if (!ControlsExit || !loopHasNoAbnormalExits(L))
+      return false;
+
+    return loopIsFiniteByAssumption(L);
+  };
+
+  if (!IV) {
+    if (auto *ZExt = dyn_cast<SCEVZeroExtendExpr>(LHS)) {
+      const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(ZExt->getOperand());
+      if (AR && AR->getLoop() == L && AR->isAffine()) {
+        auto Flags = AR->getNoWrapFlags();
+        if (!hasFlags(Flags, SCEV::FlagNW) && canAssumeNoSelfWrap(AR)) {
+          Flags = setFlags(Flags, SCEV::FlagNW);
+
+          SmallVector<const SCEV*, 2> Operands{AR->operands()};
+          Flags = StrengthenNoWrapFlags(this, scAddRecExpr, Operands, Flags);
+
+          setNoWrapFlags(const_cast<SCEVAddRecExpr *>(AR), Flags);
+        }
+        if (AR->hasNoUnsignedWrap()) {
+          // Emulate what getZeroExtendExpr would have done during construction
+          // if we'd been able to infer the fact just above at that time.
+          const SCEV *Step = AR->getStepRecurrence(*this);
+          Type *Ty = ZExt->getType();
+          auto *S = getAddRecExpr(
+            getExtendAddRecStart<SCEVZeroExtendExpr>(AR, Ty, this, 0),
+            getZeroExtendExpr(Step, Ty, 0), L, AR->getNoWrapFlags());
+          IV = dyn_cast<SCEVAddRecExpr>(S);
+        }
+      }
+    }
+  }
+
+
   if (!IV && AllowPredicates) {
     // Try to make this an AddRec using runtime tests, in the first X
     // iterations of this loop, where X is the SCEV expression found by the
@@ -10126,13 +10224,23 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
     if (PredicatedIV || !NoWrap || isKnownNonPositive(Stride) ||
         !loopHasNoSideEffects(L))
       return getCouldNotCompute();
-  } else if (!Stride->isOne() &&
-             doesIVOverflowOnLT(RHS, Stride, IsSigned, NoWrap))
+  } else if (!Stride->isOne() && !NoWrap) {
+    auto isUBOnWrap = [&]() {
+      // From no-self-wrap, we need to then prove no-(un)signed-wrap.  This
+      // follows trivially from the fact that every (un)signed-wrapped, but
+      // not self-wrapped value must be LT than the last value before
+      // (un)signed wrap.  Since we know that last value didn't exit, nor
+      // will any smaller one.
+      return canAssumeNoSelfWrap(IV);
+    };
+
     // Avoid proven overflow cases: this will ensure that the backedge taken
     // count will not generate any unsigned overflow. Relaxed no-overflow
     // conditions exploit NoWrapFlags, allowing to optimize in presence of
     // undefined behaviors like the case of C language.
-    return getCouldNotCompute();
+    if (canIVOverflowOnLT(RHS, Stride, IsSigned) && !isUBOnWrap())
+      return getCouldNotCompute();
+  }
 
   ICmpInst::Predicate Cond = IsSigned ? ICmpInst::ICMP_SLT
                                       : ICmpInst::ICMP_ULT;
@@ -10225,8 +10333,9 @@ ScalarEvolution::howManyGreaterThans(const SCEV *LHS, const SCEV *RHS,
   // will not generate any unsigned overflow. Relaxed no-overflow conditions
   // exploit NoWrapFlags, allowing to optimize in presence of undefined
   // behaviors like the case of C language.
-  if (!Stride->isOne() && doesIVOverflowOnGT(RHS, Stride, IsSigned, NoWrap))
-    return getCouldNotCompute();
+  if (!Stride->isOne() && !NoWrap)
+    if (canIVOverflowOnGT(RHS, Stride, IsSigned))
+      return getCouldNotCompute();
 
   ICmpInst::Predicate Cond = IsSigned ? ICmpInst::ICMP_SGT
                                       : ICmpInst::ICMP_UGT;

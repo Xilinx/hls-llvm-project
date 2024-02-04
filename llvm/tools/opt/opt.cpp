@@ -131,6 +131,11 @@ StripDebug("strip-debug",
            cl::desc("Strip debugger symbol info from translation unit"));
 
 static cl::opt<bool>
+StripIdenAndModuleFlags("strip-iden-and-module-flags",
+           cl::desc("Strip compiler identification and module flags metadata "
+                    "from translation unit"));
+
+static cl::opt<bool>
 DisableInline("disable-inlining", cl::desc("Do not run the inliner pass"));
 
 static cl::opt<bool>
@@ -543,6 +548,11 @@ int main(int argc, char **argv) {
   // Strip debug info before running the verifier.
   if (StripDebug)
     StripDebugInfo(*M);
+
+  if (StripIdenAndModuleFlags) {
+    M->eraseNamedMetadata(M->getNamedMetadata("llvm.ident"));
+    M->eraseNamedMetadata(M->getNamedMetadata("llvm.module.flags"));
+  }
 
   // Immediately run the verifier to catch any problems before starting up the
   // pass pipelines.  Otherwise we can crash on broken code during

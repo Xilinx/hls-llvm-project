@@ -73,6 +73,35 @@ void llvm::addLoopMetadata(Loop *L, StringRef Attr,
   L->setLoopID(NewLoopID);
 }
 
+/// NOTE: If there is already \p Attr existed for Loop \p L, drops it 
+void llvm::removeLoopMetadata(Loop *L, StringRef Attr) {
+  bool IsUnrollLoopMD = IsUnrollLoopMetadata(Attr);
+
+  // Reserve first location for self reference to the LoopID metadata node.
+  SmallVector<Metadata *, 4> MDs(1);
+
+  // Check if there's already LoopID.
+  if (MDNode *LoopID = L->getLoopID())
+    for (unsigned i = 1, ie = LoopID->getNumOperands(); i < ie; ++i) {
+      MDNode *MD = cast<MDNode>(LoopID->getOperand(i));
+
+      // Already have given Attr? Drop it.
+      if (const MDString *S = dyn_cast<MDString>(MD->getOperand(0)))
+        if (S->getString() == Attr)
+          continue;
+
+      MDs.push_back(LoopID->getOperand(i));
+    }
+
+  // Appends the Attr + Options and creates new loop id.
+  LLVMContext &Context = GetContext(L);
+  MDNode *NewLoopID = MDNode::get(Context, MDs);
+
+  // Set operand 0 to refer to the loop id itself.
+  NewLoopID->replaceOperandWith(0, NewLoopID);
+  L->setLoopID(NewLoopID);
+}
+
 void llvm::addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg, 
                             StringRef Source, DILocation *DL) {
   Type *Int32Ty = Type::getInt32Ty(GetContext(L));
@@ -119,6 +148,10 @@ void llvm::addPipeline(Loop *L, int32_t II, bool IsRewind,
 
 void llvm::addPipelineOff(Loop *L, StringRef Source) {
   addPipeline(L, /* No pipeline */ 0, false, PipelineStyle::Default, Source);
+}
+
+void llvm::removePipeline(Loop *L) {
+  removeLoopMetadata(L, "llvm.loop.pipeline.enable");
 }
 
 void llvm::addFullyUnroll(Loop *L, StringRef Source, DILocation *Loc) {

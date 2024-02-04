@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1044,6 +1045,10 @@ void llvm::printLoop(Loop &L, raw_ostream &OS, const std::string &Banner) {
       else
         OS << "Printing <null> block";
   }
+}
+
+bool llvm::isFinite(const Loop *L) {
+  return L->getHeader()->getParent()->willReturn();
 }
 
 //===----------------------------------------------------------------------===//

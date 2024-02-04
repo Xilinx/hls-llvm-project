@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -37,6 +38,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
 #include <cstdint>
 #include <limits>
@@ -60,6 +62,7 @@ class PHINode;
 class StoreInst;
 class TargetLibraryInfo;
 class TargetTransformInfo;
+class MemorySSAUpdater;
 
 /// A set of parameters used to control the transforms in the SimplifyCFG pass.
 /// Options may change depending on the position in the optimization pipeline.
@@ -147,6 +150,20 @@ bool wouldInstructionBeTriviallyDead(Instruction *I,
 /// recursively. Return true if any instructions were deleted.
 bool RecursivelyDeleteTriviallyDeadInstructions(Value *V,
                                         const TargetLibraryInfo *TLI = nullptr);
+/// Delete all of the instructions in `DeadInsts`, and all other instructions
+/// that deleting these in turn causes to be trivially dead.
+///
+/// The initial instructions in the provided vector must all have empty use
+/// lists and satisfy `isInstructionTriviallyDead`.
+///
+/// `DeadInsts` will be used as scratch storage for this routine and will be
+/// empty afterward.
+void RecursivelyDeleteTriviallyDeadInstructions(
+    SmallVectorImpl<WeakTrackingVH> &DeadInsts,
+    const TargetLibraryInfo *TLI = nullptr, MemorySSAUpdater *MSSAU = nullptr,
+    std::function<void(Value *)> AboutToDeleteCallback =
+        std::function<void(Value *)>());
+
 
 /// If the specified value is an effectively dead PHI node, due to being a
 /// def-use chain of single-use nodes that either forms a cycle or is terminated

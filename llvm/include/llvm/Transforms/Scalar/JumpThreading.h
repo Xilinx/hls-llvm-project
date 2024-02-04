@@ -144,7 +144,6 @@ class JumpThreadingPass : public PassInfoMixin<JumpThreadingPass> {
   DenseSet<std::pair<Value *, BasicBlock *>> RecursionSet;
 
   unsigned BBDupThreshold;
-  bool EnableSinkHoist;
 
   // RAII helper for updating the recursion stack.
   struct RecursionSetRemover {
@@ -159,7 +158,7 @@ class JumpThreadingPass : public PassInfoMixin<JumpThreadingPass> {
   };
 
 public:
-  JumpThreadingPass(int T = -1, bool enableSinkHoist = false);
+  JumpThreadingPass(int T = -1);
 
   // Glue for old PM.
   bool runImpl(Function &F, TargetLibraryInfo *TLI_, LazyValueInfo *LVI_,

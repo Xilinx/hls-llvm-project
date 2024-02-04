@@ -528,6 +528,14 @@ public:
     CALLSITE_DELEGATE_SETTER(setNotConvergent());
   }
 
+  /// Determine if the call will return
+  bool willReturn() const {
+    CALLSITE_DELEGATE_GETTER(willReturn());
+  }
+  void setWillReturn() {
+    CALLSITE_DELEGATE_SETTER(setWillReturn());
+  }
+
   unsigned getNumOperandBundles() const {
     CALLSITE_DELEGATE_GETTER(getNumOperandBundles());
   }

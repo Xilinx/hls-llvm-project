@@ -3760,7 +3760,11 @@ Instruction *InstCombiner::tryOptimizeCall(CallInst *CI) {
   auto InstCombineRAUW = [this](Instruction *From, Value *With) {
     replaceInstUsesWith(*From, With);
   };
-  LibCallSimplifier Simplifier(DL, &TLI, ORE, InstCombineRAUW);
+  auto InstCombineErase = [this](Instruction *I) {
+    eraseInstFromFunction(*I);
+  };
+  LibCallSimplifier Simplifier(DL, &TLI, ORE, InstCombineRAUW,
+                               InstCombineErase);
   if (Value *With = Simplifier.optimizeCall(CI)) {
     ++NumSimplified;
     return CI->use_empty() ? CI : replaceInstUsesWith(*CI, With);

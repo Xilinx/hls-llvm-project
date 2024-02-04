@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -64,11 +64,7 @@ UnrollRuntimeEpilog("unroll-runtime-epilog", cl::init(false), cl::Hidden,
 static cl::opt<bool>
 UnrollVerifyDomtree("unroll-verify-domtree", cl::Hidden,
                     cl::desc("Verify domtree after unrolling"),
-#ifdef NDEBUG
     cl::init(false)
-#else
-    cl::init(true)
-#endif
                     );
 
 /// Convert the instruction operands from referencing the current values into

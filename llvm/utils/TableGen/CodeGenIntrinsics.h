@@ -124,6 +124,9 @@ struct CodeGenIntrinsic {
   /// True if the intrinsic is no-return.
   bool isNoReturn;
 
+  /// True if the intrinsic is will-return.
+  bool isWillReturn;
+
   /// True if the intrinsic is marked as convergent.
   bool isConvergent;
 
@@ -141,7 +144,14 @@ struct CodeGenIntrinsic {
     return Properties & (1 << Prop);
   }
 
-  CodeGenIntrinsic(Record *R);
+  /// Goes through all IntrProperties that have IsDefault
+  /// value set and sets the property.
+  void setDefaultProperties(Record *R, std::vector<Record *> DefaultProperties);
+
+  /// Helper function to set property \p Name to true;
+  void setProperty(Record *R);
+
+  CodeGenIntrinsic(Record *R, std::vector<Record *> DefaultProperties);
 };
 
 class CodeGenIntrinsicTable {

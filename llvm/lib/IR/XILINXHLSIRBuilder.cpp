@@ -179,6 +179,121 @@ Value *HLSIRBuilder::CreateSMod(Value *LHS, Value *RHS, const Twine &Name) {
 }
 
 //===----------------------------------------------------------------------===//
+Value *HLSIRBuilder::CreateFloatCompute(Intrinsic::ID II, ArrayRef<Value*> Args,
+                                        ConstantInt *Exp, const Twine &Name) {
+  assert(Args.size() > 0 &&
+         "Floating Point compute intrinsics need at least one argument!");
+
+  Type *Ty = Args[0]->getType();
+  auto *Fn = Intrinsic::getDeclaration(getModule(), II, {Ty});
+
+  SmallVector<Value *, 4> AllArgs;
+  for (auto *Arg : Args)
+    AllArgs.push_back(Arg);
+  AllArgs.push_back(Exp);
+  return CreateCall(Fn, AllArgs, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatCompare(FCmpInst::Predicate Pred,
+                                        Value *LHS, Value *RHS,
+                                        ConstantInt *Exp, const Twine &Name) {
+  assert(LHS->getType() == RHS->getType() &&
+         "Floating Point comparison intrinsics need matching argument types!");
+
+  Type *Ty = LHS->getType();
+  auto II = FloatCmpInst::getIntrIDForPred(Pred);
+  auto *Fn = Intrinsic::getDeclaration(getModule(), II, {Ty});
+  return CreateCall(Fn, {LHS, RHS, Exp}, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatFromFixed(Type *RetTy, Value *Arg,
+                                          ConstantInt *Int, ConstantInt *Exp,
+                                          const Twine &Name) {
+  Type *ArgTy = Arg->getType();
+  auto *Fn = Intrinsic::getDeclaration(getModule(),
+                                       Intrinsic::fpga_float_from_fixed,
+                                       {RetTy, ArgTy});
+  return CreateCall(Fn, {Arg, Int, Exp}, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatToFixed(Type *RetTy, Value *Arg,
+                                        ConstantInt *Exp, ConstantInt *Int,
+                                        const Twine &Name) {
+  Type *ArgTy = Arg->getType();
+  auto *Fn = Intrinsic::getDeclaration(getModule(),
+                                       Intrinsic::fpga_float_to_fixed,
+                                       {RetTy, ArgTy});
+  return CreateCall(Fn, {Arg, Exp, Int}, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatToFloat(Type *RetTy, Value *Arg,
+                                        ConstantInt *ArgExp,
+                                        ConstantInt *RetExp,
+                                        const Twine &Name) {
+  Type *ArgTy = Arg->getType();
+  auto *Fn = Intrinsic::getDeclaration(getModule(),
+                                       Intrinsic::fpga_float_to_float,
+                                       {RetTy, ArgTy});
+  return CreateCall(Fn, {Arg, ArgExp, RetExp}, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatAdd(Value *LHS, Value *RHS, ConstantInt *Exp,
+                                    const Twine &Name) {
+  return CreateFloatCompute(Intrinsic::fpga_float_add, {LHS, RHS}, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatSub(Value *LHS, Value *RHS, ConstantInt *Exp,
+                                    const Twine &Name) {
+  return CreateFloatCompute(Intrinsic::fpga_float_sub, {LHS, RHS}, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatMul(Value *LHS, Value *RHS, ConstantInt *Exp,
+                                    const Twine &Name) {
+  return CreateFloatCompute(Intrinsic::fpga_float_mul, {LHS, RHS}, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatDiv(Value *LHS, Value *RHS, ConstantInt *Exp,
+                                    const Twine &Name) {
+  return CreateFloatCompute(Intrinsic::fpga_float_div, {LHS, RHS}, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatFMA(Value *LHS, Value *RHS, Value *Add,
+                                    ConstantInt *Exp, const Twine &Name) {
+  return CreateFloatCompute(Intrinsic::fpga_float_fma, {LHS, RHS, Add}, Exp,
+                            Name);
+}
+
+Value *HLSIRBuilder::CreateFloatSqrt(Value *Arg, ConstantInt *Exp,
+                                     const Twine &Name) {
+  return CreateFloatCompute(Intrinsic::fpga_float_sqrt, {Arg}, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatCmpEQ(Value *Lhs, Value *Rhs, ConstantInt *Exp,
+                                      const Twine &Name) {
+  return CreateFloatCompare(FCmpInst::FCMP_OEQ, Lhs, Rhs, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatCmpLT(Value *Lhs, Value *Rhs, ConstantInt *Exp,
+                                      const Twine &Name) {
+  return CreateFloatCompare(FCmpInst::FCMP_OLT, Lhs, Rhs, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatCmpLE(Value *Lhs, Value *Rhs, ConstantInt *Exp,
+                                      const Twine &Name) {
+  return CreateFloatCompare(FCmpInst::FCMP_OLE, Lhs, Rhs, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatCmpNE(Value *Lhs, Value *Rhs, ConstantInt *Exp,
+                                      const Twine &Name) {
+  return CreateFloatCompare(FCmpInst::FCMP_ONE, Lhs, Rhs, Exp, Name);
+}
+
+Value *HLSIRBuilder::CreateFloatCmpUO(Value *Lhs, Value *Rhs, ConstantInt *Exp,
+                                      const Twine &Name) {
+  return CreateFloatCompare(FCmpInst::FCMP_UNO, Lhs, Rhs, Exp, Name);
+}
+
+//===----------------------------------------------------------------------===//
 /// Return true if \p T is hls-ir lowered packed struct type: <{ [P * iQ] }>
 bool HLSIRBuilder::isLoweredPackedStructTy(Type *T) {
   auto *ST = dyn_cast<StructType>(T);
@@ -738,15 +853,21 @@ Value *HLSIRBuilder::CreateMux(Value *Cond, ArrayRef<Value *> Args,
   return CreateCall(Mux, AllArgs, Name);
 }
 
-Value *HLSIRBuilder::CreateSparseMux(Value *Cond, ArrayRef<Value *> Args,
+Value *HLSIRBuilder::CreateSparseMux(Value *Cond, Value *Default,
+                                     ArrayRef<Value *> Args,
                                      const Twine &Name) {
-  SmallVector<Value *, 4> AllArgs({Cond});
+  SmallVector<Value *, 4> AllArgs({Cond, Default});
   for (auto &Arg : Args)
     AllArgs.push_back(Arg);
 
   auto *Mux = Intrinsic::getDeclaration(getModule(), Intrinsic::fpga_sparse_mux,
                                         {Args[1]->getType(), Cond->getType()});
   return CreateCall(Mux, AllArgs, Name);
+}
+
+Value *HLSIRBuilder::CreateSparseMux(Value *Cond, ArrayRef<Value *> Args,
+                                     const Twine &Name) {
+  return CreateSparseMux(Cond, UndefValue::get(Args[1]->getType()), Args, Name);
 }
 
 Value *HLSIRBuilder::GatherElements(MutableArrayRef<Value *> Elts) {
@@ -1216,6 +1337,72 @@ Value *HLSIRBuilder::CreateFPGAPPPOStoreInst(Value *V, Value *Ptr,
   Attribute AlignAttr = Attribute::get(M->getContext(),
                                        Attribute::Alignment, Align);
   CI->addParamAttr(1, AlignAttr);
+  return CI;
+}
+
+Value *HLSIRBuilder::CreateDirectIOStatus(Intrinsic::ID ID, Value *Ptr,
+                                          const std::string &HandShake) {
+  auto M = getModule();
+  auto CI = cast<CallInst>(
+      CreateCall(Intrinsic::getDeclaration(M, ID, {Ptr->getType()}), {Ptr}));
+  if (!HandShake.empty())
+    CI->addAttribute(
+        llvm::AttributeList::FunctionIndex,
+        Attribute::get(M->getContext(), "xlx.handshake", HandShake));
+  return CI;
+}
+
+Value *HLSIRBuilder::CreateDirectIOValid(Value *Ptr,
+                                         const std::string &HandShake) {
+  return CreateDirectIOStatus(Intrinsic::fpga_direct_valid, Ptr, HandShake);
+}
+
+Value *HLSIRBuilder::CreateDirectIOReady(Value *Ptr,
+                                         const std::string &HandShake) {
+  return CreateDirectIOStatus(Intrinsic::fpga_direct_ready, Ptr, HandShake);
+}
+
+Value *HLSIRBuilder::CreateFPGADirectLoadInst(Value *Ptr,
+                                              const std::string &HandShake,
+                                              unsigned Align) {
+  auto M = getModule();
+  auto L = Intrinsic::getDeclaration(
+      M, Intrinsic::fpga_direct_load,
+      {Ptr->getType()->getPointerElementType(), Ptr->getType()});
+  auto CI = cast<CallInst>(CreateCall(L, {Ptr}));
+
+  if (Align) {
+    Attribute AlignAttr = Attribute::get(M->getContext(),
+                                         Attribute::Alignment, Align);
+    CI->addParamAttr(0, AlignAttr);
+  }
+
+  if (!HandShake.empty())
+    CI->addAttribute(
+        llvm::AttributeList::FunctionIndex,
+        Attribute::get(M->getContext(), "xlx.handshake", HandShake));
+  return CI;
+}
+
+Value *HLSIRBuilder::CreateFPGADirectStoreInst(Value *V, Value *Ptr,
+                                               const std::string &HandShake,
+                                               unsigned Align) {
+  auto M = getModule();
+  auto S = Intrinsic::getDeclaration(
+      M, Intrinsic::fpga_direct_store,
+      {Ptr->getType()->getPointerElementType(), Ptr->getType()});
+  auto CI = CreateCall(S, {V, Ptr});
+
+  if (Align) {
+    Attribute AlignAttr = Attribute::get(M->getContext(),
+                                         Attribute::Alignment, Align);
+    CI->addParamAttr(1, AlignAttr);
+  }
+
+  if (!HandShake.empty())
+    CI->addAttribute(
+        llvm::AttributeList::FunctionIndex,
+        Attribute::get(M->getContext(), "xlx.handshake", HandShake));
   return CI;
 }
 

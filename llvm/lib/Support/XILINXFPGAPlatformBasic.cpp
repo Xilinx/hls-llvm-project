@@ -1668,7 +1668,7 @@ void PlatformBasic::checkEnumEncode()
     assert(OP_FENCE == getOpFromName("fence"));
     assert(OP_FEXP == getOpFromName("fexp"));
     assert(OP_FLOG == getOpFromName("flog"));
-    assert(OP_FMAC == getOpFromName("fmac"));
+    assert(OP_FMAC == getOpFromName("fmacc"));
     assert(OP_FMUL == getOpFromName("fmul"));
     assert(OP_FPEXT == getOpFromName("fpext"));
     assert(OP_FPTOSI == getOpFromName("fptosi"));
@@ -1846,7 +1846,6 @@ void PlatformBasic::checkEnumEncode()
     assert(AXI4STREAM == getImplFromName("axi4stream"));
     assert(DPWOM_AUTO == getImplFromName("dpwom_auto"));
     assert(DSP == getImplFromName("dsp"));
-    assert(DSP48 == getImplFromName("dsp48"));
     assert(DSP58_DP == getImplFromName("dsp58_dp"));
     assert(DSP_AM == getImplFromName("dsp_am"));
     assert(DSP_AM_2STAGE == getImplFromName("dsp_am_2stage"));
@@ -1933,6 +1932,11 @@ void PlatformBasic::checkEnumEncode()
     assert(XPM_MEMORY_BLOCK == getImplFromName("xpm_memory_block"));
     assert(XPM_MEMORY_DISTRIBUTE == getImplFromName("xpm_memory_distribute"));
     assert(XPM_MEMORY_URAM == getImplFromName("xpm_memory_uram"));
+    assert(DSP_SLICE == getImplFromName("dsp_slice"));
+    assert(COMPACTENCODING_DONTCARE == getImplFromName("compactencoding_dontcare"));
+    assert(COMPACTENCODING_REALDEF == getImplFromName("compactencoding_realdef"));
+    assert(ONEHOTENCODING_DONTCARE == getImplFromName("onehotencoding_dontcare"));
+    assert(ONEHOTENCODING_REALDEF == getImplFromName("onehotencoding_realdef"));
     assert(MEMORY_DPWOM == getMemTypeFromName("dpwom"));
     assert(MEMORY_FIFO == getMemTypeFromName("fifo"));
     assert(MEMORY_RAM == getMemTypeFromName("ram"));

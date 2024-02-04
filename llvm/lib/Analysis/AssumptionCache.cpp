@@ -60,11 +60,11 @@ AssumptionCache::getOrInsertAffectedValues(Value *V) {
   return AVIP.first->second;
 }
 
-void AssumptionCache::updateAffectedValues(CallInst *CI) {
+static void findAffectedValues(CallInst *CI,
+                               SmallVectorImpl<Value *> &Affected) {
   // Note: This code must be kept in-sync with the code in
   // computeKnownBitsFromAssume in ValueTracking.
 
-  SmallVector<Value *, 16> Affected;
   auto AddAffected = [&Affected](Value *V) {
     if (isa<Argument>(V)) {
       Affected.push_back(V);
@@ -74,7 +74,7 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
       // Peek through unary operators to find the source of the condition.
       Value *Op;
       if (match(I, m_BitCast(m_Value(Op))) ||
-          match(I, m_PtrToInt(m_Value(Op))) ||
+          match(I, m_PtrToInt(m_Value(Op))) || 
           match(I, m_Trunc(m_Value(Op))) ||
           match(I, m_Not(m_Value(Op)))) {
         if (isa<Instruction>(Op) || isa<Argument>(Op))
@@ -98,7 +98,7 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
         if (match(V, m_Not(m_Value(A)))) {
           AddAffected(A);
           V = A;
-        // go deeper for V = trunc A
+          // go deeper for V = trunc A
         } else if (match(V, m_Trunc(m_Value(A)))) {
           V = A;
         }
@@ -109,10 +109,10 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
         if (match(V, m_BitwiseLogic(m_Value(A), m_Value(B)))) {
           AddAffected(A);
           AddAffected(B);
-        // (A << C) or (A >>_s C) or (A >>_u C) where C is some constant.
+          // (A << C) or (A >>_s C) or (A >>_u C) where C is some constant.
         } else if (match(V, m_Shift(m_Value(A), m_ConstantInt(C)))) {
           AddAffected(A);
-        // (A urem B)
+          // (A urem B)
         } else if (match(V, m_URem(m_Value(A), m_Value(B)))) {
           AddAffected(A);
           AddAffected(B);
@@ -123,12 +123,33 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
       AddAffectedFromEq(B);
     }
   }
+}
+
+void AssumptionCache::updateAffectedValues(CallInst *CI) {
+  SmallVector<Value *, 16> Affected;
+  findAffectedValues(CI, Affected);
 
   for (auto &AV : Affected) {
     auto &AVV = getOrInsertAffectedValues(AV);
     if (std::find(AVV.begin(), AVV.end(), CI) == AVV.end())
       AVV.push_back(CI);
   }
+}
+
+void AssumptionCache::unregisterAssumption(CallInst *CI) {
+  SmallVector<Value *, 16> Affected;
+  for (auto &AVI : AffectedValues) {
+    auto &AVV = AVI.second;
+    erase_if(AVV, [CI](WeakTrackingVH &VH) { return CI == VH; });
+    if (AVV.empty())
+      Affected.push_back(AVI.first);
+  }
+
+  for (auto AV : Affected) {
+    AffectedValues.erase(AV);
+  }
+
+  erase_if(AssumeHandles, [CI](WeakTrackingVH &VH) { return CI == VH; });
 }
 
 void AssumptionCache::AffectedValueCallbackVH::deleted() {
@@ -255,6 +276,13 @@ AssumptionCache &AssumptionCacheTracker::getAssumptionCache(Function &F) {
       FunctionCallbackVH(&F, this), llvm::make_unique<AssumptionCache>(F)));
   assert(IP.second && "Scanning function already in the map?");
   return *IP.first->second;
+}
+
+AssumptionCache *AssumptionCacheTracker::lookupAssumptionCache(Function &F) {
+  auto I = AssumptionCaches.find_as(&F);
+  if (I != AssumptionCaches.end())
+    return I->second.get();
+  return nullptr;
 }
 
 void AssumptionCacheTracker::verifyAnalysis() const {

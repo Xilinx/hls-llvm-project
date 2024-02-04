@@ -30,6 +30,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
@@ -83,6 +84,9 @@ STATISTIC(NumNoRecurse, "Number of functions marked as norecurse");
 STATISTIC(NumArgMemOnly, "Number of functions marked as argmemonly");
 STATISTIC(NumInaccessibleMemOrArgMemOnly,
           "Number of functions marked as inaccessiblemem_or_argmemonly");
+STATISTIC(NumWillReturn, "Number of functions marked as willreturn");
+
+extern cl::opt<bool> HLS;
 
 // FIXME: This is disabled by default to avoid exposing security vulnerabilities
 // in C/C++ code compiled by clang:
@@ -1369,6 +1373,59 @@ static bool addNoRecurseAttrs(const SCCNodeSet &SCCNodes) {
   return setDoesNotRecurse(*F);
 }
 
+static bool functionWillReturn(const Function &F) {
+  // We can infer and propagate function attributes only when we know that the
+  // definition we'll get at link time is *exactly* the definition we see now.
+  // For more details, see GlobalValue::mayBeDerefined.
+  if (!F.hasExactDefinition())
+    return false;
+
+  // TODO: Update when port in mustprogress
+  // Must-progress function without side-effects must return.
+  //if (F.mustProgress() && F.onlyReadsMemory())
+  //  return true;
+
+  // Can only analyze functions with a definition.
+  if (F.isDeclaration())
+    return false;
+
+  // HLS BEGIN
+  // Assumes HLS is always with finite loop.
+  if (!HLS) {
+    // Functions with loops require more sophisticated analysis, as the loop
+    // may be infinite. For now, don't try to handle them.
+    SmallVector<std::pair<const BasicBlock *, const BasicBlock *>, 2> Backedges;
+    FindFunctionBackedges(F, Backedges);
+    if (!Backedges.empty())
+      return false;
+  }
+  // HLS END
+
+  // If there are no loops, then the function is willreturn if all calls in
+  // it are willreturn.
+  // TODO: Update when port in CallBase
+  return all_of(instructions(F), [](const Instruction &I) {
+    return I.willReturn(); 
+  });
+}
+
+
+// Set the willreturn function attribute if possible.
+static bool addWillReturn(const SCCNodeSet &SCCNodes) {
+  bool Changed = false;
+
+  for (Function *F : SCCNodes) {
+    if (!F || F->willReturn() || !functionWillReturn(*F))
+      continue;
+
+    F->setWillReturn();
+    NumWillReturn++;
+    Changed = true;
+  }
+
+  return Changed;
+}
+
 PreservedAnalyses PostOrderFunctionAttrsPass::run(LazyCallGraph::SCC &C,
                                                   CGSCCAnalysisManager &AM,
                                                   LazyCallGraph &CG,
@@ -1414,6 +1471,7 @@ PreservedAnalyses PostOrderFunctionAttrsPass::run(LazyCallGraph::SCC &C,
   Changed |= addArgumentReturnedAttrs(SCCNodes);
   Changed |= addReadAttrs(SCCNodes, AARGetter);
   Changed |= addArgumentAttrs(SCCNodes);
+  Changed |= addWillReturn(SCCNodes);
 
   // If we have no external nodes participating in the SCC, we can deduce some
   // more precise attributes as well.
@@ -1493,6 +1551,7 @@ static bool runImpl(CallGraphSCC &SCC, AARGetterT AARGetter) {
   Changed |= addReadAttrs(SCCNodes, AARGetter);
   Changed |= addArgumentAttrs(SCCNodes);
   Changed |= addInaccessibleMemOrArgMemOnlyAttrs(SCCNodes, AARGetter);
+  Changed |= addWillReturn(SCCNodes);
 
   // If we have no external nodes participating in the SCC, we can deduce some
   // more precise attributes as well.

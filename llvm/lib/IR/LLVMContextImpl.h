@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -64,27 +65,7 @@ class Type;
 class Value;
 class ValueHandleBase;
 
-struct DenseMapAPIntKeyInfo {
-  static inline APInt getEmptyKey() {
-    APInt V(nullptr, 0);
-    V.U.VAL = 0;
-    return V;
-  }
-
-  static inline APInt getTombstoneKey() {
-    APInt V(nullptr, 0);
-    V.U.VAL = 1;
-    return V;
-  }
-
-  static unsigned getHashValue(const APInt &Key) {
-    return static_cast<unsigned>(hash_value(Key));
-  }
-
-  static bool isEqual(const APInt &LHS, const APInt &RHS) {
-    return LHS.getBitWidth() == RHS.getBitWidth() && LHS == RHS;
-  }
-};
+using DenseMapAPIntKeyInfo = DenseMapInfo<APInt>;
 
 struct DenseMapAPFloatKeyInfo {
   static inline APFloat getEmptyKey() { return APFloat(APFloat::Bogus(), 1); }

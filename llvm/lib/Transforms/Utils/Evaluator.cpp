@@ -208,7 +208,7 @@ static Constant *getGEPFromBitCastForStruct(Constant *P, const DataLayout &DL,
           Constant *IdxZero = ConstantInt::get(IdxTy, 0, false);
           Constant * const IdxList[] = {IdxZero, IdxZero};
 
-          P = ConstantExpr::getGetElementPtr(nullptr, P, IdxList);
+          P = ConstantExpr::getInBoundsGetElementPtr(nullptr, P, IdxList);
           if (auto *FoldedPtr = ConstantFoldConstant(P, DL, TLI))
             P = FoldedPtr;
           BuildGEP = true;
@@ -357,19 +357,44 @@ Constant *Evaluator::ComputeLoadResult(Constant *P) {
   return nullptr;  // don't know how to evaluate.
 }
 
-// Save the value to MutatedMemory.
-// If the value has aggregate type, also save each element.
-bool Evaluator::saveMutatedMemory(Constant *Ptr, Constant *Val) {
-  MutatedMemory[Ptr] = Val;
-  LLVMContext &Context = Ptr->getContext();
+void Evaluator::invalidateSavedSuperMemory(Constant *Ptr) {
+  if (BitCastOperator *BC = dyn_cast<BitCastOperator>(Ptr)) {
+    Ptr = cast<Constant>(BC->getOperand(0));
+    MutatedMemory.erase(Ptr);
+    invalidateSavedSuperMemory(Ptr);
+  } else if (GEPOperator *GEP = dyn_cast<GEPOperator>(Ptr)) {
+    MutatedMemory.erase(cast<Constant>(GEP->getPointerOperand()));
+    SmallVector<Value *, 4> IdxList;
+    auto It = GEP->idx_begin();
+    for (unsigned i = 0; i < GEP->getNumIndices() - 1; i++, ++It) {
+      IdxList.push_back(*It);
+      Ptr = ConstantExpr::getGetElementPtr(
+                nullptr, cast<Constant>(GEP->getPointerOperand()),
+                IdxList, GEP->isInBounds());
+      if (auto *FoldedPtr = ConstantFoldConstant(Ptr, DL, TLI))
+        Ptr = FoldedPtr;
+      MutatedMemory.erase(Ptr);
+    }
+  }
+}
 
+// Save the value to MutatedMemory.
+// If the value has aggregate type, save each element.
+bool Evaluator::saveMutatedMemory(Constant *Ptr, Constant *Val) {
   // Don't support vector of pointers
   if (Ptr->getType()->isVectorTy())
     return false;
-  
+ 
   Type *PointeeTy = Ptr->getType()->getPointerElementType();
-
+  if (PointeeTy->isSingleValueType()) {
+    invalidateSavedSuperMemory(Ptr);
+    MutatedMemory[Ptr] = Val;
+    return true;
+  }
+   
+  LLVMContext &Context = Ptr->getContext();
   if (PointeeTy->isStructTy() || PointeeTy->isArrayTy()) {
+    MutatedMemory[Ptr] = Val;
     unsigned NumElements = 
         PointeeTy->isStructTy() ? PointeeTy->getStructNumElements()
                                 : PointeeTy->getArrayNumElements();
@@ -396,7 +421,7 @@ bool Evaluator::saveMutatedMemory(Constant *Ptr, Constant *Val) {
     return true;
   }
 
-  return PointeeTy->isSingleValueType();
+  return false; 
 }
 
 
@@ -462,7 +487,7 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
               Constant *IdxZero = ConstantInt::get(IdxTy, 0, false);
               Constant * const IdxList[] = {IdxZero, IdxZero};
 
-              Ptr = ConstantExpr::getGetElementPtr(nullptr, Ptr, IdxList);
+              Ptr = ConstantExpr::getInBoundsGetElementPtr(nullptr, Ptr, IdxList);
               if (auto *FoldedPtr = ConstantFoldConstant(Ptr, DL, TLI))
                 Ptr = FoldedPtr;
 
@@ -600,6 +625,92 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
             ++CurInst;
             continue;
           }
+
+          if (!isSimpleEnoughPointerToCommit(Ptr)) {
+            // If this is too complex for us to commit, reject it.
+            DEBUG(dbgs() << "Pointer is too complex for us to evaluate store.\n");
+            return false;
+          }
+          
+          if (!Val->isNullValue()) {
+            DEBUG(dbgs() << "Memset value is not zero.\n");
+            return false;
+          }
+
+          Constant *Length = getVal(MSI->getLength());
+          uint64_t LengthC = 0;
+          if (ConstantInt *LC = dyn_cast<ConstantInt>(Length)) {
+            LengthC = LC->getZExtValue();
+          } else {
+            DEBUG(dbgs() << "Length is not a constant int.\n");
+            return false;
+          }
+
+          if (LengthC == 0) {
+            DEBUG(dbgs() << "Ignoring zero length memset.\n");
+            ++CurInst;
+            continue;
+          }
+
+          if (ConstantExpr *CE = dyn_cast<ConstantExpr>(Ptr)) {
+            if (CE->getOpcode() == Instruction::BitCast) {
+              DEBUG(dbgs() << "Attempting to resolve bitcast on constant ptr.\n");
+              Ptr = CE->getOperand(0);
+            }
+          }
+
+          Type *NewTy = Ptr->getType()->getPointerElementType();
+          while (DL.getTypeAllocSize(NewTy) > LengthC) {
+            if (StructType *STy = dyn_cast<StructType>(NewTy)) {
+              NewTy = STy->getTypeAtIndex(0U);
+            } else if (ArrayType *ATy = dyn_cast<ArrayType>(NewTy)) {
+              NewTy = ATy->getElementType();
+            } else {
+              DEBUG(dbgs() << "Failed to bitcast constant ptr, can not "
+                              "evaluate.\n");
+              return false;
+            }
+            IntegerType *IdxTy = IntegerType::get(NewTy->getContext(), 32);
+            Constant *IdxZero = ConstantInt::get(IdxTy, 0, false);
+            Constant * const IdxList[] = {IdxZero, IdxZero};
+
+            Ptr = ConstantExpr::getInBoundsGetElementPtr(nullptr, Ptr, IdxList);
+            if (auto *FoldedPtr = ConstantFoldConstant(Ptr, DL, TLI))
+              Ptr = FoldedPtr;
+          }
+
+          while (DL.getTypeAllocSize(NewTy) < LengthC) {
+            // Strip off the last zero index from the GEP
+            GEPOperator *GEP = dyn_cast<GEPOperator>(Ptr);
+            if (!GEP || GEP->getNumIndices() <= 1)
+              break;
+         
+            SmallVector<Value *, 4> IdxList(GEP->indices());
+            ConstantInt *IdxC = dyn_cast<ConstantInt>(IdxList.back());
+            if (!IdxC || !IdxC->isZero()) 
+              break;
+            IdxList.pop_back();
+            Ptr = ConstantExpr::getGetElementPtr(
+                      nullptr, cast<Constant>(GEP->getPointerOperand()), 
+                      IdxList, GEP->isInBounds());
+            if (auto *FoldedPtr = ConstantFoldConstant(Ptr, DL, TLI))
+              Ptr = FoldedPtr;
+            NewTy = Ptr->getType()->getPointerElementType();
+          }
+
+          Type *StoreTy = Ptr->getType()->getPointerElementType();
+          if (DL.getTypeAllocSize(StoreTy) != LengthC) {
+            DEBUG(dbgs() << "Type mis match.\n");
+            return false;
+          }
+
+          Val = Constant::getNullValue(StoreTy);
+          // If this is a store of structure, save values of each field
+          if (!saveMutatedMemory(Ptr, Val))
+            return false;
+
+          ++CurInst;
+          continue;
         }
 
         if (II->getIntrinsicID() == Intrinsic::lifetime_start ||
@@ -644,7 +755,9 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
           ++CurInst;
           continue;
         } else if (II->getIntrinsicID() == Intrinsic::directive_scope_entry ||
-                   II->getIntrinsicID() == Intrinsic::directive_scope_exit) {
+                   II->getIntrinsicID() == Intrinsic::directive_scope_exit ||
+                   II->getIntrinsicID() == Intrinsic::hint_scope_entry ||
+                   II->getIntrinsicID() == Intrinsic::hint_scope_exit) {
           DEBUG(dbgs() << "Skipping scope entry/exit intrinsic.\n");
           ++CurInst;
           continue;
@@ -820,7 +933,8 @@ bool Evaluator::EvaluateFunction(Function *F, Constant *&RetVal,
   // ExecutedBlocks - We only handle non-looping, non-recursive code.  As such,
   // we can only evaluate any one basic block at most once.  This set keeps
   // track of what we have executed so we can detect recursive cases etc.
-  SmallPtrSet<BasicBlock*, 32> ExecutedBlocks;
+  // XILINX HLS: allow loops, but should not loop too many times.
+  std::map<BasicBlock*, unsigned> ExecutedBlocks;
 
   // CurBB - The current basic block we're evaluating.
   BasicBlock *CurBB = &F->front();
@@ -846,10 +960,8 @@ bool Evaluator::EvaluateFunction(Function *F, Constant *&RetVal,
     // Okay, we succeeded in evaluating this control flow.  See if we have
     // executed the new block before.  If so, we have a looping function,
     // which we cannot evaluate in reasonable time.
-#if 0
-    if (!ExecutedBlocks.insert(NextBB).second)
+    if (++ExecutedBlocks[NextBB] > 1000000)
       return false;  // looped!
-#endif
     // Okay, we have never been in this block before.  Check to see if there
     // are any PHI nodes.  If so, evaluate them with information about where
     // we came from.

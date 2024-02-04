@@ -5,11 +5,6 @@
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
-// And has the following additional copyright:
-//
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
-// All Rights Reserved.
-//
 //===----------------------------------------------------------------------===//
 //
 // This pass promotes "by reference" arguments to be "by value" arguments.  In
@@ -55,6 +50,9 @@
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/XILINXFunctionInfoUtils.h"
+#include "llvm/Analysis/XILINXLoopInfoUtils.h"
+#include "llvm/Analysis/CFG.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -814,12 +812,88 @@ static bool canPaddingBeAccessed(Argument *arg) {
   return false;
 }
 
+static bool isInDataflowLoop(CallInst *call, std::map<Function *, const LoopInfo> & cacheDataflowLoopInfo)
+{
+  BasicBlock *call_block = call->getParent( );
+  Function *F = call_block->getParent(); 
+  const LoopInfo *LI = nullptr; 
+  if (cacheDataflowLoopInfo.count(F)){ 
+    LI = &cacheDataflowLoopInfo[F];
+  }
+  else { 
+    DominatorTree DT(*F); 
+    cacheDataflowLoopInfo.emplace(F, DT);
+    LI = &cacheDataflowLoopInfo[F];
+  }
+  Loop * loop = LI->getLoopFor(call_block); 
+
+  if (loop && isDataFlow(loop))
+    return true; 
+  else 
+    return false; 
+}
+
+bool checkArgValueFromNoDataflow(Argument *arg, std::map<Function*, const LoopInfo> &cacheDataflowLoopInfo)
+{
+
+  SmallVector<Argument*, 4> parentDataflowRegions; 
+  parentDataflowRegions.push_back(arg);
+  while(!parentDataflowRegions.empty()) { 
+    Argument *cur_arg = parentDataflowRegions.pop_back_val();
+    Function *cur_F = cur_arg->getParent(); 
+    if(isTop(cur_F) || cur_F->isVarArg())
+      return false; 
+    for(User *user: cur_F->users()) { 
+      if (isa<CallInst>(user) && cast<CallInst>(user)->getCalledFunction() == cur_F) { 
+        CallInst *call = cast<CallInst>(user); 
+        Function * caller = call->getParent()->getParent(); 
+
+        if (isDataFlow(caller) || ( isInDataflowLoop(call, cacheDataflowLoopInfo))){ 
+          //collect current argument which is from dataflow region function
+          CallSite callsite(call); 
+          unsigned arg_idx = cur_arg->getArgNo(); 
+          Value *actual_arg = call->getArgOperand(arg_idx);
+          if(isa<Argument>(actual_arg)) { 
+            Argument* outerArg = cast<Argument>(actual_arg);
+            if (outerArg->onlyReadsMemory()|| outerArg->hasByValAttr()){ 
+              parentDataflowRegions.push_back(outerArg);
+            }
+            else {
+              return false; 
+            }
+          }
+          else { 
+            //here, it is very consertively
+            //for following case : 
+            /*
+            int a = 10
+            for( int i = 0; i < xx; i++){ 
+              #pragm dataflow 
+              process1( a ) // readonly
+            }
+            we can not promote the variable a, it due to , we can not recognize following 
+            for( int i = 0; i < xx; i++){ 
+              int a = 10
+              #pragm dataflow 
+              process1( a ) // readonly
+            }
+            */
+            return false ; 
+          }
+        }
+      }
+    }
+  }
+  return true; 
+}
+
+
 /// PromoteArguments - This method checks the specified function to see if there
 /// are any promotable arguments and if it is safe to promote the function (for
 /// example, all callers are direct).  If safe to promote some arguments, it
 /// calls the DoPromotion method.
 static Function *
-promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
+promoteArguments(Function *F, std::map<Function*, const LoopInfo> &cacheDataflowLoopInfo, function_ref<AAResults &(Function &F)> AARGetter,
                  unsigned MaxElements,
                  Optional<function_ref<void(CallSite OldCS, CallSite NewCS)>>
                      ReplaceCallSite) {
@@ -827,16 +901,6 @@ promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
   if (!F->hasLocalLinkage())
     return nullptr;
 
-  //HLS special
-  for(User *user: F->users()) { 
-    if (isa<CallInst>(user)) { 
-      CallInst *call = cast<CallInst>(user); 
-      Function * caller = call->getParent()->getParent(); 
-      if (isDataFlow(caller)){ 
-        return nullptr; 
-      }
-    }
-  }
 
 
   // Don't promote arguments for variadic functions. Adding, removing, or
@@ -852,6 +916,7 @@ promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
   for (Argument &I : F->args())
     if (I.getType()->isPointerTy())
       PointerArgs.push_back(&I);
+
   if (PointerArgs.empty())
     return nullptr;
 
@@ -924,8 +989,11 @@ promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
         // Passing the elements as a scalar will allow sroa to hack on
         // the new alloca we introduce.
         if (AllSimple) {
-          ByValArgsToTransform.insert(PtrArg);
-          continue;
+          //HLS special
+          if (checkArgValueFromNoDataflow(PtrArg, cacheDataflowLoopInfo)) { 
+            ByValArgsToTransform.insert(PtrArg);
+            continue;
+          }
         }
       }
     }
@@ -949,7 +1017,11 @@ promoteArguments(Function *F, function_ref<AAResults &(Function &F)> AARGetter,
     // Otherwise, see if we can promote the pointer to its value.
     if (isSafeToPromoteArgument(PtrArg, PtrArg->hasByValOrInAllocaAttr(), AAR,
                                 MaxElements))
-      ArgsToPromote.insert(PtrArg);
+
+      //HLS special
+      if (checkArgValueFromNoDataflow(PtrArg, cacheDataflowLoopInfo)) { 
+        ArgsToPromote.insert(PtrArg);
+      }
   }
 
   // No promotable pointer arguments.
@@ -965,6 +1037,7 @@ PreservedAnalyses ArgumentPromotionPass::run(LazyCallGraph::SCC &C,
                                              CGSCCUpdateResult &UR) {
   bool Changed = false, LocalChange;
 
+  std::map<Function*, const LoopInfo> cacheDataflowLoopInfo; 
   // Iterate until we stop promoting from this SCC.
   do {
     LocalChange = false;
@@ -982,7 +1055,7 @@ PreservedAnalyses ArgumentPromotionPass::run(LazyCallGraph::SCC &C,
       };
 
 
-      Function *NewF = promoteArguments(&OldF, AARGetter, MaxElements, None);
+      Function *NewF = promoteArguments(&OldF, cacheDataflowLoopInfo, AARGetter, MaxElements, None);
       if (!NewF)
         continue;
       LocalChange = true;
@@ -1064,6 +1137,8 @@ bool ArgPromotion::runOnSCC(CallGraphSCC &SCC) {
 
   bool Changed = false, LocalChange;
 
+  std::map<Function*, const LoopInfo> cacheDataflowLoopInfo;
+
   // Iterate until we stop promoting from this SCC.
   do {
     LocalChange = false;
@@ -1081,7 +1156,7 @@ bool ArgPromotion::runOnSCC(CallGraphSCC &SCC) {
         CallerNode->replaceCallEdge(OldCS, NewCS, NewCalleeNode);
       };
 
-      if (Function *NewF = promoteArguments(OldF, AARGetter, MaxElements,
+      if (Function *NewF = promoteArguments(OldF, cacheDataflowLoopInfo, AARGetter, MaxElements,
                                             {ReplaceCallSite})) {
         LocalChange = true;
 

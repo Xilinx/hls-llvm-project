@@ -485,6 +485,9 @@ struct AttributeComparator {
     if (L->isNoReturn != R->isNoReturn)
       return R->isNoReturn;
 
+    if (L->isWillReturn != R->isWillReturn)
+      return R->isWillReturn;
+
     if (L->isConvergent != R->isConvergent)
       return R->isConvergent;
 
@@ -618,8 +621,9 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
 
     if (!intrinsic.canThrow ||
         intrinsic.ModRef != CodeGenIntrinsic::ReadWriteMem ||
-        intrinsic.isNoReturn || intrinsic.isNoDuplicate ||
-        intrinsic.isConvergent || intrinsic.isSpeculatable) {
+        intrinsic.isNoReturn || intrinsic.isWillReturn ||
+        intrinsic.isNoDuplicate || intrinsic.isConvergent ||
+        intrinsic.isSpeculatable) {
       OS << "      const Attribute::AttrKind Atts[] = {";
       bool addComma = false;
       if (!intrinsic.canThrow) {
@@ -630,6 +634,12 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
         if (addComma)
           OS << ",";
         OS << "Attribute::NoReturn";
+        addComma = true;
+      }
+      if (intrinsic.isWillReturn) {
+        if (addComma)
+          OS << ",";
+        OS << "Attribute::WillReturn";
         addComma = true;
       }
       if (intrinsic.isNoDuplicate) {

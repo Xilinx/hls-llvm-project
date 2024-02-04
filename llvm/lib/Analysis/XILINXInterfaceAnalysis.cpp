@@ -1,41 +1,35 @@
-/*
-Copyright (C) 2023, Advanced Micro Devices, Inc.
-SPDX-License-Identifier: X11
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// All Rights Reserved.
+//
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-X CONSORTIUM BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-IN THE SOFTWARE.
-
-Except as contained in this notice, the name of Advanced Micro Devices
-shall not be used in advertising or otherwise to promote the sale,
-use or other dealings in this Software without prior written authorization
-from Advanced Micro Devices, Inc.
-*/
 #include "llvm/Analysis/XILINXInterfaceAnalysis.h"
-#include "llvm/Analysis/ValueTracking.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/IR/XILINXAggregateUtil.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 
@@ -106,7 +100,7 @@ static void getFunctionArgs(CallInst *CI, Value *V,
 
 static void findInterfaceInfoFromIntrinsic(
     Value *V, SmallVectorImpl<InterfaceInfo> &InfoList,
-    SmallPtrSetImpl<Value *> &Visited, unsigned Depth = 0) {
+    SmallPtrSetImpl<Value *> &Visited, bool &Returned, unsigned Depth = 0) {
   // avoid stack overflow
   if (MaxLookup != 0 && ++Depth > MaxLookup)
     return;
@@ -122,7 +116,8 @@ static void findInterfaceInfoFromIntrinsic(
       if (auto *II = dyn_cast<IntrinsicInst>(CI)) {
         if (II->getFunction()->hasFnAttribute("fpga.wrapper.func"))
           continue;
-        mergeInterfaceInfoIntoList(getInterfaceInfoFromIntrinsic(U, II), InfoList);
+        mergeInterfaceInfoIntoList(getInterfaceInfoFromIntrinsic(U, II),
+                                   InfoList);
       } else {
         auto *F = CI->getCalledFunction();
         if (!F || F->isDeclaration() || F->isVarArg() ||
@@ -131,13 +126,19 @@ static void findInterfaceInfoFromIntrinsic(
         // get corresponding function argument NO.
         SetVector<Argument *> ArgSet;
         getFunctionArgs(CI, V, ArgSet);
-        for (auto *Arg : ArgSet)
-          findInterfaceInfoFromIntrinsic(Arg, InfoList, Visited, Depth);
+        for (auto *Arg : ArgSet) {
+          bool LocalReturned = false;
+          findInterfaceInfoFromIntrinsic(Arg, InfoList, Visited, LocalReturned, Depth);
+          if (LocalReturned)
+            findInterfaceInfoFromIntrinsic(CI, InfoList, Visited, Returned, Depth);
+        }
       }
     } else if (auto *GEP = dyn_cast<GEPOperator>(U.getUser())) {
-      findInterfaceInfoFromIntrinsic(GEP, InfoList, Visited, Depth);
+      findInterfaceInfoFromIntrinsic(GEP, InfoList, Visited, Returned, Depth);
     } else if (auto *BC = dyn_cast<BitCastOperator>(U.getUser())) {
-      findInterfaceInfoFromIntrinsic(BC, InfoList, Visited, Depth);
+      findInterfaceInfoFromIntrinsic(BC, InfoList, Visited, Returned, Depth);
+    } else if (isa<ReturnInst>(U.getUser())) {
+      Returned = true;
     }
   }
 }
@@ -216,7 +217,7 @@ static void GetRealUnderlyingObjects(Value *V, const DataLayout &DL,
       for (auto *U : F->users()) {
         // Skip when the function is attached in directive scope intrinsic.
         // Commonly see with allocation pragmas.
-        if (isa<PragmaInst>(U) || isa<DirectiveScopeEntry>(U))
+        if (isa<PragmaInst>(U) || isa<ScopeEntry>(U))
           continue;
 
         if (auto *CI = dyn_cast<CallInst>(U))
@@ -261,7 +262,8 @@ static Argument *getTheTopArgument(Value *V) {
   return getTopArgument(I);
 }
 // get all related interface info.
-void InterfaceAnalysis::getInterfaceInfo(Value *V, SmallVectorImpl<InterfaceInfo> &InfoList) {
+void InterfaceAnalysis::getInterfaceInfo(
+    Value *V, SmallVectorImpl<InterfaceInfo> &InfoList) {
   SmallPtrSet<Value *, 5> Visited;
   SetVector<Value *> Set;
   GetRealUnderlyingObjects(V, M.getDataLayout(), Visited, Set);
@@ -277,12 +279,13 @@ void InterfaceAnalysis::getInterfaceInfo(Value *V, SmallVectorImpl<InterfaceInfo
            cast<Argument>(Obj)->getParent()->use_empty()))
         findInterfaceInfoOnTop(Obj, OneInfoList);
       else if (isa<Instruction>(Obj) &&
-          cast<Instruction>(Obj)->getFunction()->hasFnAttribute(
-              "fpga.wrapper.func"))
+               cast<Instruction>(Obj)->getFunction()->hasFnAttribute(
+                   "fpga.wrapper.func"))
         findInterfaceInfoOnTop(getTheTopArgument(Obj), OneInfoList);
 
       SmallPtrSet<Value *, 5> Visited;
-      findInterfaceInfoFromIntrinsic(Obj, OneInfoList, Visited);
+      bool Returned = false;
+      findInterfaceInfoFromIntrinsic(Obj, OneInfoList, Visited, Returned);
       // s_axilite is only a wrapper, so the object under it can be other
       // interface type.
       if (OneInfoList.size() == 0 ||
@@ -311,7 +314,7 @@ void InterfaceAnalysis::print(raw_ostream &OS, Value *V,
                               SmallVectorImpl<InterfaceInfo> &InfoList) const {
   OS << *V << "\n";
   OS << "  -->  ";
-  for (auto &Info: InfoList)
+  for (auto &Info : InfoList)
     OS << getInterfaceModeStr(Info) << ", ";
   OS << "\n";
   OS << "  -->  main: "
@@ -425,24 +428,25 @@ static InterfaceInfo getInterfaceInfoFromInterfaceSpec(CallInst *SpecI) {
   auto Op1 = SpecI->getOperand(1);
   if (!isa<GlobalVariable>(Op1) || !cast<GlobalVariable>(Op1)->hasInitializer())
     return InterfaceInfo(InterfaceMode::Auto);
-  auto *CDA = dyn_cast<ConstantDataArray>(cast<GlobalVariable>(Op1)->getInitializer());
+  auto *CDA =
+      dyn_cast<ConstantDataArray>(cast<GlobalVariable>(Op1)->getInitializer());
   if (!CDA)
     return InterfaceInfo(InterfaceMode::Auto);
-  auto IMStr =  CDA->getAsCString();
+  auto IMStr = CDA->getAsCString();
   return StringSwitch<InterfaceInfo>(IMStr)
-          .CaseLower("ap_auto", InterfaceInfo(InterfaceMode::Auto, SpecI))
-          .CaseLower("ap_hs", InterfaceInfo(InterfaceMode::HS, SpecI))
-          .CaseLower("ap_ovld", InterfaceInfo(InterfaceMode::OVld, SpecI))
-          .CaseLower("ap_none", InterfaceInfo(InterfaceMode::None, SpecI))
-          .CaseLower("ap_vld", InterfaceInfo(InterfaceMode::Vld, SpecI))
-          .CaseLower("ap_stable", InterfaceInfo(InterfaceMode::Stable, SpecI))
-          .CaseLower("ap_memory", InterfaceInfo(InterfaceMode::Memory, SpecI))
-          .CaseLower("ap_fifo", InterfaceInfo(InterfaceMode::Fifo, SpecI))
-          .CaseLower("bram", InterfaceInfo(InterfaceMode::Bram, SpecI))
-          .CaseLower("axis", InterfaceInfo(InterfaceMode::AXIS, SpecI))
-          .CaseLower("m_axi", InterfaceInfo(InterfaceMode::MAXI, SpecI))
-          .CaseLower("s_axilite", InterfaceInfo(InterfaceMode::SAXILite, SpecI))
-          .Default(InterfaceInfo(InterfaceMode::Auto));
+      .CaseLower("ap_auto", InterfaceInfo(InterfaceMode::Auto, SpecI))
+      .CaseLower("ap_hs", InterfaceInfo(InterfaceMode::HS, SpecI))
+      .CaseLower("ap_ovld", InterfaceInfo(InterfaceMode::OVld, SpecI))
+      .CaseLower("ap_none", InterfaceInfo(InterfaceMode::None, SpecI))
+      .CaseLower("ap_vld", InterfaceInfo(InterfaceMode::Vld, SpecI))
+      .CaseLower("ap_stable", InterfaceInfo(InterfaceMode::Stable, SpecI))
+      .CaseLower("ap_memory", InterfaceInfo(InterfaceMode::Memory, SpecI))
+      .CaseLower("ap_fifo", InterfaceInfo(InterfaceMode::Fifo, SpecI))
+      .CaseLower("bram", InterfaceInfo(InterfaceMode::Bram, SpecI))
+      .CaseLower("axis", InterfaceInfo(InterfaceMode::AXIS, SpecI))
+      .CaseLower("m_axi", InterfaceInfo(InterfaceMode::MAXI, SpecI))
+      .CaseLower("s_axilite", InterfaceInfo(InterfaceMode::SAXILite, SpecI))
+      .Default(InterfaceInfo(InterfaceMode::Auto));
 }
 // get all related interface info.
 void llvm::findInterfaceInfoOnTop(Value *V,
@@ -504,7 +508,7 @@ llvm::pickMainInterfaceInfo(SmallVectorImpl<InterfaceInfo> &InfoList) {
   // might be 3 or more interface types applied on the same object. For e.g.,
   // MAXI with SAXILite and ap_none (later two are actually applied on the
   // offset)
-  for (auto IFInfo: InfoList)
+  for (auto IFInfo : InfoList)
     if (IFInfo.IM == InterfaceMode::MAXI)
       return IFInfo;
   // if there're two, and the other one is s_axilite, then return the main one.

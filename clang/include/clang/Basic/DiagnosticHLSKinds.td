@@ -78,6 +78,9 @@ def warn_deprecated_pragma_ignored_by_scout: Warning<
 def warn_deprecated_pragma_ignored_by_scout_skip_strict_mode: Warning<
   "'%0' is deprecated, use '%1' instead">,
   InGroup<IgnoredXlxPragmas>;
+def warn_deprecated_pragma_option: Warning<
+  "'%0' in '#pragma HLS %1' is deprecated">,
+  InGroup<IgnoredXlxPragmas>;
 def warn_deprecated_pragma_option_ignored_by_scout: Warning<
   "'%0' in '#pragma HLS %1' is deprecated, use '%2' instead">,
   InGroup<IgnoredXlxPragmas>;
@@ -87,6 +90,18 @@ def warn_extra_pragma_hls_token_ignored : Warning<
 def warn_confilict_pragma_parameter : Warning<
   "pragma parameter '%0' conflicts with '%1'">,
   InGroup<InvalidXlxPragmas>;
+
+def err_confilict_pragma_parameter : Error<
+  "pragma parameter '%0' conflicts with '%1'">;
+
+def err_invalid_option_unless : Error<
+  "pragma parameter '%0' is not allowed unless %1">;
+
+def err_invalid_option_value: Error<
+  "invalid value '%0' for option '%1'">;
+
+def err_cache_on_volatile_port : Error<
+  "cache is not allowed on port with 'volatile' modifier">;
 
 def err_performance_at_least_one_parameter_required : Error<
   "performance pragma requires at least one of 'target_ti'|'target_tl' to be specified"
@@ -172,6 +187,8 @@ def warn_attribute_argument_type : Warning<
   "constant|a string|an identifier}1">,
   InGroup<IgnoredXlxAttributes>;
 
+def warn_lower_assert_failed : Warning<
+  "Usage of user-defined 'assert' %0 can cause side-effects like missed HLS optimizations. Consider replacing this usage with system defined 'assert' or 'hls::assume()' (defined in hls_assume.h) instead">;
 
 //===----------------------------------------------------------------------===//
 // Xilinx HLS  Semantic related Diagnostic message
@@ -237,10 +254,11 @@ def warn_xlx_loop_tripcount_ignored: Warning<
   InGroup<IgnoredXlxPragmas>;
 
 def err_xlx_attribute_invalid_option_and_because
-    : Error<"the value for option %0 is invalid, %1" >;
+    : Error<"Invalid value for option %0 encountered. %1" >;
 
 def err_xlx_attribute_invalid_option
     : Error<"%0 is not valid value for option %1" >;
+
 def warn_xlx_attribute_ignore_option : Warning<
   "%0 attribute will ignore the option %1 because %2">,
   InGroup<IgnoredXlxPragmas>;
@@ -359,7 +377,13 @@ def err_xlx_pragma_if_cond_init_var: Error<
 def err_xlx_pragma_if_cond_constexpr: Error< 
   "if-cond clause is not 'constexpr' in the pragma "> ; 
 
+def err_xlx_clock_period_is_invalid: Error<
+    "unexpected, the clock period is 0, and can not evaluate the number of cycles of performance region" >; 
+def warn_xlx_performance_option_is_near_to_zero: Warning<
+    "the performance pragma is ignored, because option '%0' in performance pragma is too small, with clock period %1, it is near to zero">; 
+
 }
+
 
 }
 

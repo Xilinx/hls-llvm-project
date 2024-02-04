@@ -318,9 +318,9 @@ bool LoopIdiomRecognize::runOnCountableLoop() {
 
   // The following transforms hoist stores/memsets into the loop pre-header.
   // Give up if the loop has instructions may throw.
-  LoopSafetyInfo SafetyInfo;
-  computeLoopSafetyInfo(&SafetyInfo, CurLoop);
-  if (SafetyInfo.MayThrow)
+  SimpleLoopSafetyInfo SafetyInfo;
+  SafetyInfo.computeLoopSafetyInfo(CurLoop);
+  if (SafetyInfo.anyBlockMayThrow())
     return MadeChange;
 
   // Scan all the blocks in the loop that are not in subloops.

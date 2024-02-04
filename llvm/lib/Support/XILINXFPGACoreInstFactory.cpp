@@ -1,30 +1,3 @@
-/*
-Copyright (C) 2023, Advanced Micro Devices, Inc.
-SPDX-License-Identifier: X11
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-X CONSORTIUM BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-IN THE SOFTWARE.
-
-Except as contained in this notice, the name of Advanced Micro Devices
-shall not be used in advertising or otherwise to promote the sale,
-use or other dealings in this Software without prior written authorization
-from Advanced Micro Devices, Inc.
-*/
 
 #include <iomanip>
 #include <iterator>
@@ -899,7 +872,7 @@ public:
 private:
     virtual const char* getKeyType() { return "BITWIDTH"; }
     virtual const char* getTableName() { return "Memory"; } 
-    virtual const char* getDelayColumn() { return "DELAY"; }
+    virtual const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
     virtual int getKey(CoreInst* core) { return static_cast<StorageInst*>(core)->getBitWidth(); }
 };
 
@@ -925,7 +898,7 @@ private:
     virtual int getKey(CoreInst* core) { return static_cast<StorageInst*>(core)->getDepth(); }
     virtual const char* getKeyType() { return "DEPTH"; }
     virtual const char* getTableName() { return "FIFO"; } 
-    virtual const char* getDelayColumn() { return "DELAY"; }
+    virtual const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
 };
 
 
@@ -946,7 +919,7 @@ private:
     }
     virtual const char* getKeyType() { return "INPUT_NUMBER"; }
     virtual const char* getTableName() { return "Mux"; } 
-    virtual const char* getDelayColumn() { return "DELAY"; }
+    virtual const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
 };
 
 class DivnsQuerier : public ArithmeticQuerier 
@@ -1231,7 +1204,7 @@ private:
     virtual const char* getKey1Type() { return "DEPTH"; }
 
     const char* getTableName() { return "2D_FIFO"; }
-    const char* getDelayColumn() { return "DELAY"; }
+    const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
 };
 
 class DoubleKeyArithmeticQuerier : public DoubleKeyQuerier
@@ -1282,7 +1255,7 @@ private:
     virtual const char* getKey1Type() { return "INPUT_NUMBER"; }
 
     const char* getTableName() { return "2D_Mux"; }
-    const char* getDelayColumn() { return "DELAY"; }
+    const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
 };
 
 class DoubleKeyMemoryQuerier : public DoubleKeyQuerier

@@ -42,7 +42,7 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
       Attrs.DistributeEnable == LoopAttributes::Unspecified &&
       Attrs.FlattenEnable == LoopAttributes::Unspecified &&
       !Attrs.PipelineII.hasValue() && 
-      !Attrs.Rewind && Attrs.TripCount.empty() &&
+      Attrs.TripCount.empty() &&
       Attrs.MinMax.empty() && Attrs.LoopName.empty() && !Attrs.IsDataflow &&
       !StartLoc && !EndLoc)
     return nullptr;
@@ -125,7 +125,7 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
         ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(Ctx),
                                                  Attrs.PipelineII.getValue())),
         ConstantAsMetadata::get(
-            ConstantInt::get(Type::getInt1Ty(Ctx), Attrs.Rewind)),
+            ConstantInt::get(Type::getInt8Ty(Ctx), Attrs.Rewind)),
         ConstantAsMetadata::get(
             ConstantInt::get(Type::getInt8Ty(Ctx), Attrs.PipelineStyle)), 
         MDString::get(Ctx, Attrs.PipelinePragmaContext),
@@ -201,7 +201,7 @@ LoopAttributes::LoopAttributes(bool IsParallel)
       UnrollEnable(LoopAttributes::Unspecified), VectorizeWidth(0),
       InterleaveCount(0), UnrollCount(0), UnrollWithoutCheck(-1),
       DistributeEnable(LoopAttributes::Unspecified),
-      FlattenEnable(LoopAttributes::Unspecified), Rewind(false), PipelineStyle(-1),
+      FlattenEnable(LoopAttributes::Unspecified), Rewind(0), PipelineStyle(-1),
       IsDataflow(false), DisableDFPropagation(true) {}
 
 void LoopAttributes::clear() {
@@ -218,7 +218,7 @@ void LoopAttributes::clear() {
   FlattenEnable = LoopAttributes::Unspecified;
   PipelineII.reset();
   PipelineStyle = -1;
-  Rewind = false;
+  Rewind = 0;
   TripCount.clear();
   MinMax.clear();
   LoopName = "";
@@ -262,8 +262,8 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       }
     }
 
-    if (isa<XlxPipelineAttr>(Attr) && dyn_cast<XlxPipelineAttr>(Attr)->getRewind()) {
-      setRewind();
+    if (isa<XlxPipelineAttr>(Attr)) {
+      setRewind(cast<XlxPipelineAttr>(Attr)->getRewind());
     }
 
     const LoopHintAttr *LH = dyn_cast<LoopHintAttr>(Attr);

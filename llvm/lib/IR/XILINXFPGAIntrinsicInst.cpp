@@ -358,6 +358,29 @@ DirectiveScopeExit *DirectiveScopeEntry::BuildDirectiveScope(
   return BuildDirectiveScope(ScopeAttrs, Entry, Exit);
 }
 
+HintScopeExit *
+HintScopeEntry::BuildHintScope(ArrayRef<OperandBundleDef> ScopeAttrs,
+                               Instruction &Entry, Instruction &Exit) {
+  IRBuilder<> Builder(&Entry);
+  auto *ScopeEntry = llvm::Intrinsic::getDeclaration(
+      Entry.getModule(), llvm::Intrinsic::hint_scope_entry);
+
+  auto *Token = Builder.CreateCall(ScopeEntry, None, ScopeAttrs);
+
+  Builder.SetInsertPoint(&Exit);
+  auto *ScopeExit = llvm::Intrinsic::getDeclaration(
+      Entry.getModule(), llvm::Intrinsic::hint_scope_exit);
+  return cast<HintScopeExit>(Builder.CreateCall(ScopeExit, Token));
+}
+
+HintScopeExit *HintScopeEntry::BuildHintScope(
+    StringRef Tag, ArrayRef<Value *> Operands, Instruction &Entry,
+    Instruction &Exit) {
+  SmallVector<OperandBundleDef, 4> ScopeAttrs;
+  ScopeAttrs.emplace_back(Tag, Operands);
+  return BuildHintScope(ScopeAttrs, Entry, Exit);
+}
+
 // FIXME GEPOperator don't have good API...
 static Value *getGEPIndex(GEPOperator *GEP, unsigned Idx) {
   assert(Idx < GEP->getNumIndices() &&
@@ -448,7 +471,7 @@ bool PragmaInst::ShouldBeOnDeclaration() const {
       isa<StreamPragmaInst>(this) || isa<StreamOfBlocksPragmaInst>(this) ||
       isa<PipoPragmaInst>(this) || isa<BindStoragePragmaInst>(this) ||
       isa<StreamLabelInst>(this) || isa<StreamOfBlocksLabelInst>(this) ||
-      isa<ShiftRegLabelInst>(this)) {
+      isa<ShiftRegLabelInst>(this) || isa<ScalarStreamInst>(this)) {
     return true;
   } else {
     // Use assert to make sure we cover all pragmas on variables.
@@ -535,6 +558,7 @@ const std::string AggregateInst::BundleTagName = "aggregate";
 const std::string ArrayPartitionInst::BundleTagName = "xlx_array_partition";
 const std::string ArrayReshapeInst::BundleTagName = "xlx_array_reshape";
 const std::string StreamPragmaInst::BundleTagName = "xlx_reqd_pipe_depth";
+const std::string ScalarStreamInst::BundleTagName = "xlx_scalar_stream";
 const std::string StreamOfBlocksPragmaInst::BundleTagName = "xlx_reqd_sob_depth";
 const std::string PipoPragmaInst::BundleTagName = "xcl_fpga_pipo_depth";
 const std::string BindStoragePragmaInst::BundleTagName = "xlx_bind_storage";

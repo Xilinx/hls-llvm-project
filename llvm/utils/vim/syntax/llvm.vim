@@ -159,6 +159,7 @@ syn keyword llvmKeyword
       \ volatile
       \ weak
       \ weak_odr
+      \ willreturn
       \ within
       \ writeonly
       \ x86_64_sysvcc

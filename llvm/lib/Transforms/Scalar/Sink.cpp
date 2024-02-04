@@ -73,7 +73,7 @@ static bool isSafeToMove(Instruction *Inst, AliasAnalysis &AA,
   }
 
   if (isa<TerminatorInst>(Inst) || isa<PHINode>(Inst) || Inst->isEHPad() ||
-      Inst->mayThrow())
+      Inst->mayThrow() || !Inst->willReturn())
     return false;
 
   if (auto CS = CallSite(Inst)) {

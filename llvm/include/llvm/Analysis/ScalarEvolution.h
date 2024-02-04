@@ -488,6 +488,11 @@ public:
     return (SCEV::NoWrapFlags)(Flags & ~OffFlags);
   }
 
+  LLVM_NODISCARD static bool hasFlags(SCEV::NoWrapFlags Flags,
+                                      SCEV::NoWrapFlags TestFlags) {
+    return TestFlags == maskFlags(Flags, TestFlags);
+  };
+
   ScalarEvolution(Function &F, TargetLibraryInfo &TLI, AssumptionCache &AC,
                   DominatorTree &DT, LoopInfo &LI);
   ScalarEvolution(ScalarEvolution &&Arg);
@@ -1043,6 +1048,11 @@ public:
       const SCEV *S, const Loop *L,
       SmallPtrSetImpl<const SCEVPredicate *> &Preds);
 
+  /// Update no-wrap flags of an AddRec. This may drop the cached info about
+  /// this AddRec (such as range info) in case if new flags may potentially
+  /// sharpen it.
+  void setNoWrapFlags(SCEVAddRecExpr *AddRec, SCEV::NoWrapFlags Flags);
+
 private:
   /// A CallbackVH to arrange for ScalarEvolution to be notified whenever a
   /// Value is deleted.
@@ -1346,6 +1356,10 @@ private:
   bool loopHasNoAbnormalExits(const Loop *L) {
     return getLoopProperties(L).HasNoAbnormalExits;
   }
+
+  /// Return true if this loop is finite by assumption.  That is,
+  /// to be infinite, it must also be undefined.
+  bool loopIsFiniteByAssumption(const Loop *L);
 
   /// Compute a LoopDisposition value.
   LoopDisposition computeLoopDisposition(const SCEV *S, const Loop *L);
@@ -1790,15 +1804,13 @@ private:
 
   /// Verify if an linear IV with positive stride can overflow when in a
   /// less-than comparison, knowing the invariant term of the comparison,
-  /// the stride and the knowledge of NSW/NUW flags on the recurrence.
-  bool doesIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride, bool IsSigned,
-                          bool NoWrap);
+  /// the stride.
+  bool canIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride, bool IsSigned);
 
   /// Verify if an linear IV with negative stride can overflow when in a
   /// greater-than comparison, knowing the invariant term of the comparison,
-  /// the stride and the knowledge of NSW/NUW flags on the recurrence.
-  bool doesIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride, bool IsSigned,
-                          bool NoWrap);
+  /// the stride.
+  bool canIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride, bool IsSigned);
 
   /// Get add expr already created or create a new one.
   const SCEV *getOrCreateAddExpr(SmallVectorImpl<const SCEV *> &Ops,
@@ -1807,6 +1819,10 @@ private:
   /// Get mul expr already created or create a new one.
   const SCEV *getOrCreateMulExpr(SmallVectorImpl<const SCEV *> &Ops,
                                  SCEV::NoWrapFlags Flags);
+
+  // Get addrec expr already created or create a new one.
+  const SCEV *getOrCreateAddRecExpr(SmallVectorImpl<const SCEV *> &Ops,
+                                    const Loop *L, SCEV::NoWrapFlags Flags);
 
   /// Find all of the loops transitively used in \p S, and update \c LoopUsers
   /// accordingly.

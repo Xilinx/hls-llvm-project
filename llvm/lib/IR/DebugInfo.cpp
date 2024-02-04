@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -285,6 +285,23 @@ bool DebugInfoFinder::addScope(DIScope *Scope) {
   return true;
 }
 
+static MDNode *stripDebugLocFromHLSPragma(MDNode *N) {
+  // if there is no debug location, we do not have to rewrite this MDNode.
+  if (std::none_of(N->op_begin() + 1, N->op_end(),
+      [](const MDOperand &Op) {
+        return Op.get() && isa<DILocation>(Op.get());
+      }))
+    return N;
+
+  SmallVector<Metadata *, 4> Args;
+  // Add all non-debug location operands back.
+  for (auto Op = N->op_begin(); Op != N->op_end(); Op++) {
+    if (*Op && !isa<DILocation>(*Op))
+      Args.emplace_back(*Op);
+  }
+  return MDNode::get(N->getContext(), Args);
+}
+
 static MDNode *updateLoopMetadataDebugLocationsImpl(
     MDNode *OrigLoopID, function_ref<Metadata *(Metadata *)> Updater) {
   assert(OrigLoopID && OrigLoopID->getNumOperands() > 0 &&
@@ -350,7 +367,7 @@ static MDNode *stripDebugLocFromLoopID(MDNode *N) {
   // Add all non-debug location operands back.
   for (auto Op = N->op_begin() + 1; Op != N->op_end(); Op++) {
     if (!isa<DILocation>(*Op))
-      Args.push_back(*Op);
+      Args.push_back(stripDebugLocFromHLSPragma(cast<MDNode>(*Op)));
   }
 
   // Set the first operand to itself.
@@ -366,6 +383,16 @@ bool llvm::stripDebugInfo(Function &F) {
     F.setSubprogram(nullptr);
   }
 
+  if (auto PragmaNode = F.getMetadata("fpga.function.pragma")) {
+    assert(PragmaNode->getNumOperands() && "Multiple function pragmas?");
+    auto N = cast<MDNode>(PragmaNode->getOperand(0));
+    auto NewN = stripDebugLocFromHLSPragma(N);
+    if (NewN != N) {
+      F.setMetadata("fpga.function.pragma", MDNode::get(N->getContext(), NewN));
+      Changed = true;
+    }
+  }
+
   DenseMap<MDNode*, MDNode*> LoopIDsMap;
   for (BasicBlock &BB : F) {
     for (auto II = BB.begin(), End = BB.end(); II != End;) {
@@ -378,6 +405,13 @@ bool llvm::stripDebugInfo(Function &F) {
       if (I.getDebugLoc()) {
         Changed = true;
         I.setDebugLoc(DebugLoc());
+      }
+      if (auto N = I.getMetadata("pragma.location")) {
+        auto NewN = stripDebugLocFromHLSPragma(N);
+        if (NewN != N) {
+          I.setMetadata("pragma.location", NewN);
+          Changed = true;
+        }
       }
     }
 

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -21,10 +21,12 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 using namespace llvm;
 
 Instruction::Instruction(Type *ty, unsigned it, Use *Ops, unsigned NumOps,
@@ -392,6 +394,8 @@ static bool everHaveSameSpecialState(Function *F) {
     return true;
   case Intrinsic::directive_scope_entry:
   case Intrinsic::directive_scope_exit:
+  case Intrinsic::hint_scope_entry:
+  case Intrinsic::hint_scope_exit:
     return false;
   }
 }
@@ -619,9 +623,47 @@ bool Instruction::mayThrow() const {
   return isa<ResumeInst>(this);
 }
 
+bool Instruction::mayHaveSideEffects() const {
+  return mayWriteToMemory() || mayThrow() || !willReturn();
+}
+
 bool Instruction::isSafeToRemove() const {
   return (!isa<CallInst>(this) || !this->mayHaveSideEffects()) &&
          !isa<TerminatorInst>(this);
+}
+
+const Instruction *Instruction::getPrevNonDebugInstruction() const {
+  for (const Instruction *I = getPrevNode(); I; I = I->getPrevNode())
+    if (!isa<DbgInfoIntrinsic>(I))
+      return I;
+  return nullptr;
+}
+
+bool Instruction::willReturn() const {
+  if (const LoadInst *LI = dyn_cast<LoadInst>(this))
+    return !LI->isVolatile();
+  if (const StoreInst *SI = dyn_cast<StoreInst>(this))
+    return !SI->isVolatile();
+  if (const AtomicCmpXchgInst *CXI = dyn_cast<AtomicCmpXchgInst>(this))
+    return !CXI->isVolatile();
+  if (const AtomicRMWInst *RMWI = dyn_cast<AtomicRMWInst>(this))
+    return !RMWI->isVolatile();
+  if (const MemIntrinsic *MII = dyn_cast<MemIntrinsic>(this))
+    return !MII->isVolatile();
+  if (const FPGALoadStoreInst *FLI = dyn_cast<FPGALoadStoreInst>(this))
+    return !FLI->isVolatile();
+
+  // TODO: Update when port in CallBase
+  if (const InvokeInst *II = dyn_cast<InvokeInst>(this))
+    return II->hasFnAttr(Attribute::WillReturn);
+
+  if (const auto *CI = dyn_cast<CallInst>(this))
+    // FIXME: Temporarily assume that all side-effect free intrinsics will
+    // return. Remove this workaround once all intrinsics are appropriately
+    // annotated.
+    return CI->hasFnAttr(Attribute::WillReturn) ||
+           (isa<IntrinsicInst>(CI) && CI->onlyReadsMemory());
+  return true;
 }
 
 bool Instruction::isAssociative() const {

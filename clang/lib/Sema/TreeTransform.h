@@ -6689,6 +6689,8 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   case attr::FPGAResourceHint:
   case attr::XCLLatency:
   case attr::XlxPipeline:
+  case attr::XlxInline:
+  case attr::XCLInline:
   case attr::XCLDataFlow:
   case attr::XlxLoopTripCount:
   case attr::XlxArrayView:

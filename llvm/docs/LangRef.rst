@@ -1454,6 +1454,13 @@ example:
     This function attribute indicates that the function does not call itself
     either directly or indirectly down any possible call path. This produces
     undefined behavior at runtime if the function ever does recurse.
+``willreturn``
+    This function attribute indicates that a call of this function will
+    either exhibit undefined behavior or comes back and continues execution
+    at a point in the existing call stack that includes the current invocation.
+    Annotated functions may still raise an exception, i.a., ``nounwind`` is not implied.
+    If an invocation of an annotated function does not return control back
+    to a point in the call stack, the behavior is undefined.
 ``nounwind``
     This function attribute indicates that the function never raises an
     exception. If the function does raise an exception, its runtime
@@ -13610,6 +13617,45 @@ described, not determined, by the rounding mode argument.  The actual rounding
 mode is determined by the runtime floating point environment.  The rounding
 mode argument is only intended as information to the compiler.
 
+Floating Point Environment Manipulation intrinsics
+--------------------------------------------------
+
+These functions read or write floating point environment, such as rounding
+mode or state of floating point exceptions. Altering the floating point
+environment requires special care. See :ref:`Floating Point Environment <floatenv>`.
+
+'``llvm.flt.rounds``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare i32 @llvm.flt.rounds()
+
+Overview:
+"""""""""
+
+The '``llvm.flt.rounds``' intrinsic reads the current rounding mode.
+
+Semantics:
+""""""""""
+
+The '``llvm.flt.rounds``' intrinsic returns the current rounding mode.
+Encoding of the returned values is same as the result of ``FLT_ROUNDS``,
+specified by C standard:
+
+::
+
+    0  - toward zero
+    1  - to nearest, ties to even
+    2  - toward positive infinity
+    3  - toward negative infinity
+    4  - to nearest, ties away from zero
+
+Other values may be used to represent additional rounding modes, supported by a
+target. These values are target-specific.
 
 General Intrinsics
 ------------------

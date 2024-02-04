@@ -540,11 +540,16 @@ public:
 
   /// Return true if the instruction may have side effects.
   ///
+  /// Side effects are:
+  ///  * Writing to memory.
+  ///  * Unwinding.
+  ///  * Not returning (e.g. an infinite loop).
+  ///
   /// Note that this does not consider malloc and alloca to have side
   /// effects because the newly allocated memory is completely invisible to
   /// instructions which don't use the returned value.  For cases where this
   /// matters, isSafeToSpeculativelyExecute may be more appropriate.
-  bool mayHaveSideEffects() const { return mayWriteToMemory() || mayThrow(); }
+  bool mayHaveSideEffects() const;
 
   /// Return true if the instruction can be removed if the result is unused.
   ///
@@ -553,7 +558,11 @@ public:
   /// may have side effects cannot be removed without semantically changing the
   /// generated program.
   bool isSafeToRemove() const;
-  
+
+  /// Return true if the instruction will return (unwinding is considered as
+  /// a form of returning control flow here).
+  bool willReturn() const;
+
   /// Return true if the instruction is a variety of EH-block.
   bool isEHPad() const {
     switch (getOpcode()) {
@@ -565,6 +574,14 @@ public:
     default:
       return false;
     }
+  }
+
+  /// Return a pointer to the previous non-debug instruction in the same basic
+  /// block as 'this', or nullptr if no such instruction exists.
+  const Instruction *getPrevNonDebugInstruction() const;
+  Instruction *getPrevNonDebugInstruction() {
+    return const_cast<Instruction *>(
+        static_cast<const Instruction *>(this)->getPrevNonDebugInstruction());
   }
 
   /// Create a copy of 'this' instruction that is identical in all ways except

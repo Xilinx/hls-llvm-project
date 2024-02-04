@@ -558,6 +558,31 @@ public:
     return PresentedID.lookup(Name);
   }
   bool CheckAndFilter(StringMap<XlxPragmaParam> ParamMap);
+
+  ArgsUnion parseOptionalEnumVal(
+    StringRef Option, ArrayRef<StringRef> EnumVals, StringRef Implicit)
+  {
+    if (P.TryConsumeToken(tok::equal)) {
+      const Token &Tok = P.getCurToken();
+      if (Tok.is(tok::annot_pragma_XlxHLS_end)) {
+        P.Diag(Tok.getLocation(), diag::warn_pragma_named_argument_missing) << Option;
+        return ArgsUnion();
+      }
+      else {
+        IdentifierInfo *II = Tok.getIdentifierInfo();
+        SourceLocation Loc = P.ConsumeToken();
+        return createIdentLoc(II, Loc);
+      }
+    }
+    else {
+      return createIdentLoc(Implicit);
+    }
+  }
+
+  bool getOff()
+  {
+    return !lookup("off").isNull();
+  }
 };
 
 
@@ -620,7 +645,7 @@ static IdentifierLoc ParseXlxPragmaArgument(Parser &P) {
 
   // Do not fail on #pragma HLS inline
   if (!Tok.isOneOf(tok::identifier, tok::kw_inline, tok::kw_register,
-                   tok::kw_auto, tok::kw_false, tok::kw_true)) {
+                   tok::kw_auto, tok::kw_false, tok::kw_true, tok::kw_class)) {
     P.Diag(Tok, diag::warn_unexpected_token_in_pragma_argument)
         << PP.getSpelling(Tok) << tok::identifier;
     return {SourceLocation(), nullptr};
@@ -890,11 +915,19 @@ bool XlxPragmaArgParser::parse() {
       return false;
     }
 
-    if (T == XlxPragmaParam::PresentID) {
+    if (T == XlxPragmaParam::CallBackParser) {
+      Arg = Param.callback(*this, P, PragmaLoc);
+      if (Arg.isNull())
+        return false;
+    }
+
+    else if (T == XlxPragmaParam::PresentID) {
       if (PresentedID.count(ArgName.lower())) {
         P.Diag(MaybeArg.Loc, diag::warn_repeated_pragma_parameter) << ArgName;
         return false;
       }
+      PresentedID.insert(std::make_pair(
+        ArgName.lower(), createIdentLoc(MaybeArg.Ident, MaybeArg.Loc)));
 
       // Check mutual exclusive options
       if (Param.PresentGroup) {
@@ -905,54 +938,76 @@ bool XlxPragmaArgParser::parse() {
           return false;
         }
       }
-      PresentedID.insert(std::make_pair(
-          ArgName.lower(), createIdentLoc(MaybeArg.Ident, MaybeArg.Loc)));
-      Arg = createIdentLoc( MaybeArg.Ident, MaybeArg.Loc); 
-      continue;
+
+      if (P.TryConsumeToken(tok::equal)) {
+        const Token &Tok = P.getCurToken();
+        if (Tok.is(tok::annot_pragma_XlxHLS_end)) {
+          P.Diag(Tok.getLocation(), diag::warn_pragma_named_argument_missing) << ArgName;
+          return false;
+        }
+        else {
+          StringRef s(Tok.isLiteral() ? Tok.getLiteralData()
+                                      : Tok.getIdentifierInfo()->getNameStart(),
+                      Tok.getLength());
+          if (s.equals_lower("false") || s.equals("0")) {
+            P.ConsumeToken();
+          }
+          else if (s.equals_lower("true") || s.equals("1")) {
+            Arg = createIdentLoc(MaybeArg.Ident, MaybeArg.Loc);
+            P.ConsumeToken();
+          }
+          else {
+            P.Diag(Tok.getLocation(), diag::err_invalid_option_value) << s << ArgName;
+            return false;
+          }
+        }
+      }
+      else {
+        Arg = createIdentLoc(MaybeArg.Ident, MaybeArg.Loc);
+      }
     }
 
-    //// ID, Enum, Expression Parameter are all with following uniform format
-    ///    identifer '=' identifer
-    ///    identifer '=' integer
-    /// We should see a '='
-    if (!P.TryConsumeToken(tok::equal)) {
-      const auto &Tok = P.getCurToken();
-      if (Tok.getKind() == tok::annot_pragma_XlxHLS_end) { 
-        P.Diag(Tok, diag::warn_unexpected_token_in_pragma_argument)
-           << "End Of Pramga Line" << tok::equal;
+    else {
+      //// ID, Enum, Expression Parameter are all with following uniform format
+      ///    identifer '=' identifer
+      ///    identifer '=' integer
+      /// We should see a '='
+      if (!P.TryConsumeToken(tok::equal)) {
+        const auto &Tok = P.getCurToken();
+        if (Tok.getKind() == tok::annot_pragma_XlxHLS_end) { 
+          P.Diag(Tok, diag::warn_unexpected_token_in_pragma_argument)
+             << "End Of Pramga Line" << tok::equal;
+        }
+        else { 
+          P.Diag(Tok, diag::warn_unexpected_token_in_pragma_argument)
+             << PP.getSpelling(Tok) << tok::equal;
+        }
+        return false;
       }
-      else { 
-        P.Diag(Tok, diag::warn_unexpected_token_in_pragma_argument)
-           << PP.getSpelling(Tok) << tok::equal;
-      }
-      return false;
-    }
 
-    switch (T) {
-    case XlxPragmaParam::Enum:
-      Arg = parseEnumIdentifier(Param);
-      break;
-    case XlxPragmaParam::Id:
-      Arg = parseIdentifierLoc();
-      break;
-    case XlxPragmaParam::ICEExpr:
-      Arg = parseICEExpression();
-      break;
-    case XlxPragmaParam::VarRefExpr:
-      Arg = parseVarRefExpression(ArgName);
-      break;
-    case XlxPragmaParam::CallBackParser:
-      Arg = Param.callback(*this, P, PragmaLoc);
-      break;
-    case XlxPragmaParam::DCEExpr:
-      Arg = parseICEExpression();
-      break;
-    default:
-      llvm_unreachable("Unexpected type");
-      break;
+      switch (T) {
+      case XlxPragmaParam::Enum:
+        Arg = parseEnumIdentifier(Param);
+        break;
+      case XlxPragmaParam::Id:
+        Arg = parseIdentifierLoc();
+        break;
+      case XlxPragmaParam::ICEExpr:
+        Arg = parseICEExpression();
+        break;
+      case XlxPragmaParam::VarRefExpr:
+        Arg = parseVarRefExpression(ArgName);
+        break;
+      case XlxPragmaParam::DCEExpr:
+        Arg = parseICEExpression();
+        break;
+      default:
+        llvm_unreachable("Unexpected type");
+        break;
+      }
+      if (Arg.isNull())
+        return false;
     }
-    if (Arg.isNull())
-      return false;
   }
 
   // Check the subject
@@ -1016,17 +1071,16 @@ static bool HandleXlxDataflowPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 #ifdef TABLEGEN_HLS
       PRAGMA_HLS_DATAFLOW, 
 #else 
-      {presentId("interval", 1), presentId("disable_start_propagation", 2)}, 
+      {optICEExpr("interval", -1), presentId("disable_start_propagation", 2)},
 #endif 
       PragmaLoc); 
   if (!PAP.parse())
     return false;
-  if (enableXilinxPragmaChecker()) {
-    if (PAP.lookup("interval")) {
-      auto ii = PAP.lookup("interval").get<IdentifierLoc *>();
-      PAP.P.Diag(ii->Loc, diag::warn_extra_pragma_hls_token_ignored) << "interval"
-                                                                 << "dataflow";
-    }
+
+  if (PAP.lookup("interval")) {
+    PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::warn_deprecated_pragma_option)
+      << "interval"
+      << "dataflow";
   }
 
   auto PropagationType = "start_propagation";
@@ -1039,6 +1093,11 @@ static bool HandleXlxDataflowPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   return true;
 }
 
+static ArgsUnion ParserewindOptionForpipeline(XlxPragmaArgParser &PAP, Parser &P, SourceLocation PragmaLoc)
+{
+  return PAP.parseOptionalEnumVal("rewind", {"true", "false"}, "true");
+}
+
 static bool HandleXlxPipelinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                                     SourceLocation PragmaLoc) {
   SubjectListTy SubjectList;
@@ -1046,14 +1105,17 @@ static bool HandleXlxPipelinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 #ifdef TABLEGEN_HLS
       PRAGMA_HLS_PIPELINE, 
 #else 
-                         {optICEExpr("ii", -1), presentId("rewind", 1),
-                          presentId("enable_flush", 2), presentId("off", 3),
+                         {optICEExpr("ii", -1),
+                          optCallBackParser("rewind", ParserewindOptionForpipeline)
+                          presentId("enable_flush", 2),
+                          presentId("off", 3),
                           optEnum("style", {"stp", "flp", "frp"})},
 #endif
                          PragmaLoc);
   if (!PAP.parse())
     return false;
 
+  bool off = PAP.getOff();
   // Obtain style option value
   IdentifierLoc *StyleMode = nullptr;
   if (auto Sty = PAP.lookup("style"))
@@ -1061,11 +1123,6 @@ static bool HandleXlxPipelinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 
   if (StyleMode) {
     // Checkers for conflict
-    if (PAP.presentedId("off")) {
-      // error out
-      PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::error_pipeline_style_conflict)
-          << "'off' option.";
-    }
     if (PAP.presentedId("enable_flush")) {
       // error out
       PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::error_pipeline_style_conflict)
@@ -1101,10 +1158,26 @@ static bool HandleXlxPipelinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 
   ArgsUnion II = PAP["ii"];
 
-  if (auto Off = PAP.presentedId("off"))
+  if (off)
     II = ArgsUnion(PAP.createIntegerLiteral(0));
 
-  ArgsUnion args[] = {II, PAP.createIntegerLiteral(styleID), PAP["rewind"]};
+  int64_t rewind = 0;
+  if (ArgsUnion Arg = PAP.lookup("rewind")) {
+    auto Val = Arg.get<IdentifierLoc*>();
+    StringRef name {Val->Ident->getName()};
+    if (name.equals_lower("false")) {
+      rewind = 2;
+    }
+    else if (name.equals_lower("true")) {
+      rewind = 1;
+    }
+    else {
+      PAP.P.Diag(Val->Loc, diag::err_invalid_option_value) << name << "rewind";
+      return false;
+    }
+  }
+  ArgsUnion args[] = {II, PAP.createIntegerLiteral(styleID),
+                      PAP.createIntegerLiteral(rewind)};
   PAP.addDependenceAttribute("xlx_pipeline", args);
   return true;
 }
@@ -1117,7 +1190,8 @@ static bool HandleXlxUnrollPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 #else
                          {optICEExpr("factor", 0), presentId("region", 1),
                           presentId("skip_exit_check", 2), presentId("complete", 1),
-                          presentId("partial", 1)},
+                          presentId("partial", 1), presentId("off", 3)
+                         },
 #endif
                          PragmaLoc);
   if (!PAP.parse())
@@ -1146,10 +1220,26 @@ static bool HandleXlxUnrollPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
       }
     }
   }
+
+  bool off = PAP.getOff();
+  if (off) {
+    for (auto s : {"factor", "skip_exit_check"}) {
+      if (PAP.lookup(s)) {
+        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+          << s
+          << "off=true";
+        return false;
+      }
+    }
+  }
+
   ArgsUnion factor;
 
   if (PAP.lookup("factor")) {
     factor = PAP["factor"];
+  }
+  else if (off) {
+    factor = PAP.createIntegerLiteral(1);
   }
 
   ArgsUnion Args[] = {factor, PAP["skip_exit_check"]};
@@ -1161,12 +1251,13 @@ static bool HandleXlxFlattenPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                                    SourceLocation PragmaLoc) {
   auto *S = CurScope;
 
-  PAP.setPragmaOption("", false, {presentId("off", 1)}, PragmaLoc); 
+  PAP.setPragmaOption("", false, {presentId("off", 1)}, PragmaLoc);
   if (!PAP.parse())
     return false;
 
-  auto FlattenOff = PAP["off"];
-  PAP.addDependenceAttribute("xlx_flatten_loop", FlattenOff);
+  bool off = PAP.getOff();
+  ArgsUnion Args[] = {PAP.createIntegerLiteral(off)};
+  PAP.addDependenceAttribute("xlx_flatten_loop", Args);
 
   return true;
 }
@@ -1412,27 +1503,11 @@ static bool HandleTopFunctionPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   return true;
 }
 
-static bool HandleUpwardInlineFunctionPragma(Parser &P, Scope *CurScope,
-                                             SourceLocation PragmaLoc,
+static bool HandleUpwardInlineFunctionPragma(XlxPragmaArgParser &PAP, 
                                              bool NoInline) {
-  auto &PP = P.getPreprocessor();
-  auto PragmaEndLoc = P.getEndOfPreviousToken();
-
-  // noinline and always_inline only apply for function
-  if (!CurScope->isFunctionScope())
-    CurScope = CurScope->getFnParent();
-  auto &Attrs = CurScope->getParsedHLSPragmasRef();
-
-  if (NoInline) {
-    auto *NoInlineII = PP.getIdentifierInfo("noinline");
-    Attrs.addNew(NoInlineII, SourceRange(PragmaLoc, PragmaEndLoc), nullptr,
-                 PragmaLoc, nullptr, 0, AttributeList::AS_GNU);
-    return true;
-  }
-
-  auto *AlwaysInline = PP.getIdentifierInfo("always_inline");
-  Attrs.addNew(AlwaysInline, SourceRange(PragmaLoc, PragmaEndLoc), nullptr,
-               PragmaLoc, nullptr, 0, AttributeList::AS_GNU);
+  //SemaXlxAttr, translate 'xlx_inline' to noinline or always_inline that will only apply for function
+  ArgsUnion args[] = {PAP.createIntegerLiteral( !NoInline /*0, means off, 1 means on */)}; 
+  PAP.addDependenceAttribute("xlx_inline", args); 
   return true;
 }
 
@@ -1440,21 +1515,12 @@ static bool HandleUpwardInlineFunctionPragma(Parser &P, Scope *CurScope,
 // 0: region
 // 1: recursive
 // 2: region off
-static bool HandleDownwardInlineFunctionPragma(Parser &P, Scope *CurScope,
-                                               SourceLocation PragmaLoc,
+static bool HandleDownwardInlineFunctionPragma(XlxPragmaArgParser &PAP,
                                                int IsRecursive) {
-  auto &PP = P.getPreprocessor();
-  auto PragmaEndLoc = P.getEndOfPreviousToken();
-  auto &Attrs = CurScope->getParsedHLSPragmasRef();
 
-  auto *DownwardInline = PP.getIdentifierInfo("xcl_inline");
-  auto &Ctx = P.getActions().getASTContext();
-  ArgsUnion Recursive[] = {IntegerLiteral::Create(
-      Ctx, APInt(Ctx.getIntWidth(Ctx.IntTy), IsRecursive), Ctx.IntTy,
-      PragmaLoc)};
 
-  Attrs.addNew(DownwardInline, SourceRange(PragmaLoc, PragmaEndLoc), nullptr,
-               PragmaLoc, Recursive, 1, AttributeList::AS_GNU);
+  ArgsUnion recurInfo = PAP.createIntegerLiteral(IsRecursive);
+  PAP.addDependenceAttribute("xcl_inline", {recurInfo}); 
   return true;
 }
 
@@ -1468,7 +1534,9 @@ static bool HandleInlinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
       //TODO, check
                          {presentId("self", 1),presentId("all", 1), 
                           presentId("region", 1),
-                          presentId("recursive", 2), presentId("off", 3)},
+                          presentId("recursive", 2),
+                          presentId("off", 3)
+                         },
 #endif
                          PragmaLoc);
   if (!PAP.parse())
@@ -1485,7 +1553,7 @@ static bool HandleInlinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   }
   bool InlineScope = (typeAll || typeSelf || typeRegion);
   bool RecursiveInline = PAP.presentedId("recursive");
-  bool InlineOff = PAP.presentedId("off");
+  bool InlineOff = PAP.getOff();
 
   //0. Pre-explanations:
   //HandleUpwardInlineFunctionPragma: 
@@ -1504,14 +1572,14 @@ static bool HandleInlinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     // #pragma HLS INLINE recursive
     if (RecursiveInline) {
       // Inline everything in the compound statement
-      HandleDownwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, 1);
+      HandleDownwardInlineFunctionPragma(PAP, 1);
       if (InlineOff)
-        HandleUpwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, true);
+        HandleUpwardInlineFunctionPragma(PAP, true);
       return true;
     }
 
     // Inline the current function, make sure we are in a function scope
-    HandleUpwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, InlineOff);
+    HandleUpwardInlineFunctionPragma(PAP, InlineOff);
     return true;
   }
 
@@ -1542,14 +1610,14 @@ static bool HandleInlinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   if (typeSelf) {
     if (RecursiveInline) {
       // recursively inline everything in the compound statement
-      HandleDownwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, 1);
+      HandleDownwardInlineFunctionPragma(PAP, 1);
       if (InlineOff)
-        HandleUpwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, true);
+        HandleUpwardInlineFunctionPragma(PAP, true);
       return true;
     }
 
     // Inline the current function, make sure we are in a function scope
-    HandleUpwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, InlineOff);
+    HandleUpwardInlineFunctionPragma(PAP, InlineOff);
     return true;
   }
 
@@ -1560,19 +1628,19 @@ static bool HandleInlinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   //   #pragma HLS INLINE region recursive off
   {
     if (InlineOff)
-      HandleUpwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, true);
+      HandleUpwardInlineFunctionPragma(PAP, true);
 
     if (RecursiveInline) {
       // Recursively inline everything in the compound statement
-      HandleDownwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, 1);
+      HandleDownwardInlineFunctionPragma(PAP, 1);
       return true;
     }
 
     // Inline callsite in a none recursive way
     if (InlineOff)
-      HandleDownwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, 2);
+      HandleDownwardInlineFunctionPragma(PAP, 2);
     else
-      HandleDownwardInlineFunctionPragma(PAP.P, CurScope, PragmaLoc, 0);
+      HandleDownwardInlineFunctionPragma(PAP, 0);
     return true;
   }
 }
@@ -1583,13 +1651,16 @@ static bool HandleResetPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 #ifdef TABLEGEN_HLS
       PRAGMA_HLS_RESET,
 #else
-      {reqVarRefExpr("variable"), presentId("off", 1)},
+      {reqVarRefExpr("variable"),
+       presentId("off", 1)
+      },
 #endif
                          PragmaLoc);
 
   if (!PAP.parse())
     return false;
 
+  bool off = PAP.getOff();
   //auto ResetOff = PAP["off"];
   //auto *A = PAP.createAttribute("xlx_var_reset", ResetOff);
 
@@ -1609,7 +1680,7 @@ static bool HandleResetPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   SmallVector<Expr *, 4> subExprs;
   getSubExprOfVariable(subExprs, var_expr, PAP.P);
   for (auto port_ref : subExprs) {
-    ArgsUnion args[] = {port_ref, PAP["off"]};
+    ArgsUnion args[] = {port_ref, PAP.createIntegerLiteral(off)};
     PAP.addDependenceAttribute("xlx_reset", args);
   }
   return true;
@@ -1636,7 +1707,7 @@ static bool HandleOperationAllocationPragma(IdentifierLoc *allocType,
 
 static ArgsUnion ParseinstancesOptionForallocation(XlxPragmaArgParser &PAP, Parser &P, 
                                                   SourceLocation PragmaLoc) { 
-
+  P.TryConsumeToken(tok::equal);
   auto &Ctx = PAP.P.getActions().getASTContext();
   auto &PP = PAP.P.getPreprocessor();
   auto &Actions = PAP.P.getActions();
@@ -1644,12 +1715,23 @@ static ArgsUnion ParseinstancesOptionForallocation(XlxPragmaArgParser &PAP, Pars
   IdentifierLoc *AllocType = nullptr;
   auto allocToken = PAP.P.getCurToken();
 
+  if (ArgsUnion arg = PAP.lookup("type")) {
+    AllocType = arg.get<IdentifierLoc*>();
+    StringRef s { AllocType->Ident->getName() };
+    if (s.equals_lower("function")) {
+      Expr *instances =  PAP.parseVarRefExpression("instances"); 
+      return instances;
+    }
+    else if (s.equals_lower("operation")) {
+      return PAP.parseIdentifierLoc();
+    }
+  }
   if (auto Sty = PAP.presentedId("function")) {
     Expr *instances =  PAP.parseVarRefExpression("instances"); 
-    return instances; 
-  } 
+    return instances;
+  }
   if (auto Sty = PAP.presentedId("operation")) {
-    return PAP.parseIdentifierLoc(); 
+    return PAP.parseIdentifierLoc();
   } else {
     // Error out, we expect first option is "allocationype"
     PAP.P.Diag(allocToken.getLocation(),
@@ -1664,24 +1746,37 @@ static bool HandleAllocationPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 
   PAP.setPragmaOption("", false,
 #ifdef TABLEGEN_HLS
-      PRAGMA_HLS_ALLOCATION,
+    PRAGMA_HLS_ALLOCATION,
 #else 
-                         {presentID("function", 1), presentID("operation", 1), reqId("instances"), reqICEExpr("limit")}, 
+    {presentId("function", 1), presentId("operation", 1), reqId("instances"), reqICEExpr("limit"),
+     optEnum("type", {"operation", "function"})},
 #endif
-      PragmaLoc); 
+    PragmaLoc);
 
   if (!PAP.parse())
     return false;
 
-  if (ArgsUnion arg = PAP.lookup("function")) { 
-    IdentifierLoc *allocType =  arg.get<IdentifierLoc*>(); 
-    return HandleFunctionAllocationPragma(allocType,
-                                       PAP);
+  IdentifierLoc *allocType = nullptr;
+  if (ArgsUnion arg = PAP.lookup("type")) {
+    allocType = arg.get<IdentifierLoc*>();
+  }
+  else if (ArgsUnion arg = PAP.lookup("function")) { 
+    allocType = arg.get<IdentifierLoc*>();
   }
   else if (ArgsUnion arg = PAP.lookup("operation")) { 
-    IdentifierLoc *allocType =  arg.get<IdentifierLoc*>(); 
-    return HandleOperationAllocationPragma(allocType, PAP);
+    allocType = arg.get<IdentifierLoc*>();
   }
+
+  if (allocType) {
+    StringRef s { allocType->Ident->getName() };
+    if (s.equals_lower("function")) {
+      return HandleFunctionAllocationPragma(allocType, PAP);
+    }
+    else if (s.equals_lower("operation")) {
+      return HandleOperationAllocationPragma(allocType, PAP);
+    }
+  }
+  return false;
 }
 
 static bool HandleExpressionBanlancePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
@@ -1690,15 +1785,18 @@ static bool HandleExpressionBanlancePragma(XlxPragmaArgParser &PAP, Scope *CurSc
 #ifdef TABLEGEN_HLS
       PRAGMA_HLS_EXPRESSION_BALANCE, 
 #else 
-      {presentId("off", 1)}, 
+      {
+       presentId("off", 1)
+      },
 #endif
                           PragmaLoc); 
 
   if (!PAP.parse())
     return false;
 
-  auto BalanceOff = PAP["off"];
-  PAP.addAttribute("xlx_expr_balance", {BalanceOff});
+  bool off = PAP.getOff();
+  ArgsUnion Args[] = {PAP.createIntegerLiteral(off)};
+  PAP.addAttribute("xlx_expr_balance", Args);
 
   return true;
 }
@@ -1738,7 +1836,7 @@ static bool HandleDataPackPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     if (auto id = PAP.presentedId("struct_level")) { 
       //errout , can not support it now
       PAP.P.Diag(id->Loc, diag::err_xlx_attribute_invalid_option_and_because)
-        << "struct_level" << "Vitis HLS doesn't support it";
+        << "'struct_level'" << "Vitis HLS doesn't support it";
       // TODO: ETP return false?
       //return false;
     }
@@ -1834,14 +1932,32 @@ static bool HandleOccurrencePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 #ifdef TABLEGEN_HLS
       PRAGMA_HLS_OCCURRENCE, 
 #else 
-      {optICEExpr("cycle", 1)},
+      {optICEExpr("cycle", 1),
+       presentId("off", 2)
+      },
 #endif
                          PragmaLoc);
 
   if (!PAP.parse())
     return false;
 
-  ArgsUnion Cycle = PAP["cycle"];
+  bool off = PAP.getOff();
+  if (off) {
+    if (PAP.lookup("cycle")) {
+      PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+        << "cycle"
+        << "off=true";
+      return false;
+    }
+  }
+
+  ArgsUnion Cycle;
+  if (PAP.lookup("cycle")) {
+    Cycle = PAP["cycle"];
+  }
+  else {
+    Cycle = PAP.createIntegerLiteral(1);
+  }
   PAP.addAttribute("xlx_occurrence", {Cycle});
   return true;
 }
@@ -1904,6 +2020,7 @@ static bool HandlePerformancePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                            optDCEExpr("target_tl", 0.0),
                            optDCEExpr("assume_ti", 0.0),
                            optDCEExpr("assume_tl", 0.0),
+                           optEnum("unit", {"cycle", "sec"}),
                            optEnum("scope", {"loop", "region"})                          
                          },
 #endif
@@ -1941,6 +2058,7 @@ static bool HandlePerformancePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
       PAP["target_tl"],
       PAP["assume_ti"],
       PAP["assume_tl"],
+      PAP["unit"],
       PAP.createIdentLoc(ScopeKind)
   };
 
@@ -1981,7 +2099,8 @@ static bool HandleArrayPartitionPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                           optICEExpr("dim", 1), presentId("cyclic", 1),
                           presentId("block", 1), presentId("complete", 1),
                           optEnum("type", {"cyclic", "block", "complete"}), 
-                          presentId("dynamic", 0)},
+                          presentId("dynamic", 0), presentId("off", 2)
+                         },
 #endif
                          PragmaLoc);
 
@@ -2012,6 +2131,18 @@ static bool HandleArrayPartitionPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   ArgsUnion Dim = PAP["dim"];
   ArgsUnion Factor;
 
+  bool off = PAP.getOff();
+  if (off) {
+    for (auto s : {"type", "block", "cyclic", "complete", "factor"}) {
+      if (PAP.lookup(s)) {
+        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+          << s
+          << "off=true";
+        return false;
+      }
+    }
+  }
+
   if (Type.equals_lower("complete")) {
     if (auto Arg = PAP.lookup("factor")) {
       auto *E = Arg.get<Expr *>();
@@ -2036,7 +2167,9 @@ static bool HandleArrayPartitionPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   getSubExprOfVariable(subExprs, var_expr, PAP.P);
 
   for (auto var : subExprs) {
-    ArgsUnion Args[] = {var, AType, Factor, Dim, PAP.presentedId("dynamic")};
+    ArgsUnion Args[] = {var, AType, Factor, Dim, PAP.presentedId("dynamic"),
+                        PAP.createIntegerLiteral(off)
+                       };
     PAP.addDependenceAttribute("xlx_array_partition", Args);
   }
 
@@ -2053,12 +2186,26 @@ static bool HandleArrayReshapePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
                           optICEExpr("dim", 1), presentId("cyclic", 1),
                           presentId("block", 1), presentId("complete", 1),
                           presentId("object", 2),
-                          optEnum("type", {"cyclic", "block", "complete"})},
+                          optEnum("type", {"cyclic", "block", "complete"}),
+                          presentId("off", 3)
+                         },
 #endif
                          PragmaLoc);
 
   if (!PAP.parse())
     return false;
+
+  bool off = PAP.getOff();
+  if (off) {
+    for (auto s : {"type", "block", "cyclic", "complete", "factor"}) {
+      if (PAP.lookup(s)) {
+        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+          << s
+          << "off=true";
+        return false;
+      }
+    }
+  }
 
   IdentifierLoc *TypeMode = nullptr;
   if (auto Sty = PAP.lookup("type"))
@@ -2118,7 +2265,8 @@ static bool HandleArrayReshapePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   SmallVector<Expr *, 4> subExprs;
   getSubExprOfVariable(subExprs, var_expr, PAP.P);
   for (auto var : subExprs) {
-    ArgsUnion args[] = {var, AType, factor, Dim};
+    ArgsUnion args[] = {var, AType, factor, Dim,
+                        PAP.createIntegerLiteral(off)};
 
     PAP.addDependenceAttribute("xlx_array_reshape", args);
   }
@@ -2305,6 +2453,51 @@ static bool CheckInterfacePort(Parser &P,
 
 }
 
+static IntegerLiteral* GetInterfaceDirectIO(XlxPragmaArgParser &PAP)
+{
+  IntegerLiteral *res {PAP.createIntegerLiteral(0)};
+  if (auto Arg = PAP.lookup("direct_io")) {
+    auto Val {Arg.get<IdentifierLoc*>()};
+    auto name {Val->Ident->getName()};
+    res = name.equals_lower("false") ? PAP.createIntegerLiteral(0) :
+          name.equals_lower("true")  ? PAP.createIntegerLiteral(1) :
+          res;
+  }
+  return res;
+}
+
+static bool CheckInterfaceDirectIO(XlxPragmaArgParser &PAP, IdentifierLoc &Mode)
+{
+  static StringRef validModes[] {
+    "ap_none", "ap_stable", "ap_vld", "ap_ack", "ap_hs", "ap_ovld"
+  };
+  static StringRef option {"direct_io"};
+
+  if (auto Arg = PAP.lookup(option)) {
+    Parser &P = PAP.P;
+    SourceLocation Loc {P.getCurToken().getLocation()};
+    IdentifierLoc *Val {Arg.get<IdentifierLoc*>()};
+    StringRef modeName {Mode.Ident->getName()};
+    for (StringRef s : validModes) {
+      if (modeName.equals_lower(s)) {
+        StringRef vs {Val->Ident->getName()};
+        if (vs.equals_lower("true") || vs.equals_lower("false")) {
+          return true;
+        }
+        else {
+          P.Diag(Loc, diag::err_invalid_option_value) << vs << option;
+          return false;
+        }
+      }
+    }
+    P.Diag(Loc, diag::err_confilict_pragma_parameter) << option << modeName;
+    return false;
+  }
+  else {
+    return true;
+  }
+}
+
 static bool HandleGenericInterfacePragma(Parser &P, Scope *CurScope,
                                          IdentifierLoc Mode,
                                          SourceLocation PragmaLoc,
@@ -2323,6 +2516,7 @@ static bool HandleGenericInterfacePragma(Parser &P, Scope *CurScope,
 
     optVarRefExpr("port"), presentId("register"), optId("name"),
     optICEExpr("depth"), optICEExpr("latency"),
+    optEnum("direct_io", {"true", "false"}),
     optEnum("mode", {"ap_fifo", "ap_stable", "ap_none", "ap_ack", "ap_ovld"})};
 
   if (!PAP.CheckAndFilter(ParmMap))
@@ -2368,7 +2562,9 @@ static bool HandleGenericInterfacePragma(Parser &P, Scope *CurScope,
       PAP.addDependenceAttribute("ap_fifo", args) ;
     }
     else { 
-      ArgsUnion args[] = { port_ref, ModeId, PAP.presentedId("register"), PAP.lookup("name")};
+      ArgsUnion args[] = {
+        port_ref, ModeId, PAP.presentedId("register"), PAP.lookup("name"),
+        GetInterfaceDirectIO(PAP)};
       PAP.addDependenceAttribute("ap_scalar", args) ;
     }
   }
@@ -2392,6 +2588,7 @@ static bool HandleInterruptInterfacePragma(Parser &P, Scope *CurScope,
 
     optVarRefExpr("port"), presentId("register"), optId("name"),
     optICEExpr("depth"), optICEExpr("latency"), optICEExpr("interrupt"),
+    optEnum("direct_io", {"true", "false"}),
     optEnum("mode", {"ap_hs", "ap_vld"})};
 
   if (!PAP.CheckAndFilter(ParmMap))
@@ -2430,7 +2627,9 @@ static bool HandleInterruptInterfacePragma(Parser &P, Scope *CurScope,
   getSubExprOfVariable(subExprs, var_expr, PAP.P);
  
   for (auto port_ref : subExprs) {
-    ArgsUnion args[] = { port_ref, ModeId, PAP.presentedId("register"), PAP.lookup("name"), PAP.lookup("interrupt")};
+    ArgsUnion args[] = {
+      port_ref, ModeId, PAP.presentedId("register"), PAP.lookup("name"),
+      PAP.lookup("interrupt"), GetInterfaceDirectIO(PAP)};
     PAP.addDependenceAttribute("ap_scalar_interrupt", args) ;
   }
   return true;
@@ -2778,6 +2977,7 @@ static bool HandleInterfacePragmaWithPAP(Parser &P, Scope *CurScope,
 
 static ArgsUnion ParseoffsetOptionForinterface(XlxPragmaArgParser &PAP, Parser &P, SourceLocation PragmaLoc) 
 {
+  P.TryConsumeToken(tok::equal);
   IdentifierLoc *TypeMode = nullptr;
   if (auto Sty = PAP.lookup("mode"))
     TypeMode = Sty.get<IdentifierLoc *>();
@@ -2891,7 +3091,8 @@ static bool HandleInterfacePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
        presentId("register"), optId("name"),
        optICEExpr("depth"), optICEExpr("latency"),
        optICEExpr("interrupt"), 
-                         
+       optEnum("direct_io", {"true", "false"}),
+
     //AP_CTRL_HS, AP_CTRL_CHAIN, AP_CTRL_NONE
        optId("name"),
 
@@ -2987,8 +3188,9 @@ static bool HandleInterfacePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   if(TypeMode) { 
     Mode = TypeMode;
   }
-  bool ValidPragma = false;
-  ValidPragma = CheckInterfacePort(PAP.P, PAP.lookup("port").get<Expr*>(),  *Mode);
+  bool ValidPragma = true;
+  ValidPragma &= CheckInterfacePort(PAP.P, PAP.lookup("port").get<Expr*>(), *Mode);
+  ValidPragma &= CheckInterfaceDirectIO(PAP, *Mode);
   if (!ValidPragma)
     return false;
   return HandleInterfacePragmaWithPAP(PAP.P, CurScope, *Mode, PragmaLoc, PAP);
@@ -3313,8 +3515,8 @@ static bool HandleXlxBindOpPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     ArgsUnion args[] = {expr, op_enum_expr, impl_enum_expr, PAP["latency"]};
     if (isa<DeclRefExpr>(expr) && isa<FunctionDecl>(cast<DeclRefExpr>(expr)->getDecl())) { 
       PAP.P.Diag(PragmaLoc, diag::err_xlx_attribute_invalid_option_and_because)
-        << "'variable'" 
-        << "bind_op should not apply on return/function"; 
+        << "'Variable'" 
+        << "Bind_op should not be applied on return/function"; 
       return false;
     }
     PAP.addDependenceAttribute("xlx_bind_op", args);
@@ -3432,8 +3634,8 @@ static bool HandleXlxDependencePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     //we checked distance is more than '0' in parser 
     if (isa<IntegerLiteral>(distance) && cast<IntegerLiteral>(distance)->getValue().getZExtValue() < 0 ) { 
       PAP.P.Diag(PragmaLoc, diag::err_xlx_attribute_invalid_option_and_because)
-        << "distance" 
-        << "the value of 'distance' should be more than '0'";
+        << "'Distance'" 
+        << "Valid value for 'Distance' option should be greater than '0'";
       return false ;
     }
   }
@@ -3519,9 +3721,9 @@ static bool HandleCachePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
       PRAGMA_HLS_CACHE, 
 #else 
       {reqVarRefExpr("port"),
-       optICEExpr("lines"), optICEExpr("depth"), optICEExpr("ways"),
-       optICEExpr("users"),
-       optEnum("burst", {"off", "on"/*, "adaptive"*/}),
+       optICEExpr("lines"), optICEExpr("depth"), /*optICEExpr("ways"),*/
+       /*optICEExpr("users"),*/
+     //optEnum("burst", {"off", "on"/*, "adaptive"*/}),
        optEnum("write_mode", {"write_back", "write_through"})},
 #endif
        PragmaLoc);
@@ -3550,8 +3752,11 @@ static bool HandleCachePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     getSubExprOfVariable(subExprs, var_expr, PAP.P);
     for (auto port_ref : subExprs) {
       ArgsUnion args[] = { port_ref, PAP.lookup("lines"), PAP.lookup("depth"),
-                           PAP.lookup("ways"), PAP.lookup("users"), 
-                          burst, write_mode
+                           /*PAP.lookup("ways"), PAP.lookup("users"),*/
+                           PAP.createIntegerLiteral(1), PAP.createIntegerLiteral(1),
+                          /*burst,*/
+                          PAP.createIdentLoc("off"),
+                          write_mode
                          };
       PAP.addDependenceAttribute("xlx_cache", args);
     }

@@ -1,4 +1,4 @@
-// (c) Copyright 2016-2021 Xilinx, Inc.
+// (c) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -872,7 +872,6 @@ void Directive2pragmaCheck::SetPragma(struct DirectiveDesc *Directived,
       << generatePragma << Name
       << FixItHint::CreateInsertion(BodyStart, generatePragma);
 
-
   InsertedPragma[Directived] = generatePragma;
 
   Directived->success = true; 
@@ -1153,7 +1152,16 @@ std::string
 Directive2pragmaCheck::dumpSetDirectiveLineNo(struct DirectiveDesc *Directived) 
 {
   static int directiveId = 0;
-  int line = ++directiveId;
+  static std::map<DirectiveDesc *, int> DirectiveIDMap;
+  auto It = DirectiveIDMap.find(Directived);
+  int line = 0;
+  if (It != DirectiveIDMap.end()) {
+    line = It->second;
+  } else {
+    line = ++directiveId;
+    DirectiveIDMap[Directived] = line;
+  }
+
   std::string file = "directive";
   if (!Directived->SourceFile.empty()){ 
     line = Directived->SourceLine;

@@ -82,6 +82,41 @@ public:
   Value *CreateSMod(Value *LHS, Value *RHS, const Twine &Name = "");
 
   //===--------------------------------------------------------------------===//
+  Value *CreateFloatCompute(Intrinsic::ID II, ArrayRef<Value*> Args,
+                            ConstantInt *Exp, const Twine &Name = "");
+  Value *CreateFloatCompare(FCmpInst::Predicate Pred, Value *LHS, Value *RHS,
+                            ConstantInt *Exp, const Twine &Name = "");
+  Value *CreateFloatFromFixed(Type *RetTy, Value *Arg, ConstantInt *Int,
+                              ConstantInt *Exp, const Twine &Name = "");
+  Value *CreateFloatToFixed(Type *RetTy, Value *Arg, ConstantInt *Exp,
+                            ConstantInt *Int, const Twine &Name = "");
+  Value *CreateFloatToFloat(Type *RetTy, Value *Arg, ConstantInt *ArgExp,
+                            ConstantInt *RetExp, const Twine &Name = "");
+
+  Value *CreateFloatAdd(Value *LHS, Value *RHS, ConstantInt *Exp,
+                        const Twine &Name = "");
+  Value *CreateFloatSub(Value *LHS, Value *RHS, ConstantInt *Exp,
+                        const Twine &Name = "");
+  Value *CreateFloatMul(Value *LHS, Value *RHS, ConstantInt *Exp,
+                        const Twine &Name = "");
+  Value *CreateFloatDiv(Value *LHS, Value *RHS, ConstantInt *Exp,
+                        const Twine &Name = "");
+  Value *CreateFloatFMA(Value *LHS, Value *RHS, Value *Add, ConstantInt *Exp,
+                        const Twine &Name = "");
+  Value *CreateFloatSqrt(Value *Arg, ConstantInt *Exp, const Twine &Name = "");
+
+  Value *CreateFloatCmpEQ(Value *LHS, Value *RHS, ConstantInt *Exp,
+                          const Twine &Name = "");
+  Value *CreateFloatCmpLT(Value *LHS, Value *RHS, ConstantInt *Exp,
+                          const Twine &Name = "");
+  Value *CreateFloatCmpLE(Value *LHS, Value *RHS, ConstantInt *Exp,
+                          const Twine &Name = "");
+  Value *CreateFloatCmpNE(Value *LHS, Value *RHS, ConstantInt *Exp,
+                          const Twine &Name = "");
+  Value *CreateFloatCmpUO(Value *LHS, Value *RHS, ConstantInt *Exp,
+                          const Twine &Name = "");
+
+  //===--------------------------------------------------------------------===//
   const DataLayout &getDataLayout() const { return DL; }
 
   /// \brief Fetch the type representing a pointer to an integer value.
@@ -149,6 +184,8 @@ public:
   Value *CreateMux(Value *Cond, ArrayRef<Value *> Args, const Twine &Name = "");
 
   /// \brief Create Call to fpga.sparse.mux
+  Value *CreateSparseMux(Value *Cond, Value *Default, ArrayRef<Value *> Args,
+                         const Twine &Name = "");
   Value *CreateSparseMux(Value *Cond, ArrayRef<Value *> Args,
                          const Twine &Name = "");
 
@@ -220,6 +257,18 @@ public:
   /// \brief Creates preserved-properties-per-object access
   Value *CreateFPGAPPPOLoadInst(Value *Ptr, unsigned Align = 0);
   Value *CreateFPGAPPPOStoreInst(Value *V, Value *Ptr, unsigned Align = 0);
+
+  /// \brief Creates direct input output status intrinsic
+  Value *CreateDirectIOStatus(Intrinsic::ID ID, Value *Ptr,
+                              const std::string &HandShake = "");
+  Value *CreateDirectIOValid(Value *Ptr, const std::string &HandShake = "");
+  Value *CreateDirectIOReady(Value *Ptr, const std::string &HandShake = "");
+  /// \brief Creates direct input output access
+  Value *CreateFPGADirectLoadInst(Value *Ptr, const std::string &HandShake = "",
+                                  unsigned Align = 0);
+  Value *CreateFPGADirectStoreInst(Value *V, Value *Ptr,
+                                   const std::string &HandShake = "",
+                                   unsigned Align = 0);
 
   Value *CreateSeqBeginEnd(Intrinsic::ID ID, Value *WordAddr, Value *Size);
   Value *CreateSeqLoadInst(Type *DataTy, Value *Token, Value *Idx);

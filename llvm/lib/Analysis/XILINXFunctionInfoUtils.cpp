@@ -185,13 +185,7 @@ Optional<const std::string> llvm::getTopFunctionName(const Function *F) {
 }
 
 bool llvm::HasVivadoIP(const Function *F) {
-  for (const_inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    if (isa<XlxIPInst>(&*I)) {
-      return true;
-    }
-  }
-  
-  return false;
+  return F->hasFnAttribute("fpga.ipcore"); 
 }
 
 std::string llvm::getFuncSourceFileName(const Function *F) {

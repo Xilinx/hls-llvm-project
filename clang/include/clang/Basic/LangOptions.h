@@ -150,6 +150,8 @@ public:
   /// host code generation.
   std::string OMPHostIRFile;
 
+  double HLSClockPeriod = 1; 
+
   /// \brief Indicates whether the front-end is explicitly told that the
   /// input is a header file (i.e. -x c-header).
   bool IsHeaderFile;

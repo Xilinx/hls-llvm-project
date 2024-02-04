@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -34,6 +35,7 @@
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
@@ -79,6 +81,8 @@ STATISTIC(NumFastStores, "Number of stores deleted");
 STATISTIC(NumFastOther , "Number of other instrs removed");
 STATISTIC(NumCompletePartials, "Number of stores dead by later partials");
 STATISTIC(NumModifiedStores, "Number of stores modified");
+
+extern cl::opt<bool> HLS;
 
 static cl::opt<bool>
 EnablePartialOverwriteTracking("enable-dse-partial-overwrite-tracking",
@@ -264,9 +268,13 @@ static bool isRemovable(Instruction *I) {
     }
   }
 
-  // note: only get here for calls with analyzable writes - i.e. libcalls
-  if (auto CS = CallSite(I))
-    return CS.getInstruction()->use_empty();
+  // note: only get here for calls with analyzable writes
+  if (auto CS = CallSite(I)) {
+    // TODO: Update when port in CallBase
+    auto CB = dyn_cast<CallInst>(CS.getInstruction());
+    return CB && CB->use_empty() && CB->willReturn() && CB->doesNotThrow() &&
+           !CB->isTerminator();
+  }
 
   return false;
 }
@@ -339,6 +347,19 @@ enum OverwriteResult {
 
 } // end anonymous namespace
 
+
+/// Returns true if the given values \p V1 and \p V2 are equivalent.
+/// TODO: Improve reflow access merge to take over this with SCEVCanon.
+static bool isEquivalent(ScalarEvolution *SE, const Value *V1, const Value *V2)
+{
+  if (HLS && SE)
+    return V1 == V2 ||
+           SE->getSCEV(const_cast<Value *>(V1)) ==
+           SE->getSCEV(const_cast<Value *>(V2));
+
+  return V1 == V2;
+}
+
 /// Return 'OW_Complete' if a store to the 'Later' location completely
 /// overwrites a store to the 'Earlier' location, 'OW_End' if the end of the
 /// 'Earlier' location is completely overwritten by 'Later', 'OW_Begin' if the
@@ -352,7 +373,8 @@ static OverwriteResult isOverwrite(const MemoryLocation &Later,
                                    const TargetLibraryInfo &TLI,
                                    int64_t &EarlierOff, int64_t &LaterOff,
                                    Instruction *DepWrite,
-                                   InstOverlapIntervalsTy &IOL) {
+                                   InstOverlapIntervalsTy &IOL,
+                                   ScalarEvolution *SE) {
   // If we don't know the sizes of either access, then we can't do a comparison.
   if (Later.Size == MemoryLocation::UnknownSize ||
       Earlier.Size == MemoryLocation::UnknownSize)
@@ -395,7 +417,7 @@ static OverwriteResult isOverwrite(const MemoryLocation &Later,
   const Value *BP2 = GetPointerBaseWithConstantOffset(P2, LaterOff, DL);
 
   // If the base pointers still differ, we have two completely different stores.
-  if (BP1 != BP2)
+  if (!isEquivalent(SE, BP1, BP2))
     return OW_Unknown;
 
   // The later store completely overlaps the earlier store if:
@@ -1048,6 +1070,7 @@ static bool eliminateNoopStore(Instruction *Inst, BasicBlock::iterator &BBI,
 
 static bool eliminateDeadStores(BasicBlock &BB, AliasAnalysis *AA,
                                 MemoryDependenceResults *MD, DominatorTree *DT,
+                                ScalarEvolution *SE,
                                 const TargetLibraryInfo *TLI) {
   const DataLayout &DL = BB.getModule()->getDataLayout();
   bool MadeChange = false;
@@ -1164,7 +1187,7 @@ static bool eliminateDeadStores(BasicBlock &BB, AliasAnalysis *AA,
         int64_t InstWriteOffset, DepWriteOffset;
         OverwriteResult OR =
             isOverwrite(Loc, DepLoc, DL, *TLI, DepWriteOffset, InstWriteOffset,
-                        DepWrite, IOL);
+                        DepWrite, IOL, SE);
         if (OR == OW_Complete) {
           DEBUG(dbgs() << "DSE: Remove Dead Store:\n  DEAD: "
                 << *DepWrite << "\n  KILLER: " << *Inst << '\n');
@@ -1290,13 +1313,14 @@ static bool eliminateDeadStores(BasicBlock &BB, AliasAnalysis *AA,
 
 static bool eliminateDeadStores(Function &F, AliasAnalysis *AA,
                                 MemoryDependenceResults *MD, DominatorTree *DT,
+                                ScalarEvolution *SE,
                                 const TargetLibraryInfo *TLI) {
   bool MadeChange = false;
   for (BasicBlock &BB : F)
     // Only check non-dead blocks.  Dead blocks may have strange pointer
     // cycles that will confuse alias analysis.
     if (DT->isReachableFromEntry(&BB))
-      MadeChange |= eliminateDeadStores(BB, AA, MD, DT, TLI);
+      MadeChange |= eliminateDeadStores(BB, AA, MD, DT, SE, TLI);
 
   return MadeChange;
 }
@@ -1307,10 +1331,11 @@ static bool eliminateDeadStores(Function &F, AliasAnalysis *AA,
 PreservedAnalyses DSEPass::run(Function &F, FunctionAnalysisManager &AM) {
   AliasAnalysis *AA = &AM.getResult<AAManager>(F);
   DominatorTree *DT = &AM.getResult<DominatorTreeAnalysis>(F);
+  ScalarEvolution *SE = &AM.getResult<ScalarEvolutionAnalysis>(F);
   MemoryDependenceResults *MD = &AM.getResult<MemoryDependenceAnalysis>(F);
   const TargetLibraryInfo *TLI = &AM.getResult<TargetLibraryAnalysis>(F);
 
-  if (!eliminateDeadStores(F, AA, MD, DT, TLI))
+  if (!eliminateDeadStores(F, AA, MD, DT, SE, TLI))
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;
@@ -1336,18 +1361,20 @@ public:
       return false;
 
     DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    ScalarEvolution *SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
     AliasAnalysis *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
     MemoryDependenceResults *MD =
         &getAnalysis<MemoryDependenceWrapperPass>().getMemDep();
     const TargetLibraryInfo *TLI =
         &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
 
-    return eliminateDeadStores(F, AA, MD, DT, TLI);
+    return eliminateDeadStores(F, AA, MD, DT, SE, TLI);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
     AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<MemoryDependenceWrapperPass>();
     AU.addRequired<TargetLibraryInfoWrapperPass>();
@@ -1364,6 +1391,7 @@ char DSELegacyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(DSELegacyPass, "dse", "Dead Store Elimination", false,
                       false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(MemoryDependenceWrapperPass)

@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -302,6 +303,7 @@ BUILTIN(__builtin_tgammal, "LdLd", "Fne")
 BUILTIN(__builtin_trunc , "dd", "Fnc")
 BUILTIN(__builtin_truncf, "ff", "Fnc")
 BUILTIN(__builtin_truncl, "LdLd", "Fnc")
+BUILTIN(__builtin_flt_rounds, "i", "n")
 
 // C99 complex builtins
 BUILTIN(__builtin_cabs, "dXd", "Fne")
@@ -479,7 +481,6 @@ BUILTIN(__builtin_return_address, "v*IUi", "n")
 BUILTIN(__builtin_extract_return_addr, "v*v*", "n")
 BUILTIN(__builtin_frame_address, "v*IUi", "n")
 BUILTIN(__builtin___clear_cache, "vc*c*", "n")
-BUILTIN(__builtin_flt_rounds, "i", "nc")
 BUILTIN(__builtin_setjmp, "iv**", "j")
 BUILTIN(__builtin_longjmp, "vv**i", "r")
 BUILTIN(__builtin_unwind_init, "v", "")

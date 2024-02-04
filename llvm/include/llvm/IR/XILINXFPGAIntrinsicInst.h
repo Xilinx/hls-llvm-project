@@ -31,6 +31,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Operator.h"
@@ -86,6 +87,393 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 };
+
+class FloatInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return is_one_value_of(I->getIntrinsicID(),
+                           Intrinsic::fpga_float_add,
+                           Intrinsic::fpga_float_sub,
+                           Intrinsic::fpga_float_mul,
+                           Intrinsic::fpga_float_div,
+                           Intrinsic::fpga_float_fma,
+                           Intrinsic::fpga_float_sqrt,
+                           Intrinsic::fpga_float_from_fixed,
+                           Intrinsic::fpga_float_to_fixed,
+                           Intrinsic::fpga_float_to_float,
+                           Intrinsic::fpga_float_compare_eq,
+                           Intrinsic::fpga_float_compare_le,
+                           Intrinsic::fpga_float_compare_lt,
+                           Intrinsic::fpga_float_compare_ne,
+                           Intrinsic::fpga_float_compare_uo);
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  /// isCommutative - Return true if the first two arguments can be exchanged
+  // FIXME Unfortunately, IntrinsincInst::isCommutative isn't virtual...
+  bool isCommutative() const {
+    return is_one_value_of(getIntrinsicID(),
+                           Intrinsic::fpga_float_add,
+                           Intrinsic::fpga_float_mul,
+                           Intrinsic::fpga_float_fma,
+                           Intrinsic::fpga_float_compare_eq,
+                           Intrinsic::fpga_float_compare_ne,
+                           Intrinsic::fpga_float_compare_uo);
+  }
+
+  /// isHomogeneous - Return true if all the arguments have the same layout
+  // If true, then there is one extra argument (constant) to record
+  // the common exponent bitwidth;
+  // If false, then there is as many extra argument (constants) as
+  // floating point values (one per input and one for the output) to record
+  // each exponent bitwidth.
+  bool isHomogeneous() const {
+    return !is_one_value_of(getIntrinsicID(),
+                            Intrinsic::fpga_float_from_fixed,
+                            Intrinsic::fpga_float_to_fixed,
+                            Intrinsic::fpga_float_to_float);
+  }
+};
+
+class FloatComputeInst : public FloatInst {
+public:
+  static inline bool classof(const FloatInst *I) {
+    return is_one_value_of(I->getIntrinsicID(),
+                           Intrinsic::fpga_float_add,
+                           Intrinsic::fpga_float_sub,
+                           Intrinsic::fpga_float_mul,
+                           Intrinsic::fpga_float_div,
+                           Intrinsic::fpga_float_fma,
+                           Intrinsic::fpga_float_sqrt);
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FloatInst>(V) && classof(cast<FloatInst>(V));
+  }
+
+  /// getType - Overload to return type as IntegerType
+  IntegerType *getType() const {
+    return cast<IntegerType>(IntrinsicInst::getType());
+  }
+
+  /// getExpArgIndex - Return the ArgOperand index
+  unsigned getExpArgIndex() const { return getNumArgOperands() - 1; }
+
+  /// getExp - Return the Exponent argument as ConstantInt
+  ConstantInt *getExp() const {
+    return cast<ConstantInt>(getArgOperand(getExpArgIndex()));
+  }
+
+  /// getBitwidth - Return the total bitwidth
+  unsigned getBitwidth() const { return getType()->getBitWidth(); }
+
+  /// getExpBitwidth - Return the exponent bitwidth
+  unsigned getExpBitwidth() const {
+    return (unsigned) (getExp()->getZExtValue());
+  }
+
+  /// getMantBitwidth - Return the mantissa bitwidth (includes hidden bit)
+  unsigned getMantBitwidth() const {
+    return getBitwidth() - getExpBitwidth();
+  }
+};
+
+class FloatUnaryInst : public FloatComputeInst {
+public:
+  static inline bool classof(const FloatComputeInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_float_sqrt;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FloatComputeInst>(V) && classof(cast<FloatComputeInst>(V));
+  }
+};
+
+#define FUInst(Name, name)                                                     \
+  class Float##Name##Inst : public FloatUnaryInst {                            \
+  public:                                                                      \
+    static inline bool classof(const FloatUnaryInst *I) {                      \
+      return I->getIntrinsicID() == Intrinsic::fpga_float_##name;              \
+    }                                                                          \
+                                                                               \
+    static inline bool classof(const Value *V) {                               \
+      return isa<FloatUnaryInst>(V) && classof(cast<FloatUnaryInst>(V));       \
+    }                                                                          \
+  };
+FUInst(Sqrt, sqrt)
+#undef FUInst
+
+class FloatBinaryInst : public FloatComputeInst {
+public:
+  static inline bool classof(const FloatComputeInst *I) {
+    return is_one_value_of(I->getIntrinsicID(),
+                           Intrinsic::fpga_float_add,
+                           Intrinsic::fpga_float_sub,
+                           Intrinsic::fpga_float_mul,
+                           Intrinsic::fpga_float_div);
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FloatComputeInst>(V) && classof(cast<FloatComputeInst>(V));
+  }
+};
+
+#define FBInst(Name, name)                                                     \
+  class Float##Name##Inst : public FloatBinaryInst {                           \
+  public:                                                                      \
+    static inline bool classof(const FloatBinaryInst *I) {                     \
+      return I->getIntrinsicID() == Intrinsic::fpga_float_##name;              \
+    }                                                                          \
+                                                                               \
+    static inline bool classof(const Value *V) {                               \
+      return isa<FloatBinaryInst>(V) && classof(cast<FloatBinaryInst>(V));     \
+    }                                                                          \
+  };
+FBInst(Add, add)
+FBInst(Sub, sub)
+FBInst(Mul, mul)
+FBInst(Div, div)
+#undef FBInst
+
+class FloatTernaryInst : public FloatComputeInst {
+public:
+  static inline bool classof(const FloatComputeInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_float_fma;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FloatComputeInst>(V) && classof(cast<FloatComputeInst>(V));
+  }
+};
+
+#define FTInst(Name, name)                                                     \
+  class Float##Name##Inst : public FloatTernaryInst {                          \
+  public:                                                                      \
+    static inline bool classof(const FloatTernaryInst *I) {                    \
+      return I->getIntrinsicID() == Intrinsic::fpga_float_##name;              \
+    }                                                                          \
+                                                                               \
+    static inline bool classof(const Value *V) {                               \
+      return isa<FloatTernaryInst>(V) && classof(cast<FloatTernaryInst>(V));   \
+    }                                                                          \
+  };
+FTInst(FMA, fma)
+#undef FTInst
+
+class FloatCastInst : public FloatInst {
+public:
+  static inline bool classof(const FloatInst *I) {
+    return is_one_value_of(I->getIntrinsicID(),
+                           Intrinsic::fpga_float_from_fixed,
+                           Intrinsic::fpga_float_to_fixed,
+                           Intrinsic::fpga_float_to_float);
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FloatInst>(V) && classof(cast<FloatInst>(V));
+  }
+
+  /// getSrcType - Overload to input type as IntegerType
+  IntegerType *getSrcType() const {
+    return cast<IntegerType>(getArgOperand(0)->getType());
+  }
+
+  /// getDestType - Overload to return type as IntegerType
+  IntegerType *getDestType() const {
+    return cast<IntegerType>(IntrinsicInst::getType());
+  }
+
+  /// getSrcExpArgIndex - Return the SrcArgOperand index
+  unsigned getSrcExpArgIndex() const { return getNumArgOperands() - 2; }
+
+  /// getDestExpArgIndex - Return the DestArgOperand index
+  unsigned getDestExpArgIndex() const { return getNumArgOperands() - 1; }
+
+  /// getSrcExponent - Return the input Exponent argument as ConstantInt
+  ConstantInt *getSrcExp() const {
+    return cast<ConstantInt>(getArgOperand(getSrcExpArgIndex()));
+  }
+
+  /// getDestExponent - Return the return Exponent argument as ConstantInt
+  ConstantInt *getDestExp() const {
+    return cast<ConstantInt>(getArgOperand(getDestExpArgIndex()));
+  }
+
+  /// getSrcBitwidth - Return the input total bitwidth
+  unsigned getSrcBitwidth() const { return getSrcType()->getBitWidth(); }
+
+  /// getDestBitwidth - Return the return total bitwidth
+  unsigned getDestBitwidth() const { return getDestType()->getBitWidth(); }
+
+  /// isSrcFloat - Return true if the input is floating point
+  bool isSrcFloat() const {
+    return getIntrinsicID() == Intrinsic::fpga_float_to_fixed ||
+           getIntrinsicID() == Intrinsic::fpga_float_to_float;
+  }
+
+  /// isSrcFixed - Return true if the input is fixed point
+  bool isSrcFixed() const {
+    return getIntrinsicID() == Intrinsic::fpga_float_from_fixed;
+  }
+
+  /// isDestFloat - Return true if the output is floating point
+  bool isDestFloat() const {
+    return getIntrinsicID() == Intrinsic::fpga_float_from_fixed ||
+           getIntrinsicID() == Intrinsic::fpga_float_to_float;
+  }
+
+  /// isDestFixed - Return true if the output is fixed point
+  bool isDestFixed() const {
+    return getIntrinsicID() == Intrinsic::fpga_float_to_fixed;
+  }
+
+  /// getSrcExpBitwidth - Return the input exponent bitwidth
+  // (only meaningful if isSrcFloat() is true)
+  unsigned getSrcExpBitwidth() const {
+    return (unsigned) (getSrcExp()->getZExtValue());
+  }
+
+  /// getDestExpBitwidth - Return the output exponent bitwidth
+  // (only meaningful if isDestFloat() is true)
+  unsigned getDestExpBitwidth() const {
+    return (unsigned) (getDestExp()->getZExtValue());
+  }
+
+  /// getSrcMantBitwidth - Return the input mantissa bitwidth (includes hidden bit)
+  // (only meaningful if isSrcFloat() is true)
+  unsigned getSrcMantBitwidth() const {
+    return getSrcBitwidth() - getSrcExpBitwidth();
+  }
+
+  /// getDestMantBitwidth - Return the output mantissa bitwidth (includes hidden bit)
+  // (only meaningful if isDestFloat() is true)
+  unsigned getDestMantBitwidth() const {
+    return getDestBitwidth() - getDestExpBitwidth();
+  }
+
+  /// getSrcIntegerBitwidth - Return the input integer bitwidth
+  // (only meaningful if isSrcFixed() is true)
+  unsigned getSrcIntBitwidth() const {
+    return (unsigned) (getSrcExp()->getZExtValue());
+  }
+
+  /// getDestIntegerBitwidth - Return the output integer bitwidth
+  // (only meaningful if isDestFixed() is true)
+  unsigned getDestIntBitwidth() const {
+    return (unsigned) (getDestExp()->getZExtValue());
+  }
+};
+
+#define FCInst(Name, name)                                                     \
+  class Float##Name##Inst : public FloatCastInst {                             \
+  public:                                                                      \
+    static inline bool classof(const FloatCastInst *I) {                       \
+      return I->getIntrinsicID() == Intrinsic::fpga_float_##name;              \
+    }                                                                          \
+                                                                               \
+    static inline bool classof(const Value *V) {                               \
+      return isa<FloatCastInst>(V) && classof(cast<FloatCastInst>(V));         \
+    }                                                                          \
+  };
+FCInst(FromFixed, from_fixed)
+FCInst(ToFixed, to_fixed)
+FCInst(ToFloat, to_float)
+#undef FCInst
+
+class FloatCmpInst : public FloatInst {
+public:
+  static inline bool classof(const FloatInst *I) {
+    return is_one_value_of(I->getIntrinsicID(),
+                           Intrinsic::fpga_float_compare_eq,
+                           Intrinsic::fpga_float_compare_le,
+                           Intrinsic::fpga_float_compare_lt,
+                           Intrinsic::fpga_float_compare_ne,
+                           Intrinsic::fpga_float_compare_uo);
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FloatInst>(V) && classof(cast<FloatInst>(V));
+  }
+
+  /// getPredicate - Return the FCmpInst predicate for this intrinsic
+  CmpInst::Predicate getPredicate() const {
+    switch (getIntrinsicID()) {
+    case Intrinsic::fpga_float_compare_eq: return FCmpInst::FCMP_OEQ;
+    case Intrinsic::fpga_float_compare_le: return FCmpInst::FCMP_OLE;
+    case Intrinsic::fpga_float_compare_lt: return FCmpInst::FCMP_OLT;
+    case Intrinsic::fpga_float_compare_ne: return FCmpInst::FCMP_ONE;
+    case Intrinsic::fpga_float_compare_uo: return FCmpInst::FCMP_UNO;
+    default: return FCmpInst::BAD_FCMP_PREDICATE;
+    }
+  }
+
+  /// getIntrinsicIDForPred - Return the intrinsic for a given FCmpInst predicate
+  static Intrinsic::ID getIntrIDForPred(CmpInst::Predicate Pred) {
+    switch (Pred) {
+    case FCmpInst::FCMP_OEQ: return Intrinsic::fpga_float_compare_eq;
+    case FCmpInst::FCMP_OLE: return Intrinsic::fpga_float_compare_le;
+    case FCmpInst::FCMP_OLT: return Intrinsic::fpga_float_compare_lt;
+    case FCmpInst::FCMP_ONE: return Intrinsic::fpga_float_compare_ne;
+    case FCmpInst::FCMP_UNO: return Intrinsic::fpga_float_compare_uo;
+    default: return Intrinsic::not_intrinsic;
+    }
+  }
+
+  /// isCommutative - Return true if %lhs and %rhs can be exchanged
+  bool isCommutative() const {
+    return is_one_value_of(getIntrinsicID(),
+                           Intrinsic::fpga_float_compare_eq,
+                           Intrinsic::fpga_float_compare_ne,
+                           Intrinsic::fpga_float_compare_uo);
+  }
+
+  /// getInputType - Return input type as IntegerType
+  IntegerType *getInputType() const {
+    return cast<IntegerType>(getArgOperand(0)->getType());
+  }
+
+  /// getExpArgIndex - Return the exp's ArgOperand index
+  unsigned getExpArgIndex() const { return getNumArgOperands() - 1; }
+
+  /// getExp - Return the Exponent argument as ConstantInt
+  ConstantInt *getExp() const {
+    return cast<ConstantInt>(getArgOperand(getExpArgIndex()));
+  }
+
+  /// getBitwidth - Return the input total bitwidth
+  unsigned getBitwidth() const { return getInputType()->getBitWidth(); }
+
+  /// getExpBitwidth - Return the input exponent bitwidth
+  unsigned getExpBitwidth() const {
+    return (unsigned) (getExp()->getZExtValue());
+  }
+
+  /// getMantBitwidth - Return the input mantissa bitwidth (includes hidden bit)
+  unsigned getMantBitwidth() const {
+    return getBitwidth() - getExpBitwidth();
+  }
+};
+
+#define FCInst(Name, name)                                                     \
+  class Float##Name##Inst : public FloatCmpInst {                              \
+  public:                                                                      \
+    static inline bool classof(const FloatCmpInst *I) {                        \
+      return I->getIntrinsicID() == Intrinsic::fpga_float_##name;              \
+    }                                                                          \
+                                                                               \
+    static inline bool classof(const Value *V) {                               \
+      return isa<FloatCmpInst>(V) && classof(cast<FloatCmpInst>(V));           \
+    }                                                                          \
+  };
+FCInst(CmpEQ, compare_eq)
+FCInst(CmpLE, compare_le)
+FCInst(CmpLT, compare_lt)
+FCInst(CmpNE, compare_ne)
+FCInst(CmpUO, compare_uo)
+#undef FCInst
 
 /// This represents the fpga_bit_concat
 class BitConcatInst : public IntrinsicInst {
@@ -338,6 +726,11 @@ public:
 };
 
 /// This represents the fpga_sparse_mux
+// Arguments:
+//  0: Condition
+//  1: Default case's value (undef if unused)
+//  2i+2: i-th case's label (always constant)
+//  2i+3: i-th case's value
 class FPGASparseMuxInst : public IntrinsicInst {
 public:
   static inline bool classof(const IntrinsicInst *I) {
@@ -358,16 +751,28 @@ public:
     return cast<IntegerType>(getArgOperand(0)->getType());
   }
 
-  /// \brief Return the Number of input value
+  /// \brief Return the Default value
+  Value *getDefaultValue() const {
+    return getArgOperand(1);
+  }
+
+  /// \brief Has a Default value
+  bool hasDefaultValue() const {
+    return !isa<UndefValue>(getDefaultValue());
+  }
+
+  /// \brief Return the Number of input value (excluding default value)
   unsigned getNumMuxValues() const {
-    assert(getNumArgOperands()%2 == 1);
-    return (getNumArgOperands() - 1)/2;
+    unsigned NumArgs = getNumArgOperands();
+    assert(NumArgs >= 2);
+    assert(NumArgs % 2 == 0);
+    return (NumArgs - 2)/2;
   }
 
   /// \brief Return the Constant that the Condition must take in order for
   ///        the mux to return the Idx-th mux Value
   ConstantInt *getMuxCase(unsigned Idx) const {
-    Value *Arg = getArgOperand(2*Idx + 1);
+    Value *Arg = getArgOperand(2*Idx + 2);
     assert(Arg->getType() == getConditionType());
     return cast<ConstantInt>(Arg);
   }
@@ -375,34 +780,34 @@ public:
   /// \brief Return the Idx-th mux Value that will be returned when Condition
   ///        is selected by the Idx-th case
   Value *getMuxValue(unsigned Idx) const {
-    Value *Arg = getArgOperand(2*Idx + 2);
+    Value *Arg = getArgOperand(2*Idx + 3);
     assert(Arg->getType() == this->getType());
     return Arg;
   }
 
   /// \brief Set the Idx-th case's condition
   void setMuxCase(unsigned Idx, ConstantInt *Cst) {
-    return setArgOperand(2*Idx + 1, Cst);
+    return setArgOperand(2*Idx + 2, Cst);
   }
 
   /// \brief Set the Idx-th case's Value
   void setMuxValue(unsigned Idx, Value *Val) {
-    return setArgOperand(2*Idx + 2, Val);
+    return setArgOperand(2*Idx + 3, Val);
   }
 
   /// \brief Return the Use for when Condition is equal to Idx
   const Use &getMuxUse(unsigned Idx) const {
-    return getArgOperandUse(2*Idx + 2);
+    return getArgOperandUse(2*Idx + 3);
   }
 
   /// \brief Return the Use for when Condition is equal to Idx
   Use &getMuxUse(unsigned Idx) {
-    return getArgOperandUse(2*Idx + 2);
+    return getArgOperandUse(2*Idx + 3);
   }
 
   /// \brief Return Condition value that correspond to the Use
   unsigned getMuxUseIdx(const Use *U) const {
-    return (U - arg_begin() - 2)/2;
+    return (U - arg_begin() - 3)/2;
   }
 };
 
@@ -753,6 +1158,117 @@ public:
   unsigned getAlignment() const { return getParamAlignment(1); }
 };
 
+class FPGADirectIOInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_direct_valid ||
+           I->getIntrinsicID() == Intrinsic::fpga_direct_ready ||
+           I->getIntrinsicID() == Intrinsic::fpga_direct_load ||
+           I->getIntrinsicID() == Intrinsic::fpga_direct_store;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  // DirectIO operand is always the last one
+  Value *getDirectIOOperand() { return getArgOperand(getNumArgOperands() - 1); }
+  const Value *getDirectIOOperand() const {
+    return getArgOperand(getNumArgOperands() - 1);
+  }
+
+  PointerType *getDirectIOType() const {
+    return cast<PointerType>(getDirectIOOperand()->getType());
+  }
+  Type *getDataType() const { return getDirectIOType()->getElementType(); }
+
+  std::string getHandShake() const {
+    auto HandShake =
+        getAttributes().getAttribute(
+            llvm::AttributeList::FunctionIndex, "xlx.handshake");
+    return HandShake.getValueAsString();
+  }
+
+  unsigned getAlignment() const {
+    return getParamAlignment(getNumArgOperands() - 1);
+  }
+};
+
+class FPGADirectIOStatusInst : public FPGADirectIOInst {
+public:
+  static inline bool classof(const FPGADirectIOInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_direct_valid ||
+           I->getIntrinsicID() == Intrinsic::fpga_direct_ready;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGADirectIOInst>(V) && classof(cast<FPGADirectIOInst>(V));
+  }
+};
+
+class FPGADirectIOValidInst : public FPGADirectIOStatusInst {
+public:
+  static inline bool classof(const FPGADirectIOStatusInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_direct_valid;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGADirectIOStatusInst>(V) &&
+           classof(cast<FPGADirectIOStatusInst>(V));
+  }
+};
+
+class FPGADirectIOReadyInst : public FPGADirectIOStatusInst {
+public:
+  static inline bool classof(const FPGADirectIOStatusInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_direct_ready;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGADirectIOStatusInst>(V) &&
+           classof(cast<FPGADirectIOStatusInst>(V));
+  }
+};
+
+class FPGADirectLoadStoreInst : public FPGADirectIOInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_direct_load ||
+           I->getIntrinsicID() == Intrinsic::fpga_direct_store;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
+class FPGADirectLoadInst : public FPGADirectLoadStoreInst {
+public:
+  static inline bool classof(const FPGADirectLoadStoreInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_direct_load;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGADirectLoadStoreInst>(V) &&
+           classof(cast<FPGADirectLoadStoreInst>(V));
+  }
+};
+
+class FPGADirectStoreInst : public FPGADirectLoadStoreInst {
+public:
+  static inline bool classof(const FPGADirectLoadStoreInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_direct_store;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FPGADirectLoadStoreInst>(V) &&
+           classof(cast<FPGADirectLoadStoreInst>(V));
+  }
+
+  Value *getDataOperand() { return getArgOperand(0); }
+  const Value *getDataOperand() const { return getArgOperand(0); }
+};
+
 class FPGALoadInst : public FPGALoadStoreInst {
 public:
   static inline bool classof(const FPGALoadStoreInst *I) {
@@ -1089,6 +1605,12 @@ public:
 
   static inline bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+  // check if the Value (under the Use) is from an AXIS port or not
+  static bool isFromAXISWithSideChannelPort(Use &U) {
+    if (!isa<AXISIntrinsicInst>(U.getUser()))
+      return false;
+    return U.getOperandNo() < AXISIntrinsicInst::NumChannels;
   }
 
   bool isConsumerSide() const {
@@ -1507,19 +2029,78 @@ public:
 
 //===---
 //
-//  Directive Scope
+//  Scope
 //
 //===---
 
-class DirectiveScopeExit;
-class DirectiveScopeEntry : public IntrinsicInst {
-public:
+struct ScopeEntry : public IntrinsicInst {
   static inline bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::directive_scope_entry;
+    return I->getIntrinsicID() == Intrinsic::directive_scope_entry ||
+           I->getIntrinsicID() == Intrinsic::hint_scope_entry;
   }
 
   static inline bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  template <typename T>
+  T *getScopeAttrs(ArrayRef<Value *> Attr, unsigned i) const {
+    if (Attr.size() <= i)
+      return nullptr;
+    return dyn_cast<T>(Attr[i]);
+  }
+
+  StringRef getPragmaSource(StringRef pragmaName) const {
+    MDNode *md = getMetadata("pragma.location");
+    if (!md)
+      return StringRef();
+
+    auto Name = dyn_cast<MDString>(md->getOperand(0));
+    assert(Name && Name->getString() == pragmaName && "unexpected");
+    return getPragmaSourceFromMDNode(md);
+  }
+
+  DILocation *getPragmaLoc(StringRef pragmaName) const {
+    MDNode *md = getMetadata("pragma.location");
+    if (!md)
+      return nullptr;
+
+    auto Name = dyn_cast<MDString>(md->getOperand(0));
+    assert(Name && Name->getString() == pragmaName && "unexpected");
+    return dyn_cast_or_null<DILocation>(
+        md->getOperand(md->getNumOperands() - 1));
+  }
+};
+
+struct ScopeExit : public IntrinsicInst {
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::directive_scope_exit ||
+           I->getIntrinsicID() == Intrinsic::hint_scope_exit;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  ScopeEntry *getEntry() const {
+    return dyn_cast_or_null<ScopeEntry>(getArgOperand(0));
+  }
+};
+
+//===---
+//
+//  Directive Scope
+//
+//===---
+
+struct DirectiveScopeExit;
+struct DirectiveScopeEntry : public ScopeEntry {
+  static inline bool classof(const ScopeEntry *I) {
+    return I->getIntrinsicID() == Intrinsic::directive_scope_entry;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<ScopeEntry>(V) && classof(cast<ScopeEntry>(V));
   }
 
   static DirectiveScopeExit *
@@ -1530,64 +2111,71 @@ public:
                                                  ArrayRef<Value *> Operands,
                                                  Instruction &Entry,
                                                  Instruction &Exit);
-  template <typename T>
-  T *getScopeAttrs(ArrayRef<Value *> Attr, unsigned i) const {
-    if (Attr.size() <= i)
-      return nullptr;
-    return dyn_cast<T>(Attr[i]);
-  }
-
-  StringRef getPragmaSource(StringRef pragmaName) const {
-    MDNode *md = getMetadata("pragma.location");
-    if (!md) { 
-      return StringRef();
-    }
-
-    assert(isa<MDString>(md->getOperand(0)) && "unexpected"); 
-    assert(cast<MDString>(md->getOperand(0))->getString() == pragmaName && "unexpected"); 
-    return getPragmaSourceFromMDNode(md);
-  }
-
-  DILocation *getPragmaLoc(StringRef pragmaName) const {
-    MDNode *md = getMetadata("pragma.location");
-    if (!md) { 
-      return nullptr;
-    }
-
-    assert(isa<MDString>(md->getOperand(0)) && "unexpected"); 
-    assert(cast<MDString>(md->getOperand(0))->getString() == pragmaName && "unexpected"); 
-    assert(isa<DILocation>(md->getOperand(md->getNumOperands() - 1)) && "unexpected"); 
-    return cast<DILocation>(md->getOperand(md->getNumOperands() - 1));
-  }
-
 };
 
-class DirectiveScopeExit : public IntrinsicInst {
-public:
-  static inline bool classof(const IntrinsicInst *I) {
+struct DirectiveScopeExit : public ScopeExit {
+  static inline bool classof(const ScopeExit *I) {
     return I->getIntrinsicID() == Intrinsic::directive_scope_exit;
   }
 
   static inline bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    return isa<ScopeExit>(V) && classof(cast<ScopeExit>(V));
   }
 
   DirectiveScopeEntry *getEntry() const {
-    return cast<DirectiveScopeEntry>(getArgOperand(0));
+    return dyn_cast_or_null<DirectiveScopeEntry>(getArgOperand(0));
   }
 };
 
-#define DEFINE_DIRECTIVE_SCOPE(Name, Tag)                                      \
-  class Name##Exit;                                                            \
-  class Name##Entry : public DirectiveScopeEntry {                             \
-  public:                                                                      \
-    static inline bool classof(const DirectiveScopeEntry *I) {                 \
+//===---
+//
+//  Hint Scope
+//
+//===---
+
+struct HintScopeExit;
+struct HintScopeEntry : public ScopeEntry {
+  static inline bool classof(const ScopeEntry *I) {
+    return I->getIntrinsicID() == Intrinsic::hint_scope_entry;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<ScopeEntry>(V) && classof(cast<ScopeEntry>(V));
+  }
+
+  static HintScopeExit *
+  BuildHintScope(ArrayRef<OperandBundleDef> ScopeAttrs, Instruction &Entry,
+                 Instruction &Exit);
+
+  static HintScopeExit *BuildHintScope(StringRef Tag,
+                                       ArrayRef<Value *> Operands,
+                                       Instruction &Entry, Instruction &Exit);
+};
+
+struct HintScopeExit : public ScopeExit {
+  static inline bool classof(const ScopeExit *I) {
+    return I->getIntrinsicID() == Intrinsic::hint_scope_exit;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<ScopeExit>(V) && classof(cast<ScopeExit>(V));
+  }
+
+  HintScopeEntry *getEntry() const {
+    return dyn_cast_or_null<HintScopeEntry>(getArgOperand(0));
+  }
+};
+
+#define DEFINE_SCOPE(Kind, Name, Tag)                                          \
+  struct Name##Exit;                                                           \
+  struct Name##Entry : public Kind##ScopeEntry {                               \
+    static inline bool classof(const Kind##ScopeEntry *I) {                    \
       return I->getOperandBundle(#Tag) != None;                                \
     }                                                                          \
                                                                                \
     static inline bool classof(const Value *V) {                               \
-      return isa<DirectiveScopeEntry>(V) &&                                    \
-             classof(cast<DirectiveScopeEntry>(V));                            \
+      return isa<Kind##ScopeEntry>(V) &&                                       \
+             classof(cast<Kind##ScopeEntry>(V));                               \
     }                                                                          \
                                                                                \
     ArrayRef<Use> getScopeAttrs() const {                                      \
@@ -1615,7 +2203,7 @@ public:
                                                                                \
     static Name##Exit *Build##Name(Instruction &Entry, Instruction &Exit,      \
                                    ArrayRef<Value *> Operands = None) {        \
-      return cast<Name##Exit>(DirectiveScopeEntry::BuildDirectiveScope(        \
+      return cast<Name##Exit>(Kind##ScopeEntry::Build##Kind##Scope(            \
           #Tag, Operands, Entry, Exit));                                       \
     }                                                                          \
                                                                                \
@@ -1626,43 +2214,55 @@ public:
                                                                                \
   };                                                                           \
                                                                                \
-  class Name##Exit : public DirectiveScopeExit {                               \
-  public:                                                                      \
-    static inline bool classof(const DirectiveScopeExit *I) {                  \
+  struct Name##Exit : public Kind##ScopeExit {                                 \
+    static inline bool classof(const Kind##ScopeExit *I) {                     \
       return isa<Name##Entry>(I->getEntry());                                  \
     }                                                                          \
                                                                                \
     static inline bool classof(const Value *V) {                               \
-      return isa<DirectiveScopeExit>(V) &&                                     \
-             classof(cast<DirectiveScopeExit>(V));                             \
+      return isa<Kind##ScopeExit>(V) &&                                        \
+             classof(cast<Kind##ScopeExit>(V));                                \
     }                                                                          \
                                                                                \
     Name##Entry *getEntry() const {                                            \
-      return cast<Name##Entry>(DirectiveScopeExit::getEntry());                \
+      return cast<Name##Entry>(Kind##ScopeExit::getEntry());                   \
     }                                                                          \
   };
 
-DEFINE_DIRECTIVE_SCOPE(SingleWorkItem, xcl_single_workitem)
-DEFINE_DIRECTIVE_SCOPE(UnrollWorkItem, xcl_unroll_workitems)
-DEFINE_DIRECTIVE_SCOPE(PipelineWorkItem, xcl_pipeline_workitems)
-DEFINE_DIRECTIVE_SCOPE(ImplicitBarrier, implicit_barrier)
-DEFINE_DIRECTIVE_SCOPE(SPMDRegion, fpga_spmd_region)
-DEFINE_DIRECTIVE_SCOPE(GlobalIdSLTRegion, global_id_slt)
-DEFINE_DIRECTIVE_SCOPE(GlobalIdULTRegion, global_id_ult)
+DEFINE_SCOPE(Directive, SingleWorkItem, xcl_single_workitem)
+DEFINE_SCOPE(Directive, UnrollWorkItem, xcl_unroll_workitems)
+DEFINE_SCOPE(Directive, PipelineWorkItem, xcl_pipeline_workitems)
+DEFINE_SCOPE(Directive, ImplicitBarrier, implicit_barrier)
+DEFINE_SCOPE(Directive, SPMDRegion, fpga_spmd_region)
+DEFINE_SCOPE(Directive, GlobalIdSLTRegion, global_id_slt)
+DEFINE_SCOPE(Directive, GlobalIdULTRegion, global_id_ult)
 
-DEFINE_DIRECTIVE_SCOPE(PipelineStage, pipeline_stage)
-DEFINE_DIRECTIVE_SCOPE(OutlineRegion, xcl_outline)
-DEFINE_DIRECTIVE_SCOPE(LatencyRegion, xcl_latency)
-DEFINE_DIRECTIVE_SCOPE(PerformanceRegion, xlx_performance)
-DEFINE_DIRECTIVE_SCOPE(ExprBalanceRegion, xlx_expr_balance)
-DEFINE_DIRECTIVE_SCOPE(InlineRegion, xcl_inline)
-DEFINE_DIRECTIVE_SCOPE(OccurrenceRegion, xlx_occurrence)
-DEFINE_DIRECTIVE_SCOPE(ProtocolRegion, xlx_protocol)
-DEFINE_DIRECTIVE_SCOPE(LoopMergeRegion, xlx_merge_loop)
+DEFINE_SCOPE(Directive, PipelineStage, pipeline_stage)
+DEFINE_SCOPE(Directive, OutlineRegion, xcl_outline)
+DEFINE_SCOPE(Directive, LatencyRegion, xcl_latency)
+DEFINE_SCOPE(Directive, PerformanceRegion, xlx_performance)
+DEFINE_SCOPE(Directive, ExprBalanceRegion, xlx_expr_balance)
+DEFINE_SCOPE(Directive, InlineRegion, xcl_inline)
+DEFINE_SCOPE(Directive, OccurrenceRegion, xlx_occurrence)
+DEFINE_SCOPE(Directive, ProtocolRegion, xlx_protocol)
+DEFINE_SCOPE(Directive, LoopMergeRegion, xlx_merge_loop)
+DEFINE_SCOPE(Directive, FunctionAllocationRegion, xlx_function_allocation)
+DEFINE_SCOPE(Directive, ResourceRegion, fpga_resource_hint)
+DEFINE_SCOPE(Directive, ResourceLimitRegion, fpga_resource_limit_hint)
+DEFINE_SCOPE(Directive, ComputeRegion, fpga_compute_region)
+DEFINE_SCOPE(Directive, InfiniteTask, xlx_infinite_task_def)
+DEFINE_SCOPE(Directive, Task, xlx_task_def)
 
-DEFINE_DIRECTIVE_SCOPE(ResourceRegion, fpga_resource_hint)
-DEFINE_DIRECTIVE_SCOPE(ResourceLimitRegion, fpga_resource_limit_hint)
-DEFINE_DIRECTIVE_SCOPE(ComputeRegion, fpga_compute_region)
+DEFINE_SCOPE(Hint, LatencyHintRegion, xcl_latency)
+DEFINE_SCOPE(Hint, PerformanceHintRegion, xlx_performance)
+DEFINE_SCOPE(Hint, ExprBalanceHintRegion, xlx_expr_balance)
+DEFINE_SCOPE(Hint, OccurrenceHintRegion, xlx_occurrence)
+DEFINE_SCOPE(Hint, LoopMergeHintRegion, xlx_merge_loop)
+DEFINE_SCOPE(Hint, FunctionAllocationHintRegion, xlx_function_allocation)
+DEFINE_SCOPE(Hint, ResourceHintRegion, fpga_resource_hint)
+DEFINE_SCOPE(Hint, ResourceLimitHintRegion, fpga_resource_limit_hint)
+DEFINE_SCOPE(Hint, InfiniteTaskHintRegion, xlx_infinite_task_def)
+DEFINE_SCOPE(Hint, TaskHintRegion, xlx_task_def)
 
 /// This represent the fpga_ssa_keep
 class SSAKeepInst : public IntrinsicInst {
@@ -1788,12 +2388,12 @@ public:
 
     Call->setOnlyAccessesInaccessibleMemory();
     Call->setDoesNotThrow();
+    Call->setWillReturn();
   }
- 
+
   void setAttributesForPragma(int64_t TypeSize = -1,
                               StringRef Source = "infer-from-design") {
-    auto F = this->getParent()->getParent();
-    setAttributesForCall(F->getContext(), this, TypeSize, Source);
+    setAttributesForCall(getContext(), this, TypeSize, Source);
   }
 
   // Create a PragmaInst and insert it before InsertBefore.
@@ -1927,13 +2527,7 @@ public:
   bool setPragmaVarAllocaSizeInBits(int64_t NewTypeSize) {
     if (NewTypeSize < 0)
       return false;
-    auto F = this->getParent()->getParent();
-    std::pair<unsigned int, llvm::Attribute> attrs = { std::make_pair(llvm::AttributeList::FunctionIndex, 
-              llvm::Attribute::get(F->getContext(), "xlx.port.bitwidth", std::to_string(NewTypeSize))) };
-    llvm::AttributeList attr_list = llvm::AttributeList::get( F->getContext(), attrs);
-    this->setAttributes(attr_list);
-    this->setOnlyAccessesInaccessibleMemory();
-    this->setDoesNotThrow();
+    setAttributesForPragma(NewTypeSize);
     return true;
   }
 
@@ -1942,10 +2536,7 @@ public:
   // 0:  means don't know exact size
   // So both -1 and 0 are invalid value
   bool hasValidPragmaVarAllocaSizeInBits() const {
-    if ((this->getPragmaVarAllocaSizeInBits()) > 0)
-      return true;
-    else
-      return false;
+    return this->getPragmaVarAllocaSizeInBits() > 0;
   }
 
   uint64_t guessPragmaVarAllocaSizeInBits(const DataLayout &DL) const;
@@ -2604,22 +3195,75 @@ public:
 
   Value *getStream() const { return getVariable(); }
 
-  static void get(Value *V, SetVector<StreamPragmaInst *> &PSet) {
-    return PragmaInst::get(V, PSet, false);
+  static void get(Value *V, SetVector<StreamPragmaInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
   }
 
   static void get(const Value *V,
-                  SetVector<const StreamPragmaInst *> &PSet) {
-    return PragmaInst::get(V, PSet, false);
+                  SetVector<const StreamPragmaInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
   }
 
-  static StreamPragmaInst *get(Value *V) {
-    return PragmaInst::get<StreamPragmaInst>(V, false);
+  static StreamPragmaInst *get(Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<StreamPragmaInst>(V, PopulateGEP);
   }
 
-  static const StreamPragmaInst *get(const Value *V) {
-    return PragmaInst::get<StreamPragmaInst>(V, false);
+  static const StreamPragmaInst *get(const Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<StreamPragmaInst>(V, PopulateGEP);
   }
+};
+
+class ScalarStreamInst : public PragmaInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+#if 0
+  static inline unsigned getConstValueNum() { return 2; }
+
+  int32_t getDepth() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal aggregate intrinsic");
+    ConstantInt *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
+    return (int32_t)Depth->getSExtValue();
+  }
+
+  bool isOff() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal aggregate intrinsic");
+    ConstantInt *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[2]);
+    return Depth->getSExtValue() > 0;
+  }
+
+  Value *getStream() const { return getVariable(); }
+
+  static void get(Value *V, SetVector<ScalarStreamInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
+  }
+
+  static void get(const Value *V,
+                  SetVector<const ScalarStreamInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
+  }
+
+  static ScalarStreamInst *get(Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<ScalarStreamInst>(V, PopulateGEP);
+  }
+
+  static const ScalarStreamInst *get(const Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<ScalarStreamInst>(V, PopulateGEP);
+  }
+#endif
 };
 
 class StreamOfBlocksPragmaInst : public PragmaInst {
@@ -2641,12 +3285,13 @@ public:
   }
 
   Value *getStream() const { return getVariable(); }
-  static StreamOfBlocksPragmaInst *get(Value *V) {
-    return PragmaInst::get<StreamOfBlocksPragmaInst>(V, false);
+  static StreamOfBlocksPragmaInst *get(Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<StreamOfBlocksPragmaInst>(V, PopulateGEP);
   }
 
-  static const StreamOfBlocksPragmaInst *get(const Value *V) {
-    return PragmaInst::get<StreamOfBlocksPragmaInst>(V, false);
+  static const StreamOfBlocksPragmaInst *get(
+                   const Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<StreamOfBlocksPragmaInst>(V, PopulateGEP);
   }
 };
 
@@ -2667,7 +3312,7 @@ public:
     return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
   }
 
-  static inline unsigned getConstValueNum() { return 1; }
+  static inline unsigned getConstValueNum() { return 2; }
 
   Value *getPipo() const { return getVariable(); }
   int getDepth() const {
@@ -2684,21 +3329,23 @@ public:
     return (int)Type->getSExtValue();
   }
 
-  static void get(Value *V, SetVector<PipoPragmaInst *> &PSet) {
-    return PragmaInst::get(V, PSet, false);
+  static void get(Value *V, SetVector<PipoPragmaInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
   }
 
   static void get(const Value *V,
-                  SetVector<const PipoPragmaInst *> &PSet) {
-    return PragmaInst::get(V, PSet, false);
+                  SetVector<const PipoPragmaInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
   }
 
-  static PipoPragmaInst *get(Value *V) {
-    return PragmaInst::get<PipoPragmaInst>(V, false);
+  static PipoPragmaInst *get(Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<PipoPragmaInst>(V, PopulateGEP);
   }
 
-  static const PipoPragmaInst *get(const Value *V) {
-    return PragmaInst::get<PipoPragmaInst>(V, false);
+  static const PipoPragmaInst *get(const Value *V, bool PopulateGEP = false) {
+    return PragmaInst::get<PipoPragmaInst>(V, PopulateGEP);
   }
 };
 
@@ -2758,20 +3405,24 @@ public:
   static inline bool classof(const Value *V) {
     return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
   }
-  static inline const BindStoragePragmaInst *get(Value *V) {
-    return PragmaInst::get<BindStoragePragmaInst>(V, false);
+  static inline const BindStoragePragmaInst *get(Value *V, 
+                                                 bool PopulateGEP = false) {
+    return PragmaInst::get<BindStoragePragmaInst>(V, PopulateGEP);
   }
 
-  static inline const BindStoragePragmaInst *get(const Value *V) {
-    return PragmaInst::get<BindStoragePragmaInst>(V, false);
+  static inline const BindStoragePragmaInst *get(const Value *V,
+                                                 bool PopulateGEP = false) {
+    return PragmaInst::get<BindStoragePragmaInst>(V, PopulateGEP);
   }
-  static void get(Value *V, SetVector<BindStoragePragmaInst *> &PSet) {
-    return PragmaInst::get(V, PSet, false);
+  static void get(Value *V, SetVector<BindStoragePragmaInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
   }
 
   static void get(const Value *V,
-                  SetVector<const BindStoragePragmaInst *> &PSet) {
-    return PragmaInst::get(V, PSet, false);
+                  SetVector<const BindStoragePragmaInst *> &PSet,
+                  bool PopulateGEP = false) {
+    return PragmaInst::get(V, PSet, PopulateGEP);
   }
 
   static inline unsigned getConstValueNum() { return 3; }
@@ -3792,7 +4443,30 @@ private:
   }
 };
 
-class ApStableInst : public InterfaceInst {
+class ScalarInterfaceInst : public InterfaceInst {
+public:
+  static inline bool classof(const PragmaInst *I) {
+    return isa<ApStableInst>(I) || isa<ApNoneInst>(I) || isa<ApAckInst>(I) ||
+           isa<ApVldInst>(I) || isa<ApOvldInst>(I) || isa<ApHsInst>(I);
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  bool isDirectIO() const {
+    // Direct IO control info is encoded as the last operand in scalar
+    // interface operand.
+    auto CS = CallSite(const_cast<ScalarInterfaceInst *>(this));
+    auto DirectIO = dyn_cast<ConstantInt>(*(CS.data_operands_end()-1));
+    assert(DirectIO && (DirectIO->isZero() || DirectIO->isOne()) &&
+           "Expect boolean value for direct input/output control");
+
+    return DirectIO->isOne();
+  }
+};
+
+class ApStableInst : public ScalarInterfaceInst {
 public:
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
@@ -3834,19 +4508,16 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 3;
+    return 4;
   }
 
   bool isValidInst() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    if (Bundle && Bundle.getValue().Inputs.size() == getNumArgs())
-      return true;
-    else
-      return false;
+    return Bundle && Bundle.getValue().Inputs.size() == getNumArgs();
   }
 };
 
-class ApNoneInst : public InterfaceInst {
+class ApNoneInst : public ScalarInterfaceInst {
 public:
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
@@ -3888,19 +4559,16 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 3;
+    return 4;
   }
 
   bool isValidInst() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    if (Bundle && Bundle.getValue().Inputs.size() == getNumArgs())
-      return true;
-    else
-      return false;
+    return Bundle && Bundle.getValue().Inputs.size() == getNumArgs();
   }
 };
 
-class ApAckInst : public InterfaceInst {
+class ApAckInst : public ScalarInterfaceInst {
 public:
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
@@ -3942,19 +4610,16 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 3;
+    return 4;
   }
 
   bool isValidInst() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    if (Bundle && Bundle.getValue().Inputs.size() == getNumArgs())
-      return true;
-    else
-      return false;
+    return Bundle && Bundle.getValue().Inputs.size() == getNumArgs();
   }
 };
 
-class ApVldInst : public InterfaceInst {
+class ApVldInst : public ScalarInterfaceInst {
 public:
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
@@ -4004,19 +4669,16 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 4;
+    return 5;
   }
 
   bool isValidInst() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    if (Bundle && Bundle.getValue().Inputs.size() == getNumArgs())
-      return true;
-    else
-      return false;
+    return Bundle && Bundle.getValue().Inputs.size() == getNumArgs();
   }
 };
 
-class ApOvldInst : public InterfaceInst {
+class ApOvldInst : public ScalarInterfaceInst {
 public:
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
@@ -4057,19 +4719,16 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 3;
+    return 4;
   }
 
   bool isValidInst() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    if (Bundle && Bundle.getValue().Inputs.size() == getNumArgs())
-      return true;
-    else
-      return false;
+    return Bundle && Bundle.getValue().Inputs.size() == getNumArgs();
   }
 };
 
-class ApHsInst : public InterfaceInst {
+class ApHsInst : public ScalarInterfaceInst {
 public:
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
@@ -4118,15 +4777,12 @@ public:
 
 private:
   unsigned getNumArgs() const {
-    return 4;
+    return 5;
   }
 
   bool isValidInst() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    if (Bundle && Bundle.getValue().Inputs.size() == getNumArgs())
-      return true;
-    else
-      return false;
+    return Bundle && Bundle.getValue().Inputs.size() == getNumArgs();
   }
 };
 
@@ -4317,6 +4973,10 @@ public:
 
   uint64_t getLines() const {
     return cast<ConstantInt>(getOperand(1))->getZExtValue();
+  }
+
+  uint64_t getDepth() const {
+    return cast<ConstantInt>(getOperand(2))->getZExtValue();
   }
 
   static void get(Value *V, SetVector<MaxiCacheInst *> &PSet, bool Indirect = true) {

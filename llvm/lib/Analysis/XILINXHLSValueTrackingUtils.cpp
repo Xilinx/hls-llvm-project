@@ -1,4 +1,5 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -78,6 +79,18 @@ bool llvm::IsHLSStream(const Value *V) {
       }
     }
   }
+  return false;
+}
+
+bool llvm::IsHLSRegion(const CallInst *Call) {
+  if (isa<ScopeEntry>(Call) || isa<ScopeExit>(Call))
+    return true;
+
+  if (auto *F = Call->getCalledFunction()) {
+    auto name = F->getName();
+    return name.equals("_ssdm_RegionBegin") || name.equals("_ssdm_RegionEnd");
+  }
+
   return false;
 }
 

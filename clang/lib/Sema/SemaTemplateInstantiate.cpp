@@ -1385,7 +1385,7 @@ TemplateInstantiator::TransformXlxPerfomanceAttr(const XlxPerformanceAttr *A) {
 
   return (::new (S.Context) XlxPerformanceAttr(
       A->getRange(), S.Context, TargetTIExpr, TargetTLExpr, AssumeTIExpr,
-      AssumeTLExpr, A->getPerformanceScope(), A->getSpellingListIndex()));
+      AssumeTLExpr, A->getUnit(), A->getPerformanceScope(), A->getSpellingListIndex()));
 }
 
 const XlxArrayStencilAttr *TemplateInstantiator::TransformXlxArrayStencilAttr(

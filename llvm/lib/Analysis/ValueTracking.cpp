@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -32,6 +32,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -3994,47 +3995,38 @@ bool llvm::isGuaranteedToTransferExecutionToSuccessor(const Instruction *I) {
     return !RMWI->isVolatile();
   if (const MemIntrinsic *MII = dyn_cast<MemIntrinsic>(I))
     return !MII->isVolatile();
+  if (const FPGALoadStoreInst *FLI = dyn_cast<FPGALoadStoreInst>(I))
+    return !FLI->isVolatile();
 
   // If there is no successor, then execution can't transfer to it.
-  if (const auto *CRI = dyn_cast<CleanupReturnInst>(I))
-    return !CRI->unwindsToCaller();
-  if (const auto *CatchSwitch = dyn_cast<CatchSwitchInst>(I))
-    return !CatchSwitch->unwindsToCaller();
-  if (isa<ResumeInst>(I))
-    return false;
   if (isa<ReturnInst>(I))
     return false;
   if (isa<UnreachableInst>(I))
     return false;
 
-  // Calls can throw, or contain an infinite loop, or kill the process.
-  if (auto CS = ImmutableCallSite(I)) {
-    // Call sites that throw have implicit non-local control flow.
-    if (!CS.doesNotThrow())
+  if (isa<CatchPadInst>(I)) {
+    switch (classifyEHPersonality(I->getFunction()->getPersonalityFn())) {
+    default:
+      // A catchpad may invoke exception object constructors and such, which
+      // in some languages can be arbitrary code, so be conservative by default.
       return false;
-
-    // Non-throwing call sites can loop infinitely, call exit/pthread_exit
-    // etc. and thus not return.  However, LLVM already assumes that
-    //
-    //  - Thread exiting actions are modeled as writes to memory invisible to
-    //    the program.
-    //
-    //  - Loops that don't have side effects (side effects are volatile/atomic
-    //    stores and IO) always terminate (see http://llvm.org/PR965).
-    //    Furthermore IO itself is also modeled as writes to memory invisible to
-    //    the program.
-    //
-    // We rely on those assumptions here, and use the memory effects of the call
-    // target as a proxy for checking that it always returns.
-
-    // FIXME: This isn't aggressive enough; a call which only writes to a global
-    // is guaranteed to return.
-    return CS.onlyReadsMemory() || CS.onlyAccessesArgMemory() ||
-           match(I, m_Intrinsic<Intrinsic::assume>()) ||
-           match(I, m_Intrinsic<Intrinsic::sideeffect>());
+    case EHPersonality::CoreCLR:
+      // For CoreCLR, it just involves a type test.
+      return true;
+    }
   }
 
-  // Other instructions return normally.
+  // An instruction that returns without throwing must transfer control flow
+  // to a successor.
+  return !I->mayThrow() && I->willReturn();
+}
+
+bool llvm::isGuaranteedToTransferExecutionToSuccessor(const BasicBlock *BB) {
+  // TODO: This is slightly consdervative for invoke instruction since exiting
+  // via an exception *is* normal control for them.
+  for (auto I = BB->begin(), E = BB->end(); I != E; ++I)
+    if (!isGuaranteedToTransferExecutionToSuccessor(&*I))
+      return false;
   return true;
 }
 

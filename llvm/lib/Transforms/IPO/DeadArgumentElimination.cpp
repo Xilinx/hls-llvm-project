@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -44,6 +45,7 @@
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
@@ -58,6 +60,8 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "deadargelim"
+
+extern cl::opt<bool> HLS;
 
 STATISTIC(NumArgumentsEliminated, "Number of unread args removed");
 STATISTIC(NumRetValsEliminated  , "Number of unused return values removed");
@@ -537,30 +541,27 @@ void DeadArgumentEliminationPass::SurveyFunction(const Function &F) {
     // taken.
     ImmutableCallSite CS(U.getUser());
 
-    // XILINX, HLS , for the "llvm.side.effect(["xlx_funcation_allocation"(function_pointer, "function", limit)]);
-    // "llvm.directive.scope.entry["xlx_function_allocation"(function_pointer, "function", limit)]);
-    // we just need update the function_pointer , and DeadArgumentEliminate should work well 
-    // so here, skip the "xlx_function_allocation" operandBundleUser
-    if (CS &&(CS.getIntrinsicID() == Intrinsic::sideeffect || CS.getIntrinsicID() == Intrinsic::directive_scope_entry)) {
-      int i = 0; 
-      for (i = 0; i < CS.getNumOperandBundles(); i++) { 
-        auto bundle = CS.getOperandBundleAt(i);
-        if (bundle.getTagName() == "xlx_function_allocation") { 
-          break;
-        }
-      }
-      if (i != CS.getNumOperandBundles()) 
-        continue;
-    }
-
-    if (!CS || !CS.isCallee(&U)) {
+    if (!CS) {
       MarkLive(F);
       return;
     }
 
-    // If this use is anything other than a call site, the function is alive.
     const Instruction *TheCall = CS.getInstruction();
+    // If this use is anything other than a call site, the function is alive.
     if (!TheCall) {   // Not a direct call site?
+      MarkLive(F);
+      return;
+    }
+
+    // Skip HLS allocation pragma. Allocation pragma requires to update the
+    // related fuction pointer later.
+    if (HLS &&
+        (isa<XlxFunctionAllocationInst>(TheCall) ||
+        isa<FunctionAllocationRegionEntry>(TheCall) ||
+        isa<FunctionAllocationHintRegionEntry>(TheCall)))
+        continue;
+
+    if (!CS.isCallee(&U)) {
       MarkLive(F);
       return;
     }
@@ -853,13 +854,14 @@ bool DeadArgumentEliminationPass::RemoveDeadStuffFromFunction(Function *F) {
   while (!F->use_empty()) {
     CallSite CS(F->user_back());
     Instruction *Call = CS.getInstruction();
-    //XILINX , HLS , if the callsite is about "xlx_functino_allocation" (Allocation Pragma )
-    if (CS.getIntrinsicID() == Intrinsic::sideeffect || CS.getIntrinsicID() == Intrinsic::directive_scope_entry) { 
+    // Update related function pointer for HLS allocation pragma.
+    if (HLS &&
+        (isa<XlxFunctionAllocationInst>(Call) ||
+        isa<FunctionAllocationRegionEntry>(Call) ||
+        isa<FunctionAllocationHintRegionEntry>(Call))) {
       CS->replaceUsesOfWith(F, NF);
       continue;
     }
-    
-
     ArgAttrVec.clear();
     const AttributeList &CallPAL = CS.getAttributes();
 

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -20,6 +20,7 @@
 
 #include "clang/Basic/Attributes.h"
 #include "clang/Basic/FileManager.h"
+#include "clang/Basic/HLSDiagnostic.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
@@ -632,9 +633,15 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
         // 1. check the macro define in system header assert.h
         SourceLocation Loc = SourceMgr.getSpellingLoc(MI->getDefinitionLoc());
         if (Loc.isValid()) {
-          StringRef FileName =
-              llvm::sys::path::filename(SourceMgr.getFilename(Loc));
-          DoReplace &= SourceMgr.isInSystemHeader(Loc);
+          bool InSystemHeader = SourceMgr.isInSystemHeader(Loc);
+          DoReplace &= InSystemHeader;
+
+          if (!InSystemHeader) {
+            std::string FileLocInfo;
+            llvm::raw_string_ostream ss(FileLocInfo);
+            ss << "(" << SourceMgr.getFilename(Loc) << ":" << SourceMgr.getSpellingLineNumber(Loc) << ")";
+            Diag(Identifier, diag::warn_lower_assert_failed) << ss.str();
+          }
         }
 
         // 2. is function like macro with only one argument

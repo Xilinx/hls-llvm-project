@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1159,6 +1160,7 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
       B.addAttribute(Attribute::SanitizeMemory); break;
     case lltok::kw_strictfp: B.addAttribute(Attribute::StrictFP); break;
     case lltok::kw_uwtable: B.addAttribute(Attribute::UWTable); break;
+    case lltok::kw_willreturn: B.addAttribute(Attribute::WillReturn); break;
     case lltok::kw_writeonly: B.addAttribute(Attribute::WriteOnly); break;
 
     // Error handling.

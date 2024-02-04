@@ -4,11 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-//
-// And has the following additional copyright:
-//
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc. 
 // All Rights Reserved.
+//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the BasicBlock class for the IR library.

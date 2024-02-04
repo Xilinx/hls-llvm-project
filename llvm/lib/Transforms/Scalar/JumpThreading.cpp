@@ -38,6 +38,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/XILINXFunctionInfoUtils.h"
+#include "llvm/Analysis/XILINXHLSValueTrackingUtils.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constant.h"
@@ -109,6 +110,10 @@ static cl::opt<bool> PrintLVIAfterJumpThreading(
     cl::desc("Print the LazyValueInfo cache after JumpThreading"), cl::init(false),
     cl::Hidden);
 
+static cl::opt<bool> EnableSinkHoistForJumpThreading(
+    "reflow-enable-sink-hoist-for-jump-threading", cl::init(true), cl::Hidden,
+    cl::desc("Enable sink/hoist for jump threading in reflow"));
+
 namespace {
 
   /// This pass performs 'jump threading', which looks at blocks that have
@@ -132,7 +137,7 @@ namespace {
   public:
     static char ID; // Pass identification
 
-    JumpThreading(int T = -1, bool enableSinkHoist = false) : FunctionPass(ID), Impl(T) {
+    JumpThreading(int T = -1) : FunctionPass(ID), Impl(T) {
       initializeJumpThreadingPass(*PassRegistry::getPassRegistry());
     }
 
@@ -167,12 +172,11 @@ INITIALIZE_PASS_END(JumpThreading, "jump-threading",
                 "Jump Threading", false, false)
 
 // Public interface to the Jump Threading pass
-FunctionPass *llvm::createJumpThreadingPass(int Threshold, bool enableSinkHoist) {
+FunctionPass *llvm::createJumpThreadingPass(int Threshold) {
   return new JumpThreading(Threshold);
 }
 
-JumpThreadingPass::JumpThreadingPass(int T, bool enableSinkHoist)
-    : EnableSinkHoist(enableSinkHoist) {
+JumpThreadingPass::JumpThreadingPass(int T) {
   BBDupThreshold = (T == -1) ? BBDuplicateThreshold : unsigned(T);
 }
 
@@ -473,18 +477,6 @@ static void ReplaceFoldableUses(Instruction *Cond, Value *ToVal) {
     Cond->eraseFromParent();
 }
 
-/// HLS Specific
-/// Return true if \p Call is a region ssdm call.
-static bool isRegionSSDM(const CallInst *Call) {
-  if (auto *F = Call->getCalledFunction()) {
-    auto name = F->getName();
-    return name.equals("_ssdm_RegionBegin") || name.equals("_ssdm_RegionEnd");
-  }
-
-  return false;
-}
-///
-
 /// Return the cost of duplicating a piece of this block from first non-phi
 /// and before StopAt instruction to thread across it. Stop scanning the block
 /// when exceeding the threshold. If duplication is impossible, returns ~0U.
@@ -552,12 +544,9 @@ static unsigned getJumpThreadDuplicationCost(
     // as having cost of 2 total, and if they are a vector intrinsic, we model
     // them as having cost 1.
     if (const CallInst *CI = dyn_cast<CallInst>(I)) {
-      if (CI->cannotDuplicate() || CI->isConvergent() || isRegionSSDM(CI))
-        // Blocks with NoDuplicate are modelled as having infinite cost, so they
-        // are never duplicated. HLS NOTE: The directive.scope.begin/end
-	// intrinsics are marked as no duplicate; Howerver, the
-        // ssdm_RegionBegin/End is not understand by LLVM, check explicitly and
-        // do not duplicate them.
+      if (CI->cannotDuplicate() || CI->isConvergent() || IsHLSRegion(CI))
+        // Blocks with NoDuplicate and HLS region are modelled as having
+        // infinite cost, so they are never duplicated.
         return ~0U;
       else if (!isa<IntrinsicInst>(CI))
         Size += 3;
@@ -1033,9 +1022,7 @@ bool JumpThreadingPass::ProcessBlock(BasicBlock *BB) {
 
       // Invalidate LVI information for BB if the LVI is not provably true for
       // all of BB.
-      if (any_of(*BB, [](Instruction &I) {
-            return !isGuaranteedToTransferExecutionToSuccessor(&I);
-          }))
+      if (!isGuaranteedToTransferExecutionToSuccessor(BB))
         LVI->eraseBlock(BB);
       return true;
     }
@@ -1596,14 +1583,15 @@ bool JumpThreadingPass::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
 
   bool Changed = false;
   // HLS BEGIN
-  if(HLS) {
+  if (HLS) {
     // we only do JT when BB's All Pred will jump to the only one BB's Succ,
     // this will keep the CFG more simple, and may enbale some access merge
     unsigned PredNum = std::distance(pred_begin(BB), pred_end(BB));
-    if(PredNum != PredValues.size())
+    if (PredNum != PredValues.size())
       return false;
-    
-    Changed |= JTSinkHoist->doSinkHoistOnBlock(BB);
+
+    if (EnableSinkHoistForJumpThreading)
+      Changed |= JTSinkHoist->doSinkHoistOnBlock(BB);
   }
   // HLS END
   

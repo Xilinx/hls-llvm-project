@@ -36,6 +36,9 @@ namespace llvm {
 void addLoopMetadata(Loop *L, StringRef Attr,
                      ArrayRef<Metadata *> Options = None);
 
+/// Remove metadata \p Attr attached to Loop \p L.
+void removeLoopMetadata(Loop *L, StringRef Attr);
+
 /// Add loop trip count metadata to Loop \p L.
 /// \p Min: minimum number of loop iterations
 /// \p Max: maximum number of loop iterations
@@ -52,6 +55,9 @@ void addPipeline(Loop *L, int32_t II = -1, bool IsRewind = false,
 
 /// Add pipeline off(force not to pipeline) metadata to Loop \p L.
 void addPipelineOff(Loop *L, StringRef Source = "");
+
+/// Remove pipeline metadata attached to Loop \p L
+void removePipeline(Loop *L);
 
 /// Add unroll full metadata to Loop \p L.
 void addFullyUnroll(Loop *L, StringRef Source = "", DILocation *Loc = nullptr);

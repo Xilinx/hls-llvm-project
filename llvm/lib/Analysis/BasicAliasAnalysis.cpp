@@ -64,6 +64,8 @@
 
 using namespace llvm;
 
+extern cl::opt<bool> HLS;
+
 /// Enable analysis of recursive PHI nodes.
 static cl::opt<bool> EnableRecPhiAnalysis("basicaa-recphi", cl::Hidden,
                                           cl::init(false));
@@ -643,9 +645,12 @@ FunctionModRefBehavior BasicAAResult::getModRefBehavior(ImmutableCallSite CS) {
     Min = FunctionModRefBehavior(Min & FMRB_OnlyAccessesInaccessibleOrArgMem);
 
   // If CS has operand bundles then aliasing attributes from the function it
-  // calls do not directly apply to the CallSite.  This can be made more
+  // calls do not directly apply to the CallSite except it's HLS non region
+  // pragma(Intrinsic::sideeffect) or a hint scope. This can be made more
   // precise in the future.
-  if (!CS.hasOperandBundles())
+  if (!CS.hasOperandBundles() ||
+      (HLS && CS.getIntrinsicID() == Intrinsic::sideeffect) ||
+      CS.getIntrinsicID() == Intrinsic::hint_scope_entry)
     if (const Function *F = CS.getCalledFunction())
       Min =
           FunctionModRefBehavior(Min & getBestAAResults().getModRefBehavior(F));

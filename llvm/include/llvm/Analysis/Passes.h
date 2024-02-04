@@ -96,6 +96,21 @@ namespace llvm {
   //
   FunctionPass *createMemDerefPrinter();
 
+  //===--------------------------------------------------------------------===//
+  //
+  // createMustExecutePrinter - This pass collects information about which
+  // instructions within a loop are guaranteed to execute if the loop header is
+  // entered and prints it with -analyze.
+  //
+  FunctionPass *createMustExecutePrinter();
+
+  //===--------------------------------------------------------------------===//
+  //
+  // createMustBeExecutedContextPrinter - This pass prints information about which
+  // instructions are guaranteed to execute together (run with -analyze).
+  //
+  ModulePass *createMustBeExecutedContextPrinter();
+
 }
 
 #endif

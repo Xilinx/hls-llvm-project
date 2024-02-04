@@ -29,7 +29,7 @@ let TargetPrefix = "fpga" in {
 //
 
 // None of these intrinsics accesses memory at all.
-let IntrProperties = [IntrNoMem] in {
+let IntrProperties = [IntrNoMem, IntrWillReturn] in {
 // iN fpga.smod(iN %lhs, iN %rhs)
 //
 // Computes the mathematical modulo:
@@ -42,11 +42,76 @@ let IntrProperties = [IntrNoMem] in {
 // - %lhs - fpga.smod(%lhs, %rhs) is divisible by %rhs
 def int_fpga_smod : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>]>;
 
+
+//
+// Arbitrary-Precision Floating Point Intrinsics (IEEE 754)
+//
+
+// iN fpga.float.add(iN %lhs, iN %rhs, i32 <exp>)
+// iN fpga.float.sub(iN %lhs, iN %rhs, i32 <exp>)
+// iN fpga.float.mul(iN %lhs, iN %rhs, i32 <exp>)
+// iN fpga.float.div(iN %lhs, iN %rhs, i32 <exp>)
+//
+// Computes the sum/difference/multiplication/division of %lhs by %rhs where
+// <exp> is a litteral constant representing the number of bits reserved for
+// the exponent in %lhs, %rhs and the return value representation.
+def int_fpga_float_add : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty]>;
+def int_fpga_float_sub : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty]>;
+def int_fpga_float_mul : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty]>;
+def int_fpga_float_div : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty]>;
+
+// iN fpga.float.fma(iN %lhs, iN %rhs, iN %add, i32 <exp>)
+//
+// Computes the product of %lhs and %rhs then add it to %add without rounding
+// the intermediate result (Fused Multiply-and-Add).
+// <exp> is a litteral constant representing the number of bits reserved for
+// the exponent in %lhs, %rhs and the return value representation.
+def int_fpga_float_fma : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty]>;
+
+// iN fpga.float.sqrt(iN %arg, i32 <exp>)
+//
+// Computes the square-root of %arg.
+// <exp> is a litteral constant representing the number of bits reserved for
+// the exponent in %lhs, %rhs and the return value representation.
+def int_fpga_float_sqrt : Intrinsic<[llvm_anyint_ty], [LLVMMatchType<0>, llvm_i32_ty]>;
+
+// iN fpga.float.from.fixed(iP %arg, i32 <arg_exp>, i32 <ret_exp>)
+//
+// Convert %arg from a fixed point representation into a floating point representation
+// <arg_exp> is the number of bits that represent the integer part of %arg
+// <ret_exp> is the number of bits reserved for the exponent in the return value representation
+def int_fpga_float_from_fixed : Intrinsic<[llvm_anyint_ty], [llvm_anyint_ty, llvm_i32_ty, llvm_i32_ty]>;
+
+// iN fpga.float.to.fixed(iP %arg, i32 <arg_exp>, i32 <ret_exp>)
+//
+// Convert %arg from a floating point representation into a fixed point representation
+// <arg_exp> is the number of bits reserved for the exponent in %arg representation
+// <ret_exp> is the number of bits that represent the integer part of the return value
+def int_fpga_float_to_fixed : Intrinsic<[llvm_anyint_ty], [llvm_anyint_ty, llvm_i32_ty, llvm_i32_ty]>;
+
+// iN fpga.float.to.float(iP %arg, i32 <arg_exp>, i32 <ret_exp>)
+//
+// Convert %arg from a floating point representation into an other floating point representation
+// <arg_exp> is the number of bits reserved for the exponent in %arg representation
+// <ret_exp> is the number of bits reserved for the exponent in the return value representation
+def int_fpga_float_to_float : Intrinsic<[llvm_anyint_ty], [llvm_anyint_ty, llvm_i32_ty, llvm_i32_ty]>;
+
+// i1 fpga.float.compare.eq(iN %lhs, iN %rhs, i32 <exp>)
+//
+// Compare %lhs to %rhs to test if they are equal/less-than/less-or-equal/different/unordered
+// <exp> is the number of bits reserved for the exponent in %lhs and %rhs representation
+def int_fpga_float_compare_eq : Intrinsic<[llvm_i1_ty], [llvm_anyint_ty, LLVMMatchType<0>, llvm_i32_ty]>;
+def int_fpga_float_compare_le : Intrinsic<[llvm_i1_ty], [llvm_anyint_ty, LLVMMatchType<0>, llvm_i32_ty]>;
+def int_fpga_float_compare_lt : Intrinsic<[llvm_i1_ty], [llvm_anyint_ty, LLVMMatchType<0>, llvm_i32_ty]>;
+def int_fpga_float_compare_ne : Intrinsic<[llvm_i1_ty], [llvm_anyint_ty, LLVMMatchType<0>, llvm_i32_ty]>;
+def int_fpga_float_compare_uo : Intrinsic<[llvm_i1_ty], [llvm_anyint_ty, LLVMMatchType<0>, llvm_i32_ty]>;
+
+
 // iP fpga.part.select(iN %src, iK %off) - Select src[off+P-1:off]
 def int_fpga_part_select : Intrinsic<[llvm_anyint_ty],
                                      [llvm_anyint_ty, llvm_anyint_ty]>;
 
-// iN fpga.part.set(iN %src, iP part, iK %off) - Inject part to src[off+P-1:off]
+// iN fpga.part.set(iN %src, iP %part, iK %off) - Inject part to src[off+P-1:off]
 def int_fpga_part_set : Intrinsic<[llvm_anyint_ty],
                                   [LLVMMatchType<0>, llvm_anyint_ty,
                                    llvm_anyint_ty]>;
@@ -90,41 +155,41 @@ def int_fpga_pack_none: Intrinsic<[llvm_anyint_ty], [llvm_any_ty]>;
 def int_fpga_mux : Intrinsic<[llvm_any_ty], [llvm_anyint_ty, llvm_vararg_ty]>;
 
 // Sparse Multiplexer (SSA equivalent to switch)
-// a_k = sparse.mux(k, cond_0, a_0, cond_1, a_1, cond_2, a_2, ..., cond_N, a_N)
-def int_fpga_sparse_mux : Intrinsic<[llvm_any_ty], [llvm_anyint_ty, llvm_vararg_ty]>;
+// a_k = sparse.mux(k, a_default, cond_0, a_0, cond_1, a_1, cond_2, a_2, ..., cond_N, a_N)
+def int_fpga_sparse_mux : Intrinsic<[llvm_any_ty], [llvm_anyint_ty, LLVMMatchType<0>, llvm_vararg_ty]>;
 }
 
 //Intrinsics that are used to keep load/store for stream objects
 def int_fpga_ssa_keep : Intrinsic<[llvm_any_ty], [LLVMMatchType<0>],
-                                  [IntrInaccessibleMemOnly]>;
+                                  [IntrInaccessibleMemOnly, IntrWillReturn]>;
 
 // fpga.gmem.load(Ptr, volatile)
-def int_fpga_gmem_load : Intrinsic<[llvm_any_ty],
+def int_fpga_gmem_load : DefaultAttrsIntrinsic<[llvm_any_ty],
                                    [LLVMAnyPointerType<LLVMMatchType<0>>,
                                     llvm_i1_ty],
-                                   [IntrReadMem, IntrArgMemOnly]>;
-def int_fpga_maxi_load : Intrinsic<[llvm_any_ty],
+                                   [IntrReadMem, IntrArgMemOnly, IntrWillReturn]>;
+def int_fpga_maxi_load : DefaultAttrsIntrinsic<[llvm_any_ty],
                                    [LLVMAnyPointerType<LLVMMatchType<0>>,
                                     llvm_i1_ty],
-                                   [IntrReadMem, IntrArgMemOnly]>;
-def int_fpga_bram_load : Intrinsic<[llvm_any_ty],
+                                   [IntrReadMem, IntrArgMemOnly, IntrWillReturn]>;
+def int_fpga_bram_load : DefaultAttrsIntrinsic<[llvm_any_ty],
                                    [LLVMAnyPointerType<LLVMMatchType<0>>,
                                     llvm_i1_ty],
-                                   [IntrReadMem, IntrArgMemOnly]>;
+                                   [IntrReadMem, IntrArgMemOnly, IntrWillReturn]>;
 
 // fpga.gmem.store(Data, Ptr, byteenable, volatile)
-def int_fpga_gmem_store : Intrinsic<[], [llvm_any_ty,
+def int_fpga_gmem_store : DefaultAttrsIntrinsic<[], [llvm_any_ty,
                                          LLVMAnyPointerType<LLVMMatchType<0>>,
                                          llvm_anyint_ty, llvm_i1_ty],
-                                    [IntrWriteMem, IntrArgMemOnly]>;
-def int_fpga_maxi_store : Intrinsic<[], [llvm_any_ty,
+                                    [IntrWriteMem, IntrArgMemOnly, IntrWillReturn]>;
+def int_fpga_maxi_store : DefaultAttrsIntrinsic<[], [llvm_any_ty,
                                          LLVMAnyPointerType<LLVMMatchType<0>>,
                                          llvm_anyint_ty, llvm_i1_ty],
-                                    [IntrWriteMem, IntrArgMemOnly]>;
-def int_fpga_bram_store : Intrinsic<[], [llvm_any_ty,
+                                    [IntrWriteMem, IntrArgMemOnly, IntrWillReturn]>;
+def int_fpga_bram_store : DefaultAttrsIntrinsic<[], [llvm_any_ty,
                                          LLVMAnyPointerType<LLVMMatchType<0>>,
                                          llvm_anyint_ty, llvm_i1_ty],
-                                    [IntrWriteMem, IntrArgMemOnly]>;
+                                    [IntrWriteMem, IntrArgMemOnly, IntrWillReturn]>;
 
 // preserve-properties-per-object (prevent passes from changing the number of
 // related operations or changing their order of execution relatively on the
@@ -132,11 +197,42 @@ def int_fpga_bram_store : Intrinsic<[], [llvm_any_ty,
 // fpga.pppo.load(Ptr)
 def int_fpga_pppo_load : Intrinsic<[llvm_any_ty],
                                    [LLVMAnyPointerType<LLVMMatchType<0>>],
-                                   [IntrArgMemOnly]>;
+                                   [IntrArgMemOnly, IntrWillReturn]>;
 // fpga.pppo.store(Data, Ptr)
 def int_fpga_pppo_store : Intrinsic<[], [llvm_any_ty,
                                          LLVMAnyPointerType<LLVMMatchType<0>>],
-                                    [IntrArgMemOnly]>;
+                                    [IntrArgMemOnly, IntrWillReturn]>;
+
+//===---
+//
+//  Direct Load / Store
+//
+//  Direct access operation on the passed pointer argument that has both
+//  read/write side effect to guarantee no reordering between the same
+//  underlying object by any LLVM passes.
+//
+//===---
+
+// i1 fpga.direct.valid(%type *%direct_io_ptr)
+def int_fpga_direct_valid : Intrinsic<[llvm_i1_ty],
+                                    [LLVMAnyPointerType<llvm_any_ty>],
+                                    [IntrInaccessibleMemOrArgMemOnly,
+                                     NoCapture<0>]>;
+
+// i1 fpga.direct.ready(%type *%direct_io_ptr)
+def int_fpga_direct_ready : Intrinsic<[llvm_i1_ty],
+                                    [LLVMAnyPointerType<llvm_any_ty>],
+                                    [IntrInaccessibleMemOrArgMemOnly,
+                                     NoCapture<0>]>;
+
+// %type = fpga.direct.load(%type *%direct_io_ptr)
+def int_fpga_direct_load : Intrinsic<[llvm_any_ty],
+                                     [LLVMAnyPointerType<LLVMMatchType<0>>],
+                                     [IntrInaccessibleMemOrArgMemOnly]>;
+// fpga.direct.store(%type %val, %type *%direct_io_ptr)
+def int_fpga_direct_store : Intrinsic<[],
+                                      [llvm_any_ty, LLVMAnyPointerType<LLVMMatchType<0>>],
+                                      [IntrInaccessibleMemOrArgMemOnly]>;
 
 //===---
 //
@@ -148,35 +244,35 @@ def int_fpga_pppo_store : Intrinsic<[], [llvm_any_ty,
 
 // i1 fpga.fifo.not.empty(%type *%fifo)
 def int_fpga_fifo_not_empty : Intrinsic<[llvm_i1_ty], [LLVMAnyPointerType<llvm_any_ty>],
-                                        [IntrArgMemOnly, NoCapture<0>]>;
+                                        [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // i1 fpga.fifo.not.full(%type *%fifo)
 def int_fpga_fifo_not_full : Intrinsic<[llvm_i1_ty], [LLVMAnyPointerType<llvm_any_ty>],
-                                       [IntrArgMemOnly, NoCapture<0>]>;
+                                       [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // %type fpga.fifo.pop(%type *%fifo)
 def int_fpga_fifo_pop : Intrinsic<[llvm_any_ty], [LLVMAnyPointerType<LLVMMatchType<0>>],
-                                  [IntrArgMemOnly, NoCapture<0>]>;
+                                  [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void fpga.fifo.push(%type %val, %type *%fifo)
 def int_fpga_fifo_push : Intrinsic<[], [llvm_any_ty, LLVMAnyPointerType<LLVMMatchType<0>>],
-                                   [IntrArgMemOnly, NoCapture<1>]>;
+                                   [IntrArgMemOnly, IntrWillReturn, NoCapture<1>]>;
 
 // {i1, %type} fpga.fifo.nb_pop(%type *%fifo)
 def int_fpga_fifo_nb_pop : Intrinsic<[llvm_i1_ty, llvm_any_ty], [LLVMAnyPointerType<LLVMMatchType<0>>],
-                                     [IntrArgMemOnly, NoCapture<0>]>;
+                                     [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // i1 fpga.fifo.nb_push(%type %val, %type *%fifo)
 def int_fpga_fifo_nb_push : Intrinsic<[llvm_i1_ty], [llvm_any_ty, LLVMAnyPointerType<LLVMMatchType<0>>],
-                                      [IntrArgMemOnly, NoCapture<1>]>;
+                                      [IntrArgMemOnly, IntrWillReturn, NoCapture<1>]>;
 
 // i32 fpga.fifo.size(%type *%fifo)
 def int_fpga_fifo_size: Intrinsic<[llvm_i32_ty], [LLVMAnyPointerType<llvm_any_ty>],
-                                  [IntrArgMemOnly, NoCapture<0>]>;
+                                  [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // i32 fpga.fifo.capacity(%type *%fifo)
 def int_fpga_fifo_capacity: Intrinsic<[llvm_i32_ty], [LLVMAnyPointerType<llvm_any_ty>],
-                                      [IntrArgMemOnly, NoCapture<0>]>;
+                                      [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 //===---
 //
@@ -195,7 +291,7 @@ def int_fpga_fifo_capacity: Intrinsic<[llvm_i32_ty], [LLVMAnyPointerType<llvm_an
 //
 def int_fpga_shift_register_shift :
     Intrinsic<[], [llvm_any_ty, LLVMAnyPointerType<LLVMMatchType<0>>, llvm_i1_ty],
-              [IntrArgMemOnly, NoCapture<1>]>,
+              [IntrArgMemOnly, IntrWillReturn, NoCapture<1>]>,
     GCCBuiltin<"__fpga_shift_register_shift">;
 //
 // %data = fpga.shift.register.peek(%shift_reg, %index)
@@ -207,7 +303,7 @@ def int_fpga_shift_register_shift :
 //
 def int_fpga_shift_register_peek :
     Intrinsic<[llvm_any_ty], [LLVMAnyPointerType<LLVMMatchType<0>>, llvm_anyint_ty],
-              [IntrReadMem, IntrArgMemOnly, NoCapture<0>]>,
+              [IntrReadMem, IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>,
     GCCBuiltin<"__fpga_shift_register_peek">;
 
 
@@ -237,27 +333,27 @@ def int_fpga_shift_register_peek :
 
 // i1 fpga.pipo.not.empty(%type *%pipo)
 def int_fpga_pipo_not_empty : Intrinsic<[llvm_i1_ty], [LLVMAnyPointerType<llvm_any_ty>],
-                                        [IntrArgMemOnly, NoCapture<0>]>;
+                                        [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // i1 fpga.pipo.not.full(%type *%pipo)
 def int_fpga_pipo_not_full : Intrinsic<[llvm_i1_ty], [LLVMAnyPointerType<llvm_any_ty>],
-                                       [IntrArgMemOnly, NoCapture<0>]>;
+                                       [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void fpga.pipo.pop.acquire(%type *%pipo)
 def int_fpga_pipo_pop_acquire : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
-                                          [IntrArgMemOnly, NoCapture<0>]>;
+                                          [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void fpga.pipo.pop.release(%type *%pipo)
 def int_fpga_pipo_pop_release : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
-                                          [IntrArgMemOnly, NoCapture<0>]>;
+                                          [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void fpga.pipo.push.acquire(%type *%pipo)
 def int_fpga_pipo_push_acquire : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
-                                           [IntrArgMemOnly, NoCapture<0>]>;
+                                           [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void fpga.pipo.push.release(%type *%pipo)
 def int_fpga_pipo_push_release : Intrinsic<[], [LLVMAnyPointerType<LLVMMatchType<0>>],
-                                           [IntrArgMemOnly, NoCapture<0>]>;
+                                           [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 
 //===---
@@ -272,7 +368,7 @@ def int_fpga_axis_ready: Intrinsic<[llvm_i1_ty],
      LLVMAnyPointerType<llvm_any_ty>, LLVMAnyPointerType<llvm_any_ty>,        
      LLVMAnyPointerType<llvm_any_ty>, LLVMAnyPointerType<llvm_any_ty>,        
      LLVMAnyPointerType<llvm_any_ty>],
-    [IntrArgMemOnly, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
+    [IntrArgMemOnly, IntrWillReturn, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
      NoCapture<4>, NoCapture<5>, NoCapture<6>]>,
     GCCBuiltin<"__fpga_axis_ready">;
 
@@ -284,7 +380,7 @@ def int_fpga_axis_valid: Intrinsic<[llvm_i1_ty],
      LLVMAnyPointerType<llvm_any_ty>, LLVMAnyPointerType<llvm_any_ty>,        
      LLVMAnyPointerType<llvm_any_ty>, LLVMAnyPointerType<llvm_any_ty>,        
      LLVMAnyPointerType<llvm_any_ty>],
-    [IntrArgMemOnly, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
+    [IntrArgMemOnly, IntrWillReturn, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
      NoCapture<4>, NoCapture<5>, NoCapture<6>]>,
     GCCBuiltin<"__fpga_axis_valid">;
 
@@ -299,7 +395,7 @@ def int_fpga_axis_pop: Intrinsic<[],
      LLVMAnyPointerType<llvm_any_ty>,
      LLVMMatchType<0>, LLVMMatchType<1>, LLVMMatchType<2>, LLVMMatchType<3>, 
      LLVMMatchType<4>, LLVMMatchType<5>, LLVMMatchType<6>],
-    [IntrArgMemOnly, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
+    [IntrArgMemOnly, IntrWillReturn, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
      NoCapture<4>, NoCapture<5>, NoCapture<6>, NoCapture<7>, WriteOnly<7>,
      NoCapture<8>, WriteOnly<8>, NoCapture<9>, WriteOnly<9>,
      NoCapture<10>, WriteOnly<10>, NoCapture<11>, WriteOnly<11>,
@@ -319,7 +415,7 @@ def int_fpga_axis_push: Intrinsic<[],
      LLVMAnyPointerType<llvm_any_ty>,
      LLVMMatchType<0>, LLVMMatchType<1>, LLVMMatchType<2>, LLVMMatchType<3>, 
      LLVMMatchType<4>, LLVMMatchType<5>, LLVMMatchType<6>],
-    [IntrArgMemOnly, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
+    [IntrArgMemOnly, IntrWillReturn, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
      NoCapture<4>, NoCapture<5>, NoCapture<6>, NoCapture<7>, ReadOnly<7>,
      NoCapture<8>, ReadOnly<8>, NoCapture<9>, ReadOnly<9>,
      NoCapture<10>, ReadOnly<10>, NoCapture<11>, ReadOnly<11>,
@@ -337,7 +433,7 @@ def int_fpga_axis_nb_pop: Intrinsic<[llvm_i1_ty],
      LLVMAnyPointerType<llvm_any_ty>,
      LLVMMatchType<0>, LLVMMatchType<1>, LLVMMatchType<2>, LLVMMatchType<3>, 
      LLVMMatchType<4>, LLVMMatchType<5>, LLVMMatchType<6>],
-    [IntrArgMemOnly, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
+    [IntrArgMemOnly, IntrWillReturn, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
      NoCapture<4>, NoCapture<5>, NoCapture<6>, NoCapture<7>, WriteOnly<7>,
      NoCapture<8>, WriteOnly<8>, NoCapture<9>, WriteOnly<9>,
      NoCapture<10>, WriteOnly<10>, NoCapture<11>, WriteOnly<11>,
@@ -357,7 +453,7 @@ def int_fpga_axis_nb_push: Intrinsic<[llvm_i1_ty],
      LLVMAnyPointerType<llvm_any_ty>,
      LLVMMatchType<0>, LLVMMatchType<1>, LLVMMatchType<2>, LLVMMatchType<3>, 
      LLVMMatchType<4>, LLVMMatchType<5>, LLVMMatchType<6>],
-    [IntrArgMemOnly, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
+    [IntrArgMemOnly, IntrWillReturn, NoCapture<0>, NoCapture<1>, NoCapture<2>, NoCapture<3>,
      NoCapture<4>, NoCapture<5>, NoCapture<6>, NoCapture<7>, ReadOnly<7>,
      NoCapture<8>, ReadOnly<8>, NoCapture<9>, ReadOnly<9>,
      NoCapture<10>, ReadOnly<10>, NoCapture<11>, ReadOnly<11>,
@@ -367,7 +463,7 @@ def int_fpga_axis_nb_push: Intrinsic<[llvm_i1_ty],
 //===---
 
 // FIXME:
-def int_fpga_type_annotate: Intrinsic<[], [llvm_vararg_ty], [IntrInaccessibleMemOnly]>;
+def int_fpga_type_annotate: Intrinsic<[], [llvm_vararg_ty], [IntrInaccessibleMemOnly, IntrWillReturn]>;
 
 //===---
 //
@@ -403,75 +499,75 @@ def int_fpga_type_annotate: Intrinsic<[], [llvm_vararg_ty], [IntrInaccessibleMem
 // Ptr = fpga.seq.load.begin(Ptr, Len)
 def int_fpga_seq_load_begin : Intrinsic<[LLVMAnyPointerType<llvm_any_ty>],
                                         [LLVMMatchType<0>, llvm_anyint_ty],
-                                        [IntrArgMemOnly]>;
+                                        [IntrArgMemOnly, IntrWillReturn]>;
 
 // Data = fpga.seq.load(Ptr, Offset)
 def int_fpga_seq_load : Intrinsic<[llvm_any_ty],
                                   [LLVMAnyPointerType<LLVMMatchType<0>>,
                                    llvm_anyint_ty],
-                                  [IntrArgMemOnly]>;
+                                  [IntrArgMemOnly, IntrWillReturn]>;
 
 // fpga.seq.load.end(Ptr, Len)
 def int_fpga_seq_load_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>,
                                            llvm_anyint_ty],
-                                      [IntrArgMemOnly]>;
+                                      [IntrArgMemOnly, IntrWillReturn]>;
 
 // Ptr = fpga.seq.store.begin(Ptr, Len)
 def int_fpga_seq_store_begin : Intrinsic<[LLVMAnyPointerType<llvm_any_ty>],
                                          [LLVMMatchType<0>, llvm_anyint_ty],
-                                         [IntrArgMemOnly]>;
+                                         [IntrArgMemOnly, IntrWillReturn]>;
 
 // fpga.seq.store(Data, Ptr, Offset)
 def int_fpga_seq_store : Intrinsic<[], [llvm_any_ty,
                                         LLVMAnyPointerType<LLVMMatchType<0>>,
                                         llvm_anyint_ty, llvm_anyint_ty],
-                                   [IntrArgMemOnly]>;
+                                   [IntrArgMemOnly, IntrWillReturn]>;
 
 // fpga.seq.store.end(Ptr, Len)
 def int_fpga_seq_store_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>,
                                             llvm_anyint_ty],
-                                       [IntrArgMemOnly]>;
+                                       [IntrArgMemOnly, IntrWillReturn]>;
 
 // Abstracted function to write to printf buffer
 def int_fpga_get_printf_buffer : Intrinsic<[LLVMAnyPointerType<llvm_anyint_ty>], [],
                                     [IntrNoMem]>;
 
 // Abstracted function to write to printf buffer
-def int_fpga_set_stream_depth : Intrinsic<[], [llvm_vararg_ty], []>;
+def int_fpga_set_stream_depth : Intrinsic<[], [llvm_vararg_ty], [IntrWillReturn]>;
 
 // llvm.recip
 def int_fpga_recip : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>],
-                               [IntrNoMem, IntrSpeculatable]>;
+                               [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
 
 // llvm.rsqrt
 def int_fpga_rsqrt : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>],
-                               [IntrNoMem, IntrSpeculatable]>;
+                               [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
 
 // void llvm.fpga.maxi.read.req(%type *%addr, i32 len)
 def int_fpga_maxi_read_req : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>, 
                                             llvm_i32_ty],
-                                       [IntrArgMemOnly, NoCapture<0>]>;
+                                       [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // %type llvm.fpga.maxi.read(%type *%port)
 def int_fpga_maxi_read : Intrinsic<[llvm_any_ty], 
                                    [LLVMAnyPointerType<LLVMMatchType<0>>], 
-                                   [IntrArgMemOnly, NoCapture<0>]>;
+                                   [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void llvm.fpga.maxi.write.req(%type *%addr, i32 len)
 def int_fpga_maxi_write_req : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>, 
                                              llvm_i32_ty],
-                                        [IntrArgMemOnly, NoCapture<0>]>;
+                                        [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void llvm.fpga.maxi.write(%type val, %type *%port, ix %byteenable)
 def int_fpga_maxi_write : Intrinsic<[], 
                                     [llvm_any_ty, 
                                      LLVMAnyPointerType<LLVMMatchType<0>>,
                                      llvm_anyint_ty], 
-                                    [IntrArgMemOnly, NoCapture<1>]>;
+                                    [IntrArgMemOnly, IntrWillReturn, NoCapture<1>]>;
 
 // void llvm.fpga.maxi.write.resp(%type *%port)
 def int_fpga_maxi_write_resp : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>],
-                                         [IntrArgMemOnly, NoCapture<0>]>;
+                                         [IntrArgMemOnly, IntrWillReturn, NoCapture<0>]>;
 
 // void llvm.fgpa.add.task(%taskregion_id, %task_id)
 def int_fpga_add_task : Intrinsic<[], 
@@ -485,7 +581,7 @@ def int_fpga_add_infinite_task : Intrinsic<[],
 
 
 // i64* llvm.fpga.any()
-def int_fpga_any : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
+def int_fpga_any : Intrinsic<[llvm_i64_ty], [], [IntrNoMem, IntrWillReturn]>;
 
 // void llvm.fpga.fence(...)
 def int_fpga_fence : Intrinsic<[], 

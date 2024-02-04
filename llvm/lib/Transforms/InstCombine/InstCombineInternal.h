@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -353,6 +354,7 @@ public:
   Instruction *visitFenceInst(FenceInst &FI);
   Instruction *visitSwitchInst(SwitchInst &SI);
   Instruction *visitReturnInst(ReturnInst &RI);
+  Instruction *visitUnreachableInst(UnreachableInst &I);
   Instruction *visitInsertValueInst(InsertValueInst &IV);
   Instruction *visitInsertElementInst(InsertElementInst &IE);
   Instruction *visitExtractElementInst(ExtractElementInst &EI);

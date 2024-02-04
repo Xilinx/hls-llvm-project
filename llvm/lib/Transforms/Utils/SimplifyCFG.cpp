@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -34,6 +35,7 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/XILINXHLSValueTrackingUtils.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -2187,7 +2189,8 @@ static bool FoldCondBranchOnPHI(BranchInst *BI, const DataLayout &DL,
   // Can't fold blocks that contain noduplicate or convergent calls.
   if (any_of(*BB, [](const Instruction &I) {
         const CallInst *CI = dyn_cast<CallInst>(&I);
-        return CI && (CI->cannotDuplicate() || CI->isConvergent());
+        return CI && (CI->cannotDuplicate() || CI->isConvergent() ||
+                      IsHLSRegion(CI));
       }))
     return false;
 
@@ -4141,42 +4144,21 @@ bool SimplifyCFGOpt::SimplifyUnreachable(UnreachableInst *UI) {
   while (UI->getIterator() != BB->begin()) {
     BasicBlock::iterator BBI = UI->getIterator();
     --BBI;
-    // Do not delete instructions that can have side effects which might cause
-    // the unreachable to not be reachable; specifically, calls and volatile
-    // operations may have this effect.
-    if (isa<CallInst>(BBI) && !isa<DbgInfoIntrinsic>(BBI))
-      break;
 
-    if (BBI->mayHaveSideEffects()) {
-      if (auto *SI = dyn_cast<StoreInst>(BBI)) {
-        if (SI->isVolatile())
-          break;
-      } else if (auto *LI = dyn_cast<LoadInst>(BBI)) {
-        if (LI->isVolatile())
-          break;
-      } else if (auto *RMWI = dyn_cast<AtomicRMWInst>(BBI)) {
-        if (RMWI->isVolatile())
-          break;
-      } else if (auto *CXI = dyn_cast<AtomicCmpXchgInst>(BBI)) {
-        if (CXI->isVolatile())
-          break;
-      } else if (isa<CatchPadInst>(BBI)) {
-        // A catchpad may invoke exception object constructors and such, which
-        // in some languages can be arbitrary code, so be conservative by
-        // default.
-        // For CoreCLR, it just involves a type test, so can be removed.
-        if (classifyEHPersonality(BB->getParent()->getPersonalityFn()) !=
-            EHPersonality::CoreCLR)
-          break;
-      } else if (!isa<FenceInst>(BBI) && !isa<VAArgInst>(BBI) &&
-                 !isa<LandingPadInst>(BBI)) {
-        break;
-      }
-      // Note that deleting LandingPad's here is in fact okay, although it
-      // involves a bit of subtle reasoning. If this inst is a LandingPad,
-      // all the predecessors of this block will be the unwind edges of Invokes,
-      // and we can therefore guarantee this block will be erased.
-    }
+    if (!isGuaranteedToTransferExecutionToSuccessor(&*BBI))
+      break; // Can not drop any more instructions. We're done here.
+    // Otherwise, this instruction can be freely erased,
+    // even if it is not side-effect free.
+
+    // HLS BEGIN
+    // Volatile accesses check are in
+    // `isGuaranteedToTransferExecutionToSuccessor`.
+    // HLS END
+
+    // Note that deleting EH's here is in fact okay, although it involves a bit
+    // of subtle reasoning. If this inst is an EH, all the predecessors of this
+    // block will be the unwind edges of Invoke/CatchSwitch/CleanupReturn,
+    // and we can therefore guarantee this block will be erased.
 
     // Delete this instruction (any uses are guaranteed to be dead)
     if (!BBI->use_empty())

@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -2273,7 +2273,10 @@ static void CommitValueTo(Constant *Val, Constant *Addr) {
 
   ConstantExpr *CE = cast<ConstantExpr>(Addr);
   GlobalVariable *GV = cast<GlobalVariable>(CE->getOperand(0));
-  GV->setInitializer(EvaluateStoreInto(GV->getInitializer(), Val, CE, 2));
+  Constant *OriInit = GV->getInitializer();
+  GV->setInitializer(EvaluateStoreInto(OriInit, Val, CE, 2));
+  if (OriInit->use_empty() && isSafeToDestroyConstant(OriInit))
+    OriInit->destroyConstant();
 }
 
 /// Evaluate static constructors in the function, if we can.  Return true if we

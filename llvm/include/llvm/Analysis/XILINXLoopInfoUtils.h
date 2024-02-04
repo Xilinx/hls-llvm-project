@@ -38,10 +38,9 @@
 namespace llvm {
 
 class ReflowDiagnostic;
-bool isPerfectNestLoop(Loop *loop, ScalarEvolution* SE, std::string& info) ; 
 
 /// Returns true if \p L is a for loop.
-bool isForLoop(Loop *L);
+bool isForLoop(const Loop *L);
 
 /// Returns true if \p L is a rotated loop.
 bool isRotatedLoop(const Loop *L);
@@ -127,6 +126,9 @@ enum class PipelineStyle {
 /// Returns pipeline style of pipeline Loop \p L.
 Optional<PipelineStyle> getPipelineStyle(const Loop *L);
 
+/// Returns true if Loop \p L is a loop that must not be rotated.
+bool isRotateOff(const Loop *L);
+
 /// Returns true if Loop \p L is a flatten loop.
 bool isFlatten(const Loop *L);
 
@@ -195,7 +197,7 @@ LoopUnrollResult ReflowUnrollLoop(Loop *L, ReflowUnrollOption RUO, LoopInfo *LI,
                                   AssumptionCache *AC, bool PreserveLCSSA,
                                   bool AllowUnsafeClone = false);
 
-BasicBlock *getExitingBlock(Loop *L, ScalarEvolution *SE);
+BasicBlock *getExitingBlock(const Loop *L, ScalarEvolution *SE);
 // Find trip count and trip multiple if count is not available
 void ReflowCalculateTripCountAndMultiple(Loop *L, ScalarEvolution *SE,
                                          unsigned &TripCount,

@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -217,6 +218,8 @@ namespace {
       (void) llvm::createRewriteSymbolsPass();
       (void) llvm::createStraightLineStrengthReducePass();
       (void) llvm::createMemDerefPrinter();
+      (void) llvm::createMustExecutePrinter();
+      (void) llvm::createMustBeExecutedContextPrinter();
       (void) llvm::createFloat2IntPass();
       (void) llvm::createEliminateAvailableExternallyPass();
       (void) llvm::createScalarizeMaskedMemIntrinPass();

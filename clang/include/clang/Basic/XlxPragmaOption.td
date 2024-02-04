@@ -191,7 +191,7 @@ def XlxAllocationPragma: HLSPragma, ModesFormat {
 }
 
 
-// #pragma HLS array_partition variable=<name> [cyclic | block | complete] [factor=<int>] [dim=<int>] [type] = {cyclic | block | complete} [dynamic]
+// #pragma HLS array_partition variable=<name> [cyclic | block | complete] [factor=<int>] [dim=<int>] [type] = {cyclic | block | complete} [dynamic] [off[=<false|true|0|1>]]
 def XlxArrayPartitionPragma : HLSPragma {
     let Name = "array_partition";
     let Desc = "Partitions large arrays into multiple smaller arrays or into individual registers, to improve access to data and remove block RAM bottlenecks."; 
@@ -204,11 +204,12 @@ def XlxArrayPartitionPragma : HLSPragma {
                    EnumPresentOption<"type", "cyclic", 1, "">,
                    EnumPresentOption<"type", "complete", 1, "">,
                    OptEnumExprOption<"type", ["block", "cyclic", "complete"], "Block partitioning creates smaller arrays from consecutive blocks of the original array. Cyclic partitioning creates smaller arrays by interleaving elements from the original array. Complete partitioning decomposes the array into individual elements. ", Public, "complete">,
-                   PresentOption<"dynamic", 0, "", Hidden>
+                   PresentOption<"dynamic", 0, "", Hidden>,
+                   PresentOption<"off", 2, "Turn off auto array partition">
                    ];
 }
 
-// #pragma HLS array_reshape variable=<name> [cyclic | block | complete] [factor=<int>] [dim=<int>] [type] = {cyclic | block | complete} [object]
+// #pragma HLS array_reshape variable=<name> [cyclic | block | complete] [factor=<int>] [dim=<int>] [type] = {cyclic | block | complete} [object] [off[=<false|true|0|1>]]
 def XlxArrayReshapePragma : HLSPragma {
     let Name = "array_reshape";
     let Desc = "Reshape an array from one with many elements to one with greater word-width. Useful for improving block RAM accesses without using more block RAM." ; 
@@ -221,7 +222,9 @@ def XlxArrayReshapePragma : HLSPragma {
                    EnumPresentOption<"type", "cyclic", 1, "">,
                    EnumPresentOption<"type", "complete", 1, "">,
                    PresentOption<"object", 2, "This is only relevant for container arrays and applies reshape on the objects within the container. If the option is specified, all dimensions of the objects will be reshaped, but all dimensions of container will be kept.">,
-                   OptEnumExprOption<"type", ["block", "cyclic", "complete"], "Block reshaping creates smaller arrays from consecutive blocks of the original array. Cyclic reshaping creates smaller arrays by interleaving elements from the original array. Complete reshaping decomposes the array into temporary individual elements and then recombines them into an array with a wider word.", Public, "complete">];
+                   OptEnumExprOption<"type", ["block", "cyclic", "complete"], "Block reshaping creates smaller arrays from consecutive blocks of the original array. Cyclic reshaping creates smaller arrays by interleaving elements from the original array. Complete reshaping decomposes the array into temporary individual elements and then recombines them into an array with a wider word.", Public, "complete">,
+                   PresentOption<"off", 3, "Turn off auto array reshape">
+         ];
 }
 
 // #pragma HLS array_stencil variable=<variable> [off]
@@ -266,7 +269,7 @@ def XlxDataflowPragma : HLSPragma {
     let Desc = "Enables task level pipelining, allowing functions and loops to execute concurrently. Used to optimize throughput and/or latency."; 
     let Objects = [Function, Loop, Region]; 
 
-    let Options = [PresentOption<"interval", 0, "", Hidden>,
+    let Options = [OptIntDefaultConstExprOption<"interval", -1, "", Deprecated>,
                    PresentOption<"disable_start_propagation", 1, "Disable the start propagation control layer that is added to control when each process inside a dataflow region can start.">];
 }
 
@@ -317,12 +320,13 @@ def XlxDisaggregatePragma : HLSPragma {
     let Options = [ReqVariableExprOption<"variable", "">];
 }
 
-// #pragma HLS expression_balance [off]
+// #pragma HLS expression_balance [off[=<false|true|0|1>]]
 def XlxExpressionBalancePragma : HLSPragma {
     let Name = "expression_balance";
     let Desc = "Allows automatic expression balancing to be turned off"; 
     let Objects = [Region]; 
-    let Options = [PresentOption<"off", 1, "Turn off expression balancing">];
+    let Options = [PresentOption<"off", 1, "Turn off expression balancing">
+                  ];
 }
 
 // todo: function_instantiate pragma parser use subjectParam to parser variable option, maybe we need refactor this to integrated into td parser
@@ -334,7 +338,7 @@ def XlxFunctionInstantiatePragma: HLSPragma {
     let Options = [ReqVariableExprOption<"variable", "">];
 }
 
-// #pragma HLS inline [self | region | all] [recursive] [off]
+// #pragma HLS inline [self | region | all] [recursive] [off[=<false|true|0|1>]]
 def XlxInlinePragma : HLSPragma {
     let Name = "inline";
     let Desc = "Inlines a function, removing function hierarchy at this level."; 
@@ -344,7 +348,8 @@ def XlxInlinePragma : HLSPragma {
                      EnumPresentOption<"type", "region", 1, "", Hidden>,
                      OptEnumExprOption<"type", ["self", "all", "region"], "", Hidden>, // ETP: New
                      PresentOption<"recursive", 2, "By default only one level of function inlining is performed. The -recursive option inlines all functions recursively down the hierarchy.">,
-                     PresentOption<"off", 3, "This disables function inlining and is used to prevent particular functions from being inlined.">];
+                     PresentOption<"off", 3, "This disables function inlining and is used to prevent particular functions from being inlined.">
+                  ];
 }
 
 // #pragma HLS latency [min=<int>] [max=<int>]
@@ -356,12 +361,13 @@ def XlxLatencyPragma : HLSPragma {
                    OptIntDefaultConstExprOption<"max", 65535, "">];
 }
 
-// #pragma HLS loop_flatten [off]
+// #pragma HLS loop_flatten [off[=<false|true|0|1>]]
 def XlxLoopFlattenPragma : HLSPragma {
     let Name = "loop_flatten";
     let Desc = "Allows nested loops to be collapsed into a single loop with improved latency"; 
     let Objects = [Loop]; 
-    let Options = [PresentOption<"off", 1, "This option prevents flattening from taking place. This can be used to prevent some loops from being flattened while all others in the specified location are flattened.">];
+    let Options = [PresentOption<"off", 1, "This option prevents flattening from taking place. This can be used to prevent some loops from being flattened while all others in the specified location are flattened.">
+                  ];
 }
 
 // #pragma HLS loop_merge [force]
@@ -382,12 +388,14 @@ def XlxLoopTripCountPragma : HLSPragma {
                    OptIntDefaultConstExprOption<"avg", 0, "Specify the average loop tripcount">];
 }
 
-// #pragma HLS occurrence [cycle=<int>]
+// #pragma HLS occurrence [cycle=<int>] [off[=<false|true|0|1>]]
 def XlxOccurrencePragma : HLSPragma {
     let Name = "occurrence";
     let Desc = "Used when pipelining functions or loops, to specify that the code in a location is executed at a lesser rate than the code in the enclosing function or loop"; 
     let Objects = [Region] ; 
-    let Options = [OptIntDefaultConstExprOption<"cycle", 1, "Specify the occurrence N/M, where N is the number of times the enclosing function or loop is executed and M is the number of times the conditional region is executed. N must be an integer multiple of M.">];
+    let Options = [OptIntDefaultConstExprOption<"cycle", 1, "Specify the occurrence N/M, where N is the number of times the enclosing function or loop is executed and M is the number of times the conditional region is executed. N must be an integer multiple of M.">,
+                   PresentOption<"off", 2, "Turn off auto occurrence inference">
+                  ];
 }
 
 // #pragma HLS PERFORMANCE target_ti=<value> target_tl=<value> assume_ti=<value> assume_tl=<value> [scope=[loop|region]]
@@ -401,11 +409,12 @@ def XlxPerformancePragma : HLSPragma {
                    OptDoubleConstExprOption<"target_tl", "0.0", "Specify the value of transaction latency that is targeted for the scope.">,
                    OptDoubleConstExprOption<"assume_ti", "0.0", "", Hidden>,
                    OptDoubleConstExprOption<"assume_tl", "0.0", "", Hidden>,
+                   OptEnumExprOption<"unit", ["cycle", "sec"], "">, 
                    OptEnumExprOption<"scope", ["loop", "region"], "", Hidden>
                   ];
 }
 
-// #pragma HLS pipeline II=<int> off rewind enable_flush
+// #pragma HLS pipeline II=<int> [off[=<false|true|0|1>]] [rewind[=<true|false>]] enable_flush
 def XlxPipelinePragma : HLSPragma {
     let Name = "pipeline";
     let Desc = "Reduces the initiation interval by allowing overlapped execution of operations within a loop or function"; 
@@ -413,9 +422,11 @@ def XlxPipelinePragma : HLSPragma {
 
     let Options = [OptIntDefaultConstExprOption<"ii", -1, "A positive integer value specifying the desired initiation interval for the pipeline.">,
                    PresentOption<"rewind", 1, "This enables a rewinding architecture for loop pipelines, which has continuous pipelining with no pause between one loop iteration ending and the next one starting.">,
+                   OptEnumExprOption<"rewind", ["true", "false"], "">,
                    PresentOption<"enable_flush", 2, "Use style=flp instead", Deprecated>,
                    PresentOption<"off", 3, "Disable loop pipelining for a loop that is automatically pipelined via 'config_compile -pipeline_loops'.">,
-                   OptEnumExprOption<"style", ["stp", "flp", "frp"], "Specify the pipeline implementation style">];
+                   OptEnumExprOption<"style", ["stp", "flp", "frp"], "Specify the pipeline implementation style">
+                  ];
 }
 
 // #pragma HLS protocol [floating | fixed] [mode={floating | fixed}]
@@ -428,13 +439,14 @@ def XlxProtocolPragma : HLSPragma {
                    OptEnumExprOption<"mode", ["fixed", "floating"], "Floating mode allows code from outside the protocol region to overlap with the region execution (other operations may be concurrent to the region).  Fixed mode ensures there is no overlap.", Public, "floating">];
 }
 
-// #pragma HLS reset variable=<a> [off]
+// #pragma HLS reset variable=<a> [off[=<false|true|0|1>]]
 def XlxResetPragma : HLSPragma {
     let Name = "reset";
     let Desc = "This command can be used to add or remove reset for specific state variables (global or static)"; 
     let Objects = [Static] ; 
     let Options = [ReqVariableExprOption<"variable", "">,
-                   PresentOption<"off", 1, "If present, reset will not be generated for the specified variable. On the other hand, without the option, reset will be generated for the specified variable.">];
+                   PresentOption<"off", 1, "If present, reset will not be generated for the specified variable. On the other hand, without the option, reset will be generated for the specified variable.">
+                  ];
 }
 
 // #pragma resource variable=<variable> core=<string> [latency=<int>] [ecc_mode={none | encode | decode | both}] 
@@ -502,7 +514,7 @@ def XlxTopPragma : HLSPragma {
     let Options = [OptIDExprOption<"name", "", "Specify the name to be used by the set_top command.">];
 }
 
-// #pragma HLS unroll [factor=<int>] [region | partial | complete] [skip_exit_check]
+// #pragma HLS unroll [factor=<int>] [region | partial | complete] [skip_exit_check] [off[=<false|true|0|1>]]
 def XlxUnrollPragma : HLSPragma {
     let Name = "unroll";
     let Desc = "Transform loops to create multiple instances of the loop body and its instructions that can then be scheduled independently"; 
@@ -512,7 +524,8 @@ def XlxUnrollPragma : HLSPragma {
                    EnumPresentOption<"type", "complete", 1, "", Hidden>,
                    EnumPresentOption<"type", "partial", 1, "", Hidden>, 
                    OptEnumExprOption<"type", ["partial", "complete", "region"], "", Hidden>, // ETP: New
-                   PresentOption<"skip_exit_check", 2, "For partial unrolling, remove exit check logic if possible">
+                   PresentOption<"skip_exit_check", 2, "For partial unrolling, remove exit check logic if possible">,
+                   PresentOption<"off", 3, "">
                    ];
 }
 
@@ -580,7 +593,8 @@ def XlxScalarInterfacePragma: HLSPragma {
   let Options = [ 
     PresentOption<"register", 1, "Registers the signal and any relevant protocol signals and instructs the signals to persist until at least the last cycle of the function execution">, 
     OptIntDefaultConstExprOption<"depth", 0, "Specifies the maximum number of samples for the test bench to process. This is required for pointer interfaces using ap_fifo mode.">, 
-    OptIntDefaultConstExprOption<"latency", 0, "Specify the latency for ap_memory and m_axi interfaces">
+    OptIntDefaultConstExprOption<"latency", 0, "Specify the latency for ap_memory and m_axi interfaces">,
+    OptEnumExprOption<"direct_io", ["true", "false"], "Specify DirectIO property for scalar access", Hidden>
   ];
 }
 
@@ -592,7 +606,8 @@ def XlxInterruptInterfacePragma: HLSPragma {
     PresentOption<"register", 1, "Registers the signal and any relevant protocol signals and instructs the signals to persist until at least the last cycle of the function execution">, 
     OptIntDefaultConstExprOption<"depth", 0, "Specifies the maximum number of samples for the test bench to process. This is required for pointer interfaces using ap_fifo mode.">, 
     OptIntDefaultConstExprOption<"latency", 0, "Specify the latency for ap_memory and m_axi interfaces">, 
-    OptIntDefaultConstExprOption<"interrupt", 0, "Only used by ap_vld/ap_hs. This option enables the I/O to be managed in interrupt, by creating the corresponding bits in the ISR and IER SAXILite file. Value N=16..31 specifies the bit position in both registers (by default assigned contiguously from 16)">
+    OptIntDefaultConstExprOption<"interrupt", 0, "Only used by ap_vld/ap_hs. This option enables the I/O to be managed in interrupt, by creating the corresponding bits in the ISR and IER SAXILite file. Value N=16..31 specifies the bit position in both registers (by default assigned contiguously from 16)">,
+    OptEnumExprOption<"direct_io", ["true", "false"], "Specify DirectIO property for scalar access", Hidden>
   ];
 
 }
@@ -689,9 +704,9 @@ def XlxCachePragma : HLSPragma {
     ReqVariableExprOption<"port", "Specify the interface for which cache is used.">,
     OptIntDefaultConstExprOption<"lines", 1, "Number of cache lines">,
     OptIntDefaultConstExprOption<"depth", 0, "Line size in words">,
-    OptIntDefaultConstExprOption<"ways", 1, "cache ways", Hidden>,
-    OptIntDefaultConstExprOption<"users", 1, "Number of port users", Hidden>,
-    OptEnumExprOption<"burst", ["off", "on"/*, "adaptive"*/], "HLS burst mode", Hidden>,
+//  OptIntDefaultConstExprOption<"ways", 1, "cache ways", Hidden>,
+//  OptIntDefaultConstExprOption<"users", 1, "Number of port users", Hidden>,
+//  OptEnumExprOption<"burst", ["off", "on"/*, "adaptive"*/], "HLS burst mode", Hidden>,
     OptEnumExprOption<"write_mode", ["write_back", "write_through"], "Write mode", Hidden>
   ];
 }

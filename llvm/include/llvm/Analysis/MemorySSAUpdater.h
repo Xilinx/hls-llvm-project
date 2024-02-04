@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -144,6 +145,14 @@ public:
   /// load is simply erased (not replaced), removeMemoryAccess should be called
   /// on the MemoryAccess for that store/load.
   void removeMemoryAccess(MemoryAccess *);
+  /// Remove MemoryAccess for a given instruction, if a MemoryAccess exists.
+  /// This should be called when an instruction (load/store) is deleted from
+  /// the program.
+  void removeMemoryAccess(const Instruction *I) {
+    if (MemoryAccess *MA = MSSA->getMemoryAccess(I))
+      removeMemoryAccess(MA);
+  }
+
 
 private:
   // Move What before Where in the MemorySSA IR.

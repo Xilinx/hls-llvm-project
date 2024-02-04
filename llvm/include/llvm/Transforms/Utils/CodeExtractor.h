@@ -4,6 +4,8 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// (C) Copyright 2016-2022 Xilinx, Inc. 
+// All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -34,6 +36,7 @@ class Module;
 class Type;
 class Value;
 class CallInst;
+class AssumptionCache;
 
   /// \brief Utility class for extracting code into a new function.
   ///
@@ -56,6 +59,7 @@ class CallInst;
     const bool AggregateArgs;
     BlockFrequencyInfo *BFI;
     BranchProbabilityInfo *BPI;
+    AssumptionCache *AC;
 
     // If true, varargs functions can be extracted.
     bool AllowVarArgs;
@@ -77,6 +81,7 @@ class CallInst;
     CodeExtractor(ArrayRef<BasicBlock *> BBs, DominatorTree *DT = nullptr,
                   bool AggregateArgs = false, BlockFrequencyInfo *BFI = nullptr,
                   BranchProbabilityInfo *BPI = nullptr,
+                  AssumptionCache *AC = nullptr,
                   bool AllowVarArgs = false);
 
     /// \brief Create a code extractor for a loop body.
@@ -85,7 +90,8 @@ class CallInst;
     /// block sequence of the loop.
     CodeExtractor(DominatorTree &DT, Loop &L, bool AggregateArgs = false,
                   BlockFrequencyInfo *BFI = nullptr,
-                  BranchProbabilityInfo *BPI = nullptr);
+                  BranchProbabilityInfo *BPI = nullptr,
+                  AssumptionCache *AC = nullptr);
 
     /// \brief Check to see if a block is valid for extraction.
     ///

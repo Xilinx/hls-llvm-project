@@ -7,7 +7,7 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
@@ -275,7 +275,7 @@ ModRefInfo AAResults::getModRefInfo(ImmutableCallSite CS1,
   // If CS2 only access memory through arguments, accumulate the mod/ref
   // information from CS1's references to the memory referenced by
   // CS2's arguments.
-  if (onlyAccessesArgPointees(CS2B)) {
+  if (onlyAccessesArgPointees(CS2B) || onlyAccessesInaccessibleOrArgMem(CS2B)) {
     if (!doesAccessArgPointees(CS2B))
       return ModRefInfo::NoModRef;
     ModRefInfo R = ModRefInfo::NoModRef;
@@ -324,7 +324,7 @@ ModRefInfo AAResults::getModRefInfo(ImmutableCallSite CS1,
 
   // If CS1 only accesses memory through arguments, check if CS2 references
   // any of the memory referenced by CS1's arguments. If not, return NoModRef.
-  if (onlyAccessesArgPointees(CS1B)) {
+  if (onlyAccessesArgPointees(CS1B) || onlyAccessesInaccessibleOrArgMem(CS1B)) {
     if (!doesAccessArgPointees(CS1B))
       return ModRefInfo::NoModRef;
     ModRefInfo R = ModRefInfo::NoModRef;

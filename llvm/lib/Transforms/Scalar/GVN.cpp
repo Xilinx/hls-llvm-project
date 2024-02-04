@@ -43,6 +43,7 @@
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/PHITransAddr.h"
+#include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Attributes.h"
@@ -1092,15 +1093,8 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
   // because if the index is out of bounds we should deoptimize rather than
   // access the array.
   // Check that there is no guard in this block above our intruction.
-  if (!IsSafeToSpeculativelyExecute) {
-    auto It = FirstImplicitControlFlowInsts.find(TmpBB);
-    if (It != FirstImplicitControlFlowInsts.end()) {
-      assert(It->second->getParent() == TmpBB &&
-             "Implicit control flow map broken?");
-      if (OI->dominates(It->second, LI))
-        return false;
-    }
-  }
+  if (!IsSafeToSpeculativelyExecute && ICF->isDominatedByICFIFromSameBlock(LI))
+    return false;
   while (TmpBB->getSinglePredecessor()) {
     TmpBB = TmpBB->getSinglePredecessor();
     if (TmpBB == LoadBB) // Infinite (unreachable) loop.
@@ -1117,8 +1111,7 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
       return false;
 
     // Check that there is no implicit control flow in a block above.
-    if (!IsSafeToSpeculativelyExecute &&
-        FirstImplicitControlFlowInsts.count(TmpBB))
+    if (!IsSafeToSpeculativelyExecute && ICF->hasICF(TmpBB))
       return false;
   }
 
@@ -1551,16 +1544,12 @@ bool GVN::processLoad(LoadInst *L) {
   AvailableValue AV;
   if (AnalyzeLoadAvailability(L, Dep, L->getPointerOperand(), AV)) {
     Value *AvailableValue = AV.MaterializeAdjustedValue(L, L, *this);
-
-    // Replace the load!
-    patchAndReplaceAllUsesWith(L, AvailableValue);
-    markInstructionForDeletion(L);
-    ++NumGVNLoad;
-    DEBUG(reportLoadElim(L, AvailableValue, ORE));
-    // Tell MDA to rexamine the reused pointer since we might have more
-    // information after forwarding it.
-    if (MD && AvailableValue->getType()->isPtrOrPtrVectorTy())
-      MD->invalidateCachedPointerInfo(AvailableValue);
+    if (auto PreL = dyn_cast<LoadInst>(AvailableValue)) {
+      if (LoadCache.count(PreL)) { 
+        AvailableValue = LoadCache[PreL];
+      }
+    }
+    LoadCache[L] = AvailableValue; 
     return true;
   }
 
@@ -1913,6 +1902,9 @@ bool GVN::processInstruction(Instruction *I) {
   if (Value *V = SimplifyInstruction(I, {DL, TLI, DT, AC})) {
     bool Changed = false;
     if (!I->use_empty()) {
+      // Simplification can cause a special instruction to become not special.
+      // For example, devirtualization to a willreturn function.
+      ICF->removeUsersOf(I);
       I->replaceAllUsesWith(V);
       Changed = true;
     }
@@ -2051,6 +2043,8 @@ bool GVN::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
   MD = RunMD;
   OrderedInstructions OrderedInstrs(DT);
   OI = &OrderedInstrs;
+  ImplicitControlFlowTracking ImplicitCFT;
+  ICF = &ImplicitCFT;
   VN.setMemDep(MD);
   ORE = RunORE;
   LInfo = LI;
@@ -2107,16 +2101,17 @@ bool GVN::processBlock(BasicBlock *BB) {
   // FIXME: Kill off InstrsToErase by doing erasing eagerly in a helper function
   // (and incrementing BI before processing an instruction).
   assert(InstrsToErase.empty() &&
-         "We expect InstrsToErase to be empty across iterations");
+      "We expect InstrsToErase to be empty across iterations");
   if (DeadBlocks.count(BB))
     return false;
 
   // Clearing map before every BB because it can be used only for single BB.
   ReplaceWithConstMap.clear();
+  LoadCache.clear();
   bool ChangedFunction = false;
 
   for (BasicBlock::iterator BI = BB->begin(), BE = BB->end();
-       BI != BE;) {
+      BI != BE;) {
     if (!ReplaceWithConstMap.empty())
       ChangedFunction |= replaceOperandsWithConsts(&*BI);
     ChangedFunction |= processInstruction(&*BI);
@@ -2134,8 +2129,7 @@ bool GVN::processBlock(BasicBlock *BB) {
     if (!AtStart)
       --BI;
 
-    bool InvalidateImplicitCF = false;
-    const Instruction *MaybeFirstICF = FirstImplicitControlFlowInsts.lookup(BB);
+    const Instruction *MaybeFirstICF = ICF->getFirstICFI(BB);
     for (auto *I : InstrsToErase) {
       assert(I->getParent() == BB && "Removing instruction from wrong block?");
       DEBUG(dbgs() << "GVN removed: " << *I << '\n');
@@ -2143,16 +2137,14 @@ bool GVN::processBlock(BasicBlock *BB) {
       DEBUG(verifyRemoved(I));
       if (MaybeFirstICF == I) {
         // We have erased the first ICF in block. The map needs to be updated.
-        InvalidateImplicitCF = true;
         // Do not keep dangling pointer on the erased instruction.
         MaybeFirstICF = nullptr;
       }
+      ICF->removeInstruction(I);
       I->eraseFromParent();
     }
 
     InstrsToErase.clear();
-    if (InvalidateImplicitCF)
-      fillImplicitControlFlowInfo(BB);
 
     if (AtStart)
       BI = BB->begin();
@@ -2160,6 +2152,38 @@ bool GVN::processBlock(BasicBlock *BB) {
       ++BI;
   }
 
+  for (auto I : LoadCache) {
+    auto L = I.first;
+    auto AvailableValue = I.second;
+    // Replace the load!
+    patchAndReplaceAllUsesWith(L, AvailableValue);
+    markInstructionForDeletion(L);
+    ++NumGVNLoad;
+    DEBUG(reportLoadElim(L, AvailableValue, ORE));
+    // Tell MDA to rexamine the reused pointer since we might have more
+    // information after forwarding it.
+    if (MD && AvailableValue->getType()->isPtrOrPtrVectorTy())
+      MD->invalidateCachedPointerInfo(AvailableValue);
+  }
+
+  LoadCache.clear();
+
+  const Instruction *MaybeFirstICF = ICF->getFirstICFI(BB);
+  for (auto *I : InstrsToErase) {
+    assert(I->getParent() == BB && "Removing instruction from wrong block?");
+    DEBUG(dbgs() << "GVN removed: " << *I << '\n');
+    if (MD) MD->removeInstruction(I);
+    DEBUG(verifyRemoved(I));
+    if (MaybeFirstICF == I) {
+      // We have erased the first ICF in block. The map needs to be updated.
+      // Do not keep dangling pointer on the erased instruction.
+      MaybeFirstICF = nullptr;
+    }
+    ICF->removeInstruction(I);
+    I->eraseFromParent();
+  }
+
+  InstrsToErase.clear();
   return ChangedFunction;
 }
 
@@ -2202,6 +2226,8 @@ bool GVN::performScalarPREInsertion(Instruction *Instr, BasicBlock *Pred,
   Instr->insertBefore(Pred->getTerminator());
   Instr->setName(Instr->getName() + ".pre");
   Instr->setDebugLoc(Instr->getDebugLoc());
+
+  ICF->insertInstructionTo(Instr, Pred);
 
   unsigned Num = VN.lookupOrAdd(Instr);
   VN.add(Instr, Num);
@@ -2304,13 +2330,8 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
       // is always executed. An instruction with implicit control flow could
       // prevent us from doing it. If we cannot speculate the execution, then
       // PRE should be prohibited.
-      auto It = FirstImplicitControlFlowInsts.find(CurrentBlock);
-      if (It != FirstImplicitControlFlowInsts.end()) {
-        assert(It->second->getParent() == CurrentBlock &&
-               "Implicit control flow map broken?");
-        if (OI->dominates(It->second, CurInst))
-          return false;
-      }
+      if (ICF->isDominatedByICFIFromSameBlock(CurInst))
+        return false;
     }
 
     // Don't do PRE across indirect branch.
@@ -2371,13 +2392,10 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   if (MD)
     MD->removeInstruction(CurInst);
   DEBUG(verifyRemoved(CurInst));
-  bool InvalidateImplicitCF =
-      FirstImplicitControlFlowInsts.lookup(CurInst->getParent()) == CurInst;
   // FIXME: Intended to be markInstructionForDeletion(CurInst), but it causes
   // some assertion failures.
+  ICF->removeInstruction(CurInst);
   CurInst->eraseFromParent();
-  if (InvalidateImplicitCF)
-    fillImplicitControlFlowInfo(CurrentBlock);
   ++NumGVNInstr;
 
   return true;
@@ -2446,8 +2464,6 @@ bool GVN::iterateOnFunction(Function &F) {
   ReversePostOrderTraversal<Function *> RPOT(&F);
 
   for (BasicBlock *BB : RPOT)
-    fillImplicitControlFlowInfo(BB);
-  for (BasicBlock *BB : RPOT)
     Changed |= processBlock(BB);
 
   return Changed;
@@ -2458,48 +2474,7 @@ void GVN::cleanupGlobalSets() {
   LeaderTable.clear();
   BlockRPONumber.clear();
   TableAllocator.Reset();
-  FirstImplicitControlFlowInsts.clear();
-}
-
-void
-GVN::fillImplicitControlFlowInfo(BasicBlock *BB) {
-  // Make sure that all marked instructions are actually deleted by this point,
-  // so that we don't need to care about omitting them.
-  assert(InstrsToErase.empty() && "Filling before removed all marked insns?");
-  auto MayNotTransferExecutionToSuccessor = [&](const Instruction *I) {
-    // If a block's instruction doesn't always pass the control to its successor
-    // instruction, mark the block as having implicit control flow. We use them
-    // to avoid wrong assumptions of sort "if A is executed and B post-dominates
-    // A, then B is also executed". This is not true is there is an implicit
-    // control flow instruction (e.g. a guard) between them.
-    //
-    // TODO: Currently, isGuaranteedToTransferExecutionToSuccessor returns false
-    // for volatile stores and loads because they can trap. The discussion on
-    // whether or not it is correct is still ongoing. We might want to get rid
-    // of this logic in the future. Anyways, trapping instructions shouldn't
-    // introduce implicit control flow, so we explicitly allow them here. This
-    // must be removed once isGuaranteedToTransferExecutionToSuccessor is fixed.
-    if (isGuaranteedToTransferExecutionToSuccessor(I))
-      return false;
-    if (isa<LoadInst>(I)) {
-      assert(cast<LoadInst>(I)->isVolatile() &&
-             "Non-volatile load should transfer execution to successor!");
-      return false;
-    }
-    if (isa<StoreInst>(I)) {
-      assert(cast<StoreInst>(I)->isVolatile() &&
-             "Non-volatile store should transfer execution to successor!");
-      return false;
-    }
-    return true;
-  };
-  FirstImplicitControlFlowInsts.erase(BB);
-
-  for (auto &I : *BB)
-    if (MayNotTransferExecutionToSuccessor(&I)) {
-      FirstImplicitControlFlowInsts[BB] = &I;
-      break;
-    }
+  ICF->clear();
 }
 
 /// Verify that the specified instruction does not occur in our
@@ -2673,6 +2648,8 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AssumptionCacheTracker>();
     AU.addRequired<DominatorTreeWrapperPass>();
+    if (HLS)
+      AU.addRequired<SCEVAAWrapperPass>();
     AU.addRequired<TargetLibraryInfoWrapperPass>();
     if (!NoLoads)
       AU.addRequired<MemoryDependenceWrapperPass>();

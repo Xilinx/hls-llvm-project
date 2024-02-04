@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -27,6 +28,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/EHPersonalities.h"
+#include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
@@ -44,6 +46,7 @@ class BasicBlock;
 class DataLayout;
 class Loop;
 class LoopInfo;
+class LoopSafetyInfo;
 class OptimizationRemarkEmitter;
 class PredicatedScalarEvolution;
 class PredIteratorCache;
@@ -51,18 +54,6 @@ class ScalarEvolution;
 class SCEV;
 class TargetLibraryInfo;
 class TargetTransformInfo;
-
-/// \brief Captures loop safety information.
-/// It keep information for loop & its header may throw exception.
-struct LoopSafetyInfo {
-  bool MayThrow = false;       // The current loop contains an instruction which
-                               // may throw.
-  bool HeaderMayThrow = false; // Same as previous, but specific to loop header
-  // Used to update funclet bundle operands.
-  DenseMap<BasicBlock *, ColorVector> BlockColors;
-
-  LoopSafetyInfo() = default;
-};
 
 BasicBlock *InsertPreheaderForLoop(Loop *L, DominatorTree *DT, LoopInfo *LI,
                                    bool PreserveLCSSA);
@@ -125,7 +116,7 @@ bool formLCSSARecursively(Loop &L, DominatorTree &DT, LoopInfo *LI,
 bool sinkRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
                 TargetLibraryInfo *, TargetTransformInfo *, Loop *,
                 AliasSetTracker *, LoopSafetyInfo *,
-                OptimizationRemarkEmitter *ORE);
+                OptimizationRemarkEmitter *, ScalarEvolution *);
 
 /// \brief Walk the specified region of the CFG (defined by all blocks
 /// dominated by the specified block, and that are in the current loop) in depth
@@ -137,7 +128,8 @@ bool sinkRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
 /// ORE. It returns changed status.
 bool hoistRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
                  TargetLibraryInfo *, Loop *, AliasSetTracker *,
-                 LoopSafetyInfo *, OptimizationRemarkEmitter *ORE);
+                 LoopSafetyInfo *, OptimizationRemarkEmitter *,
+                 ScalarEvolution *);
 
 /// This function deletes dead loops. The caller of this function needs to
 /// guarantee that the loop is infact dead.
@@ -167,24 +159,13 @@ bool promoteLoopAccessesToScalars(const SmallSetVector<Value *, 8> &,
                                   PredIteratorCache &, LoopInfo *,
                                   DominatorTree *, const TargetLibraryInfo *,
                                   Loop *, AliasSetTracker *, LoopSafetyInfo *,
-                                  OptimizationRemarkEmitter *, AliasAnalysis *);
+                                  OptimizationRemarkEmitter *, AliasAnalysis *,
+                                  ScalarEvolution *);
 
 /// Does a BFS from a given node to all of its children inside a given loop.
 /// The returned vector of nodes includes the starting point.
 SmallVector<DomTreeNode *, 16> collectChildrenInLoop(DomTreeNode *N,
                                                      const Loop *CurLoop);
-
-/// \brief Computes safety information for a loop
-/// checks loop body & header for the possibility of may throw
-/// exception, it takes LoopSafetyInfo and loop as argument.
-/// Updates safety information in LoopSafetyInfo argument.
-void computeLoopSafetyInfo(LoopSafetyInfo *, Loop *);
-
-/// Returns true if the instruction in a loop is guaranteed to execute at least
-/// once.
-bool isGuaranteedToExecute(const Instruction &Inst, const DominatorTree *DT,
-                           const Loop *CurLoop,
-                           const LoopSafetyInfo *SafetyInfo);
 
 /// \brief Returns the instructions that use values defined in the loop.
 SmallVector<Instruction *, 8> findDefsUsedOutsideOfLoop(Loop *L);
@@ -220,10 +201,13 @@ void getLoopAnalysisUsage(AnalysisUsage &AU);
 /// instructions from loop body to preheader/exit. Check if the instruction
 /// can execute speculatively.
 /// If \p ORE is set use it to emit optimization remarks.
+/// If \p MayBlockHLSIfMoveNonSpeculativeI is set to true, returns false on
+/// non speculative type instructions.
 bool canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
                         Loop *CurLoop, AliasSetTracker *CurAST,
                         LoopSafetyInfo *SafetyInfo,
-                        OptimizationRemarkEmitter *ORE = nullptr);
+                        OptimizationRemarkEmitter *ORE = nullptr,
+                        bool MayBlockHLSIfMoveNonSpeculativeI = false);
 
 /// Generates a vector reduction using shufflevectors to reduce the value.
 Value *getShuffleReduction(IRBuilder<> &Builder, Value *Src, unsigned Op,
