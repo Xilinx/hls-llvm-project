@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1398,6 +1398,22 @@ static bool SemaBuiltinDirectIO(Sema &S, CallExpr *Call) {
   return false;
 }
 
+static bool SemaBuiltinHLSFunctionNameMatch(Sema &S, CallExpr* Call) 
+{
+  const Expr * Arg = Call->getArg(0); 
+  if (const ImplicitCastExpr *ICE = dyn_cast<ImplicitCastExpr>(Arg)){ 
+    Arg = ICE->getSubExpr(); 
+  }
+
+  if (isa<StringLiteral>(Arg)) { 
+    return false; 
+  }
+  else { 
+    return S.Diag(Call->getLocStart(), diag::err_hls_function_name_match_arg) ; 
+  }
+}
+
+
 bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   switch (BuiltinID) {
   case FPGA::BI__fpga_mux:
@@ -1423,7 +1439,6 @@ bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   case FPGA::BI__fpga_float_compare_ne:
   case FPGA::BI__fpga_float_compare_uo:
     return SemaBuiltinFloatCompare(*this, Call);
-  case FPGA::BI__fpga_set_stream_depth:
   case FPGA::BI__fpga_set_stream_of_blocks_depth:
     return SemaBuiltinSetStreamDepth(*this, Call);
   case FPGA::BI__fpga_fifo_not_empty:
@@ -2089,6 +2104,9 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
     if (SemaBuiltinOSLogFormat(TheCall))
       return ExprError();
     break;
+  case Builtin::BI__hls_function_name_match:
+    if( SemaBuiltinHLSFunctionNameMatch(*this, TheCall))
+      return ExprError(); 
   }
 
   // Since the target specific builtins for each arch overlap, only check those

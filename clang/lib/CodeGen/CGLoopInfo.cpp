@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -250,17 +250,10 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
       continue;
     }
 
-    if (const Expr* ifCond = Attr->getHLSIfCond()) { 
-      if (!ifCond->isEvaluatable(Ctx)) {
-        CGF->CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
-      }
-      else { 
-        llvm::APSInt Value = ifCond->EvaluateKnownConstInt(Ctx);
-        if (Value.getZExtValue() == 0){ 
-          continue; 
-        }
-      }
-    }
+    bool hls_ifcond = CGF->EvaluateHLSIFCond(Attr->getHLSIfCond()); 
+
+    if (!hls_ifcond )
+      continue; 
 
     if (isa<XlxPipelineAttr>(Attr)) {
       setRewind(cast<XlxPipelineAttr>(Attr)->getRewind());

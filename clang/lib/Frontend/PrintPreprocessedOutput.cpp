@@ -331,6 +331,7 @@ void PrintPPOutputPPCallbacks::FileChanged(SourceLocation Loc,
   SmallString<128> CanonicalNameBuf(NewFileName); 
   StringRef new_file_name = clang::make_canonical(CanonicalNameBuf);
   int i = 0; 
+  DEBUG(llvm::dbgs() << "FileChange, newFileName: " << NewFileName << "\n"); 
   WillInsertedDirectives.clear(); 
   for ( i = 0; i < HLSDirectives.size(); i++ ) { 
     HLSDirective &directive = HLSDirectives[i]; 
@@ -928,6 +929,7 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
 
   DEBUG(llvm::dbgs() << "--------------- start  preprocessor output dump ------------------\n";  ); 
 
+  unsigned curLine = 0; 
   while (1) {
     if (Callbacks->hasEmittedDirectiveOnThisLine()) {
       Callbacks->startNewLineIfNeeded();
@@ -946,25 +948,33 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
       OS << ' ';
     }
 
-
-    if (Tok.isAtStartOfLine()) { 
-      DEBUG(llvm::dbgs() << "check " << Callbacks->getCurFilename() << " at line: " << Callbacks->getCurLine() << "\n";  ); 
-      for( auto idx: directive_idxs) { 
-        DEBUG(llvm::dbgs() << "one left 'directive' that will be dump:  " ); 
-        HLSDirective *directive = &Callbacks->HLSDirectives[idx]; 
-        OS << "\n#  " << directive->directive_source_line << " \"" << directive->directive_source_file << "\" 1\n"; 
-        OS << directive->pragma << "\n"; 
-        OS << "#  " << Callbacks->getCurLine() << " \"" << Callbacks->getCurFilename() << "\" 2\n"; 
-        DEBUG(llvm::dbgs() << "finish one directive " << directive->pragma  << " at line: " << directive->line << "\n"; ); 
-        directive->success = true; 
-        // replace current 'idx' with last 'idx', and resize 
-      }
-      directive_idxs.clear();
-      if (!Callbacks->WillInsertedDirectives.empty()) { 
+    if (curLine != Callbacks->getCurLine()) { 
+      //if come into new line 
+      curLine = Callbacks->getCurLine(); 
+      if ( !Callbacks->WillInsertedDirectives.empty()) { 
+        //run into new line
+        DEBUG(llvm::dbgs() << "check " << Callbacks->getCurFilename() << " at line: " << Callbacks->getCurLine() << "\n";  ); 
+        //dump left directive to preprocessed source code  , 'left directive' means some directive is with column is bigger , 
+        //can not dump in lastest line , we will dump to new line 
+        for( auto idx: Callbacks->WillInsertedDirectives) { 
+          HLSDirective *directive = &Callbacks->HLSDirectives[idx]; 
+          if (directive->line < Callbacks->getCurLine() && !directive->success) { 
+            DEBUG(llvm::dbgs() << "one left 'directive' that will be dump:  " ); 
+            OS << "\n#  " << directive->directive_source_line << " \"" << directive->directive_source_file << "\" 1\n"; 
+            OS << directive->pragma << "\n"; 
+            OS << "#  " << Callbacks->getCurLine() << " \"" << Callbacks->getCurFilename() << "\" 2\n"; 
+            DEBUG(llvm::dbgs() << "finish one directive " << directive->pragma  << " at line: " << directive->line << "\n"; ); 
+            directive->success = true; 
+            // replace current 'idx' with last 'idx', and resize 
+          }
+        }
+        directive_idxs.clear();
+        //collect the directives that match the current line num
         for( auto idx : Callbacks->WillInsertedDirectives) { 
-          if (Callbacks->HLSDirectives[idx].line == Callbacks->getCurLine()) { 
+          HLSDirective* directive = &Callbacks->HLSDirectives[idx]; 
+          if (directive->line == Callbacks->getCurLine() && !directive->success) { 
             directive_idxs.push_back(idx); 
-            DEBUG(llvm::dbgs() << "be ready to insert pragma  at line " << Callbacks->getCurLine() << " : " << Callbacks->HLSDirectives[idx].pragma ); 
+            DEBUG(llvm::dbgs() << "be ready to insert pragma  at line " << Callbacks->getCurLine() << " : " << directive->pragma ); 
           }
         }
       }
@@ -977,7 +987,7 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
       SourceLocation Loc = Tok.getLocation(); 
       FullSourceLoc fullLoc = FullSourceLoc(Loc, PP.getSourceManager()); 
       int column  = fullLoc.getExpansionColumnNumber(); 
-      if (column >= directive->column) { 
+      if (column >= directive->column && directive->line == Callbacks->getCurLine()) { 
         DEBUG(llvm::dbgs() << "will insert HLS directive " << directive->pragma << " into " << Callbacks->getCurFilename() << "\n"; ); 
         OS << "\n# " << directive->directive_source_line << " \"" << directive->directive_source_file << "\" 1\n"; 
         OS << directive->pragma << "\n"; 

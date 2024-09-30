@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1299,13 +1300,13 @@ static bool isSafeDependenceDistance(const DataLayout &DL, ScalarEvolution &SE,
 
   const SCEV *CastedDist = &Dist;
   const SCEV *CastedProduct = Product;
-  uint64_t DistTypeSize = DL.getTypeAllocSize(Dist.getType());
-  uint64_t ProductTypeSize = DL.getTypeAllocSize(Product->getType());
+  uint64_t DistTypeSizeBits = DL.getTypeSizeInBits(Dist.getType());
+  uint64_t ProductTypeSizeBits = DL.getTypeSizeInBits(Product->getType());
 
   // The dependence distance can be positive/negative, so we sign extend Dist; 
   // The multiplication of the absolute stride in bytes and the 
   // backdgeTakenCount is non-negative, so we zero extend Product.
-  if (DistTypeSize > ProductTypeSize)
+  if (DistTypeSizeBits > ProductTypeSizeBits)
     CastedProduct = SE.getZeroExtendExpr(Product, Dist.getType());
   else
     CastedDist = SE.getNoopOrSignExtend(&Dist, Product->getType());
@@ -1651,12 +1652,16 @@ bool LoopAccessInfo::canAnalyzeLoop() {
                << TheLoop->getHeader()->getParent()->getName() << ": "
                << TheLoop->getHeader()->getName() << '\n');
 
+// HLS begin
+#if 0
   // We can only analyze innermost loops.
   if (!TheLoop->empty()) {
     DEBUG(dbgs() << "LAA: loop is not the innermost loop\n");
     recordAnalysis("NotInnerMostLoop") << "loop is not the innermost loop";
     return false;
   }
+#endif
+// HLS end
 
   // We must have a single backedge.
   if (TheLoop->getNumBackEdges() != 1) {
@@ -1716,6 +1721,15 @@ void LoopAccessInfo::analyzeLoop(AliasAnalysis *AA, LoopInfo *LI,
 
   // For each block.
   for (BasicBlock *BB : TheLoop->blocks()) {
+    // HLS: skip the BBs in the sub-loops.
+    // 1rst, HLS extends the loop-access-analysis from inner most loop to outer
+    // loops, so this limitation will not cause regression. 2nd, currently we
+    // only care about the two accesses at the same loop level. And if they're
+    // both in the same inner loop, then it should be analyzed already or later
+    // when visit the inner loop. And if they're in different inner loops, then
+    // no meaningful result from the analysis.
+    if (LI->getLoopFor(BB) != TheLoop)
+      continue;
     // Scan the BB and collect legal loads and stores.
     for (Instruction &I : *BB) {
       // If this is a load, save it. If this instruction can read from memory
@@ -2165,12 +2179,12 @@ void LoopAccessInfo::collectStridedAccess(Value *MemAccess) {
   // The Stride can be positive/negative, so we sign extend Stride; 
   // The backdgeTakenCount is non-negative, so we zero extend BETakenCount.
   const DataLayout &DL = TheLoop->getHeader()->getModule()->getDataLayout();
-  uint64_t StrideTypeSize = DL.getTypeAllocSize(StrideExpr->getType());
-  uint64_t BETypeSize = DL.getTypeAllocSize(BETakenCount->getType());
+  uint64_t StrideTypeSizeBits = DL.getTypeSizeInBits(StrideExpr->getType());
+  uint64_t BETypeSizeBits = DL.getTypeSizeInBits(BETakenCount->getType());
   const SCEV *CastedStride = StrideExpr;
   const SCEV *CastedBECount = BETakenCount;
   ScalarEvolution *SE = PSE->getSE();
-  if (BETypeSize >= StrideTypeSize)
+  if (BETypeSizeBits >= StrideTypeSizeBits)
     CastedStride = SE->getNoopOrSignExtend(StrideExpr, BETakenCount->getType());
   else
     CastedBECount = SE->getZeroExtendExpr(BETakenCount, StrideExpr->getType());

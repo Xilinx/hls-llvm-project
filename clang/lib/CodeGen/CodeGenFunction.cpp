@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1328,11 +1328,24 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
 
   Stmt *Body = FD->getBody();
   if (getLangOpts().HLSExt) {
-    SmallVector<const XlxBindOpAttr*, 4> attrs;
+    std::map<const XlxBindOpAttr*, bool> attrs;
     for( auto attr : FD->specific_attrs<XlxBindOpAttr>()){
-      attrs.push_back(attr);
+      attrs[attr] = false;
     }
+
     LowerBindOpScope(Body, attrs);
+
+    for(auto kv: attrs){ 
+      if (!kv.second){ 
+        //failed locate the assign expression for the lower bind_op, report warning message 
+        Expr *var_ref = kv.first->getVariable(); 
+        std::string var_name ; 
+        llvm::raw_string_ostream os(var_name); 
+        var_ref->printPretty(os, nullptr, PrintingPolicy(getContext().getLangOpts()) ); 
+        CGM.getDiags().Report(kv.first->getLocation(), 
+          diag::warn_xlx_bind_op_failed) << os.str(); 
+      }
+    }
   }
 
   // Initialize helper which will detect jumps which can cause invalid lifetime

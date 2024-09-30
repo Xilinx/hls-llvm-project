@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
@@ -1393,7 +1393,7 @@ const XlxArrayStencilAttr *TemplateInstantiator::TransformXlxArrayStencilAttr(
   Sema &S = getSema();
 
   return (::new (S.Context) XlxArrayStencilAttr(
-      A->getRange(), S.Context, A->getVariable(), A->getEnabled(),
+      A->getRange(), S.Context, A->getVariable(), A->getOff(),
       A->getSpellingListIndex()));
 }
 

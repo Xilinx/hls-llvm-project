@@ -29,6 +29,7 @@ class BlockFrequencyInfo;
 class BranchProbabilityInfo;
 class DeferredDominance;
 class DominatorTree;
+class PostDominatorTree;
 class Function;
 class Instruction;
 class LoopInfo;
@@ -182,7 +183,8 @@ BasicBlock *SplitEdge(BasicBlock *From, BasicBlock *To,
 /// block. The two blocks are joined by an unconditional branch and the loop
 /// info is updated.
 BasicBlock *SplitBlock(BasicBlock *Old, Instruction *SplitPt,
-                       DominatorTree *DT = nullptr, LoopInfo *LI = nullptr);
+                       DominatorTree *DT = nullptr, LoopInfo *LI = nullptr,
+                       PostDominatorTree *PDT = nullptr);
 
 /// This method introduces at least one new basic block into the function and
 /// moves some of the predecessors of BB to be predecessors of the new block.
@@ -254,7 +256,8 @@ TerminatorInst *SplitBlockAndInsertIfThen(Value *Cond, Instruction *SplitBefore,
                                           bool Unreachable,
                                           MDNode *BranchWeights = nullptr,
                                           DominatorTree *DT = nullptr,
-                                          LoopInfo *LI = nullptr);
+                                          LoopInfo *LI = nullptr,
+                                          PostDominatorTree *PDT = nullptr);
 
 /// SplitBlockAndInsertIfThenElse is similar to SplitBlockAndInsertIfThen,
 /// but also creates the ElseBlock.

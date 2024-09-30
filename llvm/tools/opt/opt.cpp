@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -527,8 +528,7 @@ int main(int argc, char **argv) {
     platform::SetPlatformDbFile(PlatformDBFilePath);
     platform::PlatformBasic::getInstance()->load(PlatformDeviceName);
 
-    pf_newFE::SetPlatformDbFile(PlatformDBFilePath);
-    pf_newFE::CoreInstFactory::getInstance()->createCores(PlatformDeviceName);
+    platform::coreInstFactoryInit(PlatformDBFilePath, PlatformDeviceName, DeviceResourceInfo);
 
   } else if (PlatformDBFilePath != "" || PlatformDeviceName != "") {
       errs() << "Must specify both '--hls-platform-db-name' and '--hls-platform-name' or neither\n";

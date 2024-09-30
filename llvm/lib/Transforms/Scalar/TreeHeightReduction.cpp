@@ -447,7 +447,7 @@ static bool isFpInstTHRTarget(Instruction *I) {
   if (!I->getType()->isFloatingPointTy())
     return false;
   // FAdd or FMul with reassoc
-  return I->isCommutative() && I->isAssociative();
+  return I->isCommutative() && I->hasAllowReassoc();
 }
 
 bool TreeHeightReduction::isTHRTargetInst(Instruction *I) const {

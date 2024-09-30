@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -4960,9 +4961,11 @@ void CodeGenModule::genTopArgAnnotation()
       if (D->getType()->isReferenceType() || D->getType()->isPointerType()) { 
         fields.push_back(0);
         GenerateStreamAnnotationIntrinsic(builder, Parm, D, D->getType()->getPointeeType(), fields, true);
+        GenerateDirectIOAnnotationIntrinsic(builder, Parm, D, D->getType()->getPointeeType(), fields, true);
       }
       else { 
         GenerateStreamAnnotationIntrinsic(builder, Parm, D, D->getType(), fields, false);
+        GenerateDirectIOAnnotationIntrinsic(builder, Parm, D, D->getType(), fields, false);
       }
     }
   }

@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1029,6 +1029,7 @@ protected:
   Instruction *widenIVUse(NarrowIVDefUse DU, SCEVExpander &Rewriter);
 
   bool widenLoopCompare(NarrowIVDefUse DU);
+  bool widenWithVariantUse(NarrowIVDefUse DU);
 
   void pushNarrowIVUsers(Instruction *NarrowDef, Instruction *WideDef);
 };
@@ -1373,6 +1374,222 @@ bool WidenIV::widenLoopCompare(NarrowIVDefUse DU) {
   return true;
 }
 
+#if 0
+/// Find a point in code which dominates all given instructions. We can safely
+/// assume that, whatever fact we can prove at the found point, this fact is
+/// also true for each of the given instructions.
+static Instruction *findCommonDominator(ArrayRef<Instruction *> Instructions,
+                                        DominatorTree &DT) {
+  Instruction *CommonDom = nullptr;
+  for (auto *Insn : Instructions)
+    CommonDom =
+        CommonDom ? DT.findNearestCommonDominator(CommonDom, Insn) : Insn;
+  assert(CommonDom && "Common dominator not found?");
+  return CommonDom;
+}
+#endif
+
+// The widenIVUse avoids generating trunc by evaluating the use as AddRec, this
+// will not work when:
+//    1) SCEV traces back to an instruction inside the loop that SCEV can not
+// expand, eg. add %indvar, (load %addr)
+//    2) SCEV finds a loop variant, eg. add %indvar, %loopvariant
+// While SCEV fails to avoid trunc, we can still try to use instruction
+// combining approach to prove trunc is not required. This can be further
+// extended with other instruction combining checks, but for now we handle the
+// following case (sub can be "add" and "mul", "nsw + sext" can be "nus + zext")
+//
+// Src:
+//   %c = sub nsw %b, %indvar
+//   %d = sext %c to i64
+// Dst:
+//   %indvar.ext1 = sext %indvar to i64
+//   %m = sext %b to i64
+//   %d = sub nsw i64 %m, %indvar.ext1
+// Therefore, as long as the result of add/sub/mul is extended to wide type, no
+// trunc is required regardless of how %b is generated. This pattern is common
+// when calculating address in 64 bit architecture
+bool WidenIV::widenWithVariantUse(NarrowIVDefUse DU) {
+  Instruction *NarrowUse = DU.NarrowUse;
+  Instruction *NarrowDef = DU.NarrowDef;
+  Instruction *WideDef = DU.WideDef;
+
+  // Handle the common case of add<nsw/nuw>
+  const unsigned OpCode = NarrowUse->getOpcode();
+  // Only Add/Sub/Mul instructions are supported.
+  if (OpCode != Instruction::Add && OpCode != Instruction::Sub &&
+      OpCode != Instruction::Mul)
+    return false;
+
+  // The operand that is not defined by NarrowDef of DU. Let's call it the
+  // other operand.
+  assert((NarrowUse->getOperand(0) == NarrowDef ||
+          NarrowUse->getOperand(1) == NarrowDef) &&
+         "bad DU");
+
+  const OverflowingBinaryOperator *OBO =
+    cast<OverflowingBinaryOperator>(NarrowUse);
+  ExtendKind ExtKind = getExtendKind(NarrowDef);
+  bool CanSignExtend = ExtKind == SignExtended && OBO->hasNoSignedWrap();
+  bool CanZeroExtend = ExtKind == ZeroExtended && OBO->hasNoUnsignedWrap();
+  auto AnotherOpExtKind = ExtKind;
+
+  // Check that all uses are either:
+  // - narrow def (in case of we are widening the IV increment);
+  // - single-input LCSSA Phis;
+  // - comparison of the chosen type;
+  // - extend of the chosen type (raison d'etre).
+  SmallVector<Instruction *, 4> ExtUsers;
+  SmallVector<PHINode *, 4> LCSSAPhiUsers;
+  SmallVector<ICmpInst *, 4> ICmpUsers;
+  for (Use &U : NarrowUse->uses()) {
+    Instruction *User = cast<Instruction>(U.getUser());
+    if (User == NarrowDef)
+      continue;
+    if (!L->contains(User)) {
+      auto *LCSSAPhi = cast<PHINode>(User);
+      // Make sure there is only 1 input, so that we don't have to split
+      // critical edges.
+      if (LCSSAPhi->getNumOperands() != 1)
+        return false;
+      LCSSAPhiUsers.push_back(LCSSAPhi);
+      continue;
+    }
+    if (auto *ICmp = dyn_cast<ICmpInst>(User)) {
+      auto Pred = ICmp->getPredicate();
+      // We have 3 types of predicates: signed, unsigned and equality
+      // predicates. For equality, it's legal to widen icmp for either sign and
+      // zero extend. For sign extend, we can also do so for signed predicates,
+      // likeweise for zero extend we can widen icmp for unsigned predicates.
+      if (ExtKind == ZeroExtended && ICmpInst::isSigned(Pred))
+        return false;
+      if (ExtKind == SignExtended && ICmpInst::isUnsigned(Pred))
+        return false;
+      ICmpUsers.push_back(ICmp);
+      continue;
+    }
+    if (ExtKind == SignExtended)
+      User = dyn_cast<SExtInst>(User);
+    else
+      User = dyn_cast<ZExtInst>(User);
+    if (!User || User->getType() != WideType)
+      return false;
+    ExtUsers.push_back(User);
+  }
+  if (ExtUsers.empty()) {
+    DeadInsts.emplace_back(NarrowUse);
+    return true;
+  }
+
+#if 0
+  // We'll prove some facts that should be true in the context of ext users. If
+  // there is no users, we are done now. If there are some, pick their common
+  // dominator as context.
+  const Instruction *CtxI = findCommonDominator(ExtUsers, *DT);
+#endif 
+
+  if (!CanSignExtend && !CanZeroExtend) {
+    // Because InstCombine turns 'sub nuw' to 'add' losing the no-wrap flag, we
+    // will most likely not see it. Let's try to prove it.
+    if (OpCode != Instruction::Add)
+      return false;
+    if (ExtKind != ZeroExtended)
+      return false;
+    const SCEV *LHS = SE->getSCEV(OBO->getOperand(0));
+    const SCEV *RHS = SE->getSCEV(OBO->getOperand(1));
+    // TODO: Support case for NarrowDef = NarrowUse->getOperand(1).
+    if (NarrowUse->getOperand(0) != NarrowDef)
+      return false;
+    if (!SE->isKnownNegative(RHS))
+      return false;
+ #if 0
+    bool ProvedSubNUW = SE->isKnownPredicateAt(
+        ICmpInst::ICMP_UGE, LHS, SE->getNegativeSCEV(RHS) , CtxI);
+#endif
+    bool ProvedSubNUW = SE->isKnownPredicate(
+        ICmpInst::ICMP_UGE, LHS, SE->getNegativeSCEV(RHS));
+
+    if (!ProvedSubNUW)
+      return false;
+    // In fact, our 'add' is 'sub nuw'. We will need to widen the 2nd operand as
+    // neg(zext(neg(op))), which is basically sext(op).
+    AnotherOpExtKind = SignExtended;
+  }
+
+  // Verifying that Defining operand is an AddRec
+  const SCEV *Op1 = SE->getSCEV(WideDef);
+  const SCEVAddRecExpr *AddRecOp1 = dyn_cast<SCEVAddRecExpr>(Op1);
+  if (!AddRecOp1 || AddRecOp1->getLoop() != L)
+    return false;
+
+  DEBUG(dbgs() << "Cloning arithmetic IVUser: " << *NarrowUse << "\n");
+
+  // Generating a widening use instruction.
+  Value *LHS =
+      (NarrowUse->getOperand(0) == NarrowDef)
+          ? WideDef
+          : createExtendInst(NarrowUse->getOperand(0), WideType,
+                             AnotherOpExtKind == SignExtended, NarrowUse);
+  Value *RHS =
+      (NarrowUse->getOperand(1) == NarrowDef)
+          ? WideDef
+          : createExtendInst(NarrowUse->getOperand(1), WideType,
+                             AnotherOpExtKind == SignExtended, NarrowUse);
+
+  auto *NarrowBO = cast<BinaryOperator>(NarrowUse);
+  auto *WideBO = BinaryOperator::Create(NarrowBO->getOpcode(), LHS, RHS,
+                                        NarrowBO->getName());
+  IRBuilder<> Builder(NarrowUse);
+  Builder.Insert(WideBO);
+  WideBO->copyIRFlags(NarrowBO);
+  ExtendKindMap[NarrowUse] = ExtKind;
+
+  for (Instruction *User : ExtUsers) {
+    assert(User->getType() == WideType && "Checked before!");
+    DEBUG(dbgs() << "INDVARS: eliminating " << *User << " replaced by "
+                      << *WideBO << "\n");
+    ++NumElimExt;
+    User->replaceAllUsesWith(WideBO);
+    DeadInsts.emplace_back(User);
+  }
+
+  for (PHINode *User : LCSSAPhiUsers) {
+    assert(User->getNumOperands() == 1 && "Checked before!");
+    Builder.SetInsertPoint(User);
+    auto *WidePN =
+        Builder.CreatePHI(WideBO->getType(), 1, User->getName() + ".wide");
+    BasicBlock *LoopExitingBlock = User->getParent()->getSinglePredecessor();
+    assert(LoopExitingBlock && L->contains(LoopExitingBlock) &&
+           "Not a LCSSA Phi?");
+    WidePN->addIncoming(WideBO, LoopExitingBlock);
+    Builder.SetInsertPoint(&*User->getParent()->getFirstInsertionPt());
+    auto *TruncPN = Builder.CreateTrunc(WidePN, User->getType());
+    User->replaceAllUsesWith(TruncPN);
+    DeadInsts.emplace_back(User);
+  }
+
+  for (ICmpInst *User : ICmpUsers) {
+    Builder.SetInsertPoint(User);
+    auto ExtendedOp = [&](Value * V)->Value * {
+      if (V == NarrowUse)
+        return WideBO;
+      if (ExtKind == ZeroExtended)
+        return Builder.CreateZExt(V, WideBO->getType());
+      else
+        return Builder.CreateSExt(V, WideBO->getType());
+    };
+    auto Pred = User->getPredicate();
+    auto *LHS = ExtendedOp(User->getOperand(0));
+    auto *RHS = ExtendedOp(User->getOperand(1));
+    auto *WideCmp =
+        Builder.CreateICmp(Pred, LHS, RHS, User->getName() + ".wide");
+    User->replaceAllUsesWith(WideCmp);
+    DeadInsts.emplace_back(User);
+  }
+
+  return true;
+}
+
 /// Determine whether an individual user of the narrow IV can be widened. If so,
 /// return the wide clone of the user.
 Instruction *WidenIV::widenIVUse(NarrowIVDefUse DU, SCEVExpander &Rewriter) {
@@ -1467,6 +1684,14 @@ Instruction *WidenIV::widenIVUse(NarrowIVDefUse DU, SCEVExpander &Rewriter) {
     // If use is a loop condition, try to promote the condition instead of
     // truncating the IV first.
     if (widenLoopCompare(DU))
+      return nullptr;
+
+    // We are here about to generate a truncate instruction that may hurt
+    // performance because the scalar evolution expression computed earlier
+    // in WideAddRec.first does not indicate a polynomial induction expression.
+    // In that case, look at the operands of the use instruction to determine
+    // if we can still widen the use instead of truncating its operand.
+    if (widenWithVariantUse(DU))
       return nullptr;
 
     // This user does not evaluate to a recurrence after widening, so don't
@@ -1599,8 +1824,9 @@ PHINode *WidenIV::createWideIV(SCEVExpander &Rewriter) {
     // Propagate the debug location associated with the original loop increment
     // to the new (widened) increment.
     auto *OrigInc =
-      cast<Instruction>(OrigPhi->getIncomingValueForBlock(LatchBlock));
-    WideInc->setDebugLoc(OrigInc->getDebugLoc());
+      dyn_cast<Instruction>(OrigPhi->getIncomingValueForBlock(LatchBlock));
+    if (OrigInc)
+      WideInc->setDebugLoc(OrigInc->getDebugLoc());
   }
 
   DEBUG(dbgs() << "Wide IV: " << *WidePhi << "\n");

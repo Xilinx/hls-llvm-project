@@ -65,6 +65,8 @@ using namespace llvm;
 #define LLE_OPTION "loop-load-elim"
 #define DEBUG_TYPE LLE_OPTION
 
+extern cl::opt<bool> HLS;
+
 static cl::opt<unsigned> CheckPerElim(
     "runtime-check-per-loop-load-elim", cl::Hidden,
     cl::desc("Max number of memchecks allowed per eliminated load on average"),
@@ -87,10 +89,9 @@ struct StoreToLoadForwardingCandidate {
   StoreToLoadForwardingCandidate(LoadInst *Load, StoreInst *Store)
       : Load(Load), Store(Store) {}
 
-  /// \brief Return true if the dependence from the store to the load has a
-  /// distance of one.  E.g. A[i+1] = A[i]
-  bool isDependenceDistanceOfOne(PredicatedScalarEvolution &PSE,
-                                 Loop *L) const {
+  /// \brief Check two pointers distance equal to stride or not.
+  bool doesDependenceDistanceEqualsToStride(PredicatedScalarEvolution &PSE,
+                                            Loop *L) const {
     Value *LoadPtr = Load->getPointerOperand();
     Value *StorePtr = Store->getPointerOperand();
     Type *LoadPtrType = LoadPtr->getType();
@@ -101,25 +102,24 @@ struct StoreToLoadForwardingCandidate {
            LoadType == StorePtr->getType()->getPointerElementType() &&
            "Should be a known dependence");
 
-    // Currently we only support accesses with unit stride.  FIXME: we should be
-    // able to handle non unit stirde as well as long as the stride is equal to
-    // the dependence distance.
-    if (getPtrStride(PSE, LoadPtr, L) != 1 ||
-        getPtrStride(PSE, StorePtr, L) != 1)
-      return false;
-
     auto &DL = Load->getParent()->getModule()->getDataLayout();
     unsigned TypeByteSize = DL.getTypeAllocSize(const_cast<Type *>(LoadType));
-
+    auto LoadStride = getPtrStride(PSE, LoadPtr, L);
+    auto StoreStride = getPtrStride(PSE, StorePtr, L);
+    if (LoadStride == 0 || StoreStride == 0)
+      return false;
     auto *LoadPtrSCEV = cast<SCEVAddRecExpr>(PSE.getSCEV(LoadPtr));
     auto *StorePtrSCEV = cast<SCEVAddRecExpr>(PSE.getSCEV(StorePtr));
 
     // We don't need to check non-wrapping here because forward/backward
     // dependence wouldn't be valid if these weren't monotonic accesses.
-    auto *Dist = cast<SCEVConstant>(
+    auto *Dist = dyn_cast<SCEVConstant>(
         PSE.getSE()->getMinusSCEV(StorePtrSCEV, LoadPtrSCEV));
-    const APInt &Val = Dist->getAPInt();
-    return Val == TypeByteSize;
+    if (!Dist)
+      return false;
+    auto DistC = Dist->getAPInt();
+    return (LoadStride * TypeByteSize == DistC) &&
+           (StoreStride * TypeByteSize == DistC);
   }
 
   Value *getLoadPtr() const { return Load->getPointerOperand(); }
@@ -136,14 +136,13 @@ struct StoreToLoadForwardingCandidate {
 
 } // end anonymous namespace
 
-/// \brief Check if the store dominates all latches, so as long as there is no
-/// intervening store this value will be loaded in the next iteration.
-static bool doesStoreDominatesAllLatches(BasicBlock *StoreBlock, Loop *L,
-                                         DominatorTree *DT) {
+/// \brief Check if the instruction is always executed.
+static bool doesInstructionDominatesAllLatches(BasicBlock *BB, Loop *L,
+                                               DominatorTree *DT) {
   SmallVector<BasicBlock *, 8> Latches;
   L->getLoopLatches(Latches);
   return llvm::all_of(Latches, [&](const BasicBlock *Latch) {
-    return DT->dominates(StoreBlock, Latch);
+    return DT->dominates(BB, Latch);
   });
 }
 
@@ -272,8 +271,8 @@ public:
         // so deciding which one forwards is easy.  The later one forwards as
         // long as they both have a dependence distance of one to the load.
         if (Cand.Store->getParent() == OtherCand->Store->getParent() &&
-            Cand.isDependenceDistanceOfOne(PSE, L) &&
-            OtherCand->isDependenceDistanceOfOne(PSE, L)) {
+            Cand.doesDependenceDistanceEqualsToStride(PSE, L) &&
+            OtherCand->doesDependenceDistanceEqualsToStride(PSE, L)) {
           // They are in the same block, the later one will forward to the load.
           if (getInstrIndex(OtherCand->Store) < getInstrIndex(Cand.Store))
             OtherCand = &Cand;
@@ -483,18 +482,18 @@ public:
 
       // Make sure that the stored values is available everywhere in the loop in
       // the next iteration.
-      if (!doesStoreDominatesAllLatches(Cand.Store->getParent(), L, DT))
+      if (!doesInstructionDominatesAllLatches(Cand.Store->getParent(), L, DT))
         continue;
 
       // If the load is conditional we can't hoist its 0-iteration instance to
       // the preheader because that would make it unconditional.  Thus we would
       // access a memory location that the original loop did not access.
-      if (isLoadConditional(Cand.Load, L))
+      if (!doesInstructionDominatesAllLatches(Cand.Load->getParent(), L, DT))
         continue;
 
       // Check whether the SCEV difference is the same as the induction step,
       // thus we load the value in the next iteration.
-      if (!Cand.isDependenceDistanceOfOne(PSE, L))
+      if (!Cand.doesDependenceDistanceEqualsToStride(PSE, L))
         continue;
 
       ++NumForwarding;
@@ -524,6 +523,12 @@ public:
     }
 
     if (!Checks.empty() || !LAI.getPSE().getUnionPredicate().isAlwaysTrue()) {
+      if (HLS) {
+        DEBUG(dbgs() << "Versioning is needed but not allowed when optimizing "
+                        "for HLS design.\n");
+        return false;
+      }
+
       if (L->getHeader()->getParent()->optForSize()) {
         DEBUG(dbgs() << "Versioning is needed but not allowed when optimizing "
                         "for size.\n");
@@ -571,29 +576,24 @@ private:
 
 } // end anonymous namespace
 
+static bool runOnLoop(Loop *L, LoopInfo &LI, DominatorTree &DT,
+                      function_ref<const LoopAccessInfo &(Loop &)> GetLAI) {
+
+  bool Changed = false;
+  for (auto *SubLoop : L->getSubLoops())
+    Changed |= runOnLoop(SubLoop, LI, DT, GetLAI);
+  // The actual work is performed by LoadEliminationForLoop.
+  LoadEliminationForLoop LEL(L, &LI, GetLAI(*L), &DT);
+  Changed |= LEL.processLoop();
+  return Changed;
+}
+
 static bool
 eliminateLoadsAcrossLoops(Function &F, LoopInfo &LI, DominatorTree &DT,
                           function_ref<const LoopAccessInfo &(Loop &)> GetLAI) {
-  // Build up a worklist of inner-loops to transform to avoid iterator
-  // invalidation.
-  // FIXME: This logic comes from other passes that actually change the loop
-  // nest structure. It isn't clear this is necessary (or useful) for a pass
-  // which merely optimizes the use of loads in a loop.
-  SmallVector<Loop *, 8> Worklist;
-
-  for (Loop *TopLevelLoop : LI)
-    for (Loop *L : depth_first(TopLevelLoop))
-      // We only handle inner-most loops.
-      if (L->empty())
-        Worklist.push_back(L);
-
-  // Now walk the identified inner loops.
   bool Changed = false;
-  for (Loop *L : Worklist) {
-    // The actual work is performed by LoadEliminationForLoop.
-    LoadEliminationForLoop LEL(L, &LI, GetLAI(*L), &DT);
-    Changed |= LEL.processLoop();
-  }
+  for (auto *L : LI)
+    Changed |= runOnLoop(L, LI, DT, GetLAI);
   return Changed;
 }
 

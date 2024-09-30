@@ -4,7 +4,7 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// (C) Copyright 2016-2022 Xilinx, Inc. 
+// (C) Copyright 2016-2022 Xilinx, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//

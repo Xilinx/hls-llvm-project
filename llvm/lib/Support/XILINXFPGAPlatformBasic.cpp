@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -405,6 +405,7 @@ void PlatformBasic::getAllBindStorageImpls(std::vector<std::string> & impls)
 void PlatformBasic::getAllConfigStorageImpls(std::vector<std::string> & impls)
 {
   auto allimpls = getUserControlData().getAllImpls(true/*isStorage*/);
+  impls.push_back(STR_ALL);
   for (auto val : allimpls) 
   {
   // NOTE: bind_storage support "auto" impl. However, config_storage doesn't support. in 2021.1
@@ -816,6 +817,13 @@ bool PlatformBasic::CoreBasic::isROM() const
             getMemoryType() == PlatformBasic::MEMORY_ROM_2P;
 }
 
+bool PlatformBasic::CoreBasic::isNPROM() const
+{
+    return  getMemoryType() == PlatformBasic::MEMORY_ROM || 
+            getMemoryType() == PlatformBasic::MEMORY_ROM_NP;
+}
+
+
 bool PlatformBasic::CoreBasic::isEccRAM() const
 {
     return (getImpl() == PlatformBasic::RAM_S2P_BRAM_ECC ||
@@ -859,6 +867,14 @@ PlatformBasic::~PlatformBasic()
     {
         delete it->second;
     }
+    mCoreBasicMap.clear();
+    for (auto it = mCoreNameMapInCompleteRepository.begin(); it != mCoreNameMapInCompleteRepository.end(); ++it) {
+        auto coreBasics = it->second;
+        for (auto *cb: coreBasics) {
+            delete cb;
+        }
+    }
+    mCoreNameMapInCompleteRepository.clear();
 }
 
 static std::string default_db_file  = "";
@@ -1639,6 +1655,8 @@ void PlatformBasic::checkEnumEncode()
     assert(OP_BR == getOpFromName("br"));
     assert(OP_CALL == getOpFromName("call"));
     assert(OP_CMUL == getOpFromName("cmul"));
+    assert(OP_CTLZ == getOpFromName("ctlz"));
+    assert(OP_CTTZ == getOpFromName("cttz"));
     assert(OP_CTPOP == getOpFromName("ctpop"));
     assert(OP_DACC == getOpFromName("dacc"));
     assert(OP_DADD == getOpFromName("dadd"));
@@ -2027,8 +2045,14 @@ void PlatformBasic::createCoreBasics(std::string coreName, std::string op, std::
         
         IMPL_TYPE implCode = getImplFromName(impl);
         
-        auto coreBasic = new CoreBasic(opCode, implCode, maxLat, minLat, coreName, isPublic);
-        mCoreBasicMap[opCode * GRPSIZE + implCode] = coreBasic;
+        auto key = opCode * GRPSIZE + implCode;
+        CoreBasic *coreBasic = nullptr;
+        if (mCoreBasicMap.count(key) <= 0) {
+            coreBasic = new CoreBasic(opCode, implCode, maxLat, minLat, coreName, isPublic);
+            mCoreBasicMap[key] = coreBasic;
+        } else {
+            coreBasic = mCoreBasicMap[key];
+        }
         coreBasics.push_back(coreBasic);
     } 
     mCoreNameMap[getLowerString(coreName)] = coreBasics;
@@ -2044,8 +2068,14 @@ void PlatformBasic::createMemoryCoreBasic(std::string coreName, std::string op, 
     IMPL_TYPE implCode = getImplFromName(op + "_" + impl);
     assert(implCode != UNSUPPORTED);
 
-    auto coreBasic = new CoreBasic(opCode, implCode, maxLat, minLat, coreName, isPublic);
-    mCoreBasicMap[opCode * GRPSIZE + implCode] = coreBasic;
+    auto key = opCode * GRPSIZE + implCode;
+    CoreBasic *coreBasic = nullptr;
+    if (mCoreBasicMap.count(key) <= 0) {
+        coreBasic = new CoreBasic(opCode, implCode, maxLat, minLat, coreName, isPublic);
+        mCoreBasicMap[key] = coreBasic;
+    } else {
+        coreBasic = mCoreBasicMap[key];
+    }
 
     mCoreNameMap[getLowerString(coreName)] = std::vector<CoreBasic*>(1, coreBasic);
 }
@@ -2066,29 +2096,30 @@ bool PlatformBasic::loadCoreBasicInCompleteRepository()
 
     for (auto def : defs) 
     {
-        if (def->type == "storage")
-        {
-            OP_TYPE opCode = OP_MEMORY;
-            IMPL_TYPE implCode = getImplFromName(def->op + "_" + def->impl);
-
-            auto coreBasic = new CoreBasic(opCode, implCode, def->maxLat, def->minLat, def->name, def->isPublic);
-
-            mCoreNameMapInCompleteRepository[getLowerString(def->name)] = std::vector<CoreBasic*>(1, coreBasic);
-        }
-        else 
-        {
-            std::vector<std::string> ops = split(def->op, ",");
-            std::vector<CoreBasic*> coreBasics;
-            for(const auto& opStr : ops)
+        auto defName = getLowerString(def->name);
+        if (mCoreNameMapInCompleteRepository.count(defName) <= 0) {
+            if (def->type == "storage")
             {
-                OP_TYPE opCode = getOpFromName(opStr);
-        
-                IMPL_TYPE implCode = getImplFromName(def->impl);
-        
+                OP_TYPE opCode = OP_MEMORY;
+                IMPL_TYPE implCode = getImplFromName(def->op + "_" + def->impl);
+
                 auto coreBasic = new CoreBasic(opCode, implCode, def->maxLat, def->minLat, def->name, def->isPublic);
-                coreBasics.push_back(coreBasic);
-            } 
-            mCoreNameMapInCompleteRepository[getLowerString(def->name)] = coreBasics;
+                mCoreNameMapInCompleteRepository[defName] = std::vector<CoreBasic*>(1, coreBasic);
+            }
+            else 
+            {
+                std::vector<std::string> ops = split(def->op, ",");
+                std::vector<CoreBasic*> coreBasics;
+                for(const auto& opStr : ops)
+                {
+                    OP_TYPE opCode = getOpFromName(opStr);
+                    IMPL_TYPE implCode = getImplFromName(def->impl);
+            
+                    auto coreBasic = new CoreBasic(opCode, implCode, def->maxLat, def->minLat, def->name, def->isPublic);
+                    coreBasics.push_back(coreBasic);
+                } 
+                mCoreNameMapInCompleteRepository[defName] = coreBasics;
+            }
         }
     }
 
@@ -2101,6 +2132,8 @@ bool PlatformBasic::loadCoreBasicInCompleteRepository()
             mCoreNameMapInCompleteRepository[pair.first] = mCoreNameMapInCompleteRepository[pair.second];
         }
     }
+    for (auto def : defs)
+      delete def;
 
     return !defs.empty();
 }
@@ -2170,6 +2203,8 @@ bool PlatformBasic::loadCoreBasic(const std::string& libraryName)
                              def->maxLat, def->minLat, def->isPublic);
         }
     }
+    for (auto def : defs)
+      delete def;
     return !defs.empty();
 }
 

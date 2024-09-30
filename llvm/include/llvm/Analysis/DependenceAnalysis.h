@@ -269,6 +269,7 @@ template <typename T> class ArrayRef;
     bool Consistent; // Init to true, then refine.
     std::unique_ptr<DVEntry[]> DV;
     friend class DependenceInfo;
+    friend class HLSDepAnalysis;
   };
 
   /// DependenceInfo - This class is the main dependence-analysis driver.

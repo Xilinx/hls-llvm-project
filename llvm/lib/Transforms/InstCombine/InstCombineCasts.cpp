@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -27,6 +28,8 @@ using namespace llvm;
 using namespace PatternMatch;
 
 #define DEBUG_TYPE "instcombine"
+
+extern cl::opt<bool> HLS;
 
 /// Analyze 'Val', seeing if it is a simple linear expression.
 /// If so, decompose it, returning some value X, such that Val is
@@ -683,13 +686,18 @@ Instruction *InstCombiner::visitTrunc(TruncInst &CI) {
     return replaceInstUsesWith(CI, Res);
   }
 
-  // Canonicalize trunc x to i1 -> (icmp ne (and x, 1), 0), likewise for vector.
-  if (DestTy->getScalarSizeInBits() == 1) {
-    Constant *One = ConstantInt::get(SrcTy, 1);
-    Src = Builder.CreateAnd(Src, One);
-    Value *Zero = Constant::getNullValue(Src->getType());
-    return new ICmpInst(ICmpInst::ICMP_NE, Src, Zero);
+//HLS - begin
+  if (!HLS) {
+    // Canonicalize trunc x to i1 -> (icmp ne (and x, 1), 0), likewise for
+    // vector.
+    if (DestTy->getScalarSizeInBits() == 1) {
+      Constant *One = ConstantInt::get(SrcTy, 1);
+      Src = Builder.CreateAnd(Src, One);
+      Value *Zero = Constant::getNullValue(Src->getType());
+      return new ICmpInst(ICmpInst::ICMP_NE, Src, Zero);
+    }
   }
+//HLS - end
 
   // FIXME: Maybe combine the next two transforms to handle the no cast case
   // more efficiently. Support vector types. Cleanup code by using m_OneUse.

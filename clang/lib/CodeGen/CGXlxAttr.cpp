@@ -1,5 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -29,6 +29,7 @@
 #include "clang/Parse/ParseDiagnostic.h"
 #include "clang/Sema/SemaDiagnostic.h"
 #include "clang/Basic/HLSDiagnostic.h"
+#include "clang/Basic/TargetBuiltins.h"
 
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -256,6 +257,45 @@ static int64_t HLSEvaluateClockCycle(Expr *E, bool isSec, double clockPeriod, co
   return 0;
 }
 
+//evaluate the 'if (cond)' option in HLS pragma , default value is true
+bool CodeGenFunction::EvaluateHLSIFCond(const Expr* ifCond) { 
+  if (!ifCond)
+    return true; 
+
+  if (isa<CallExpr>(ifCond) && cast<CallExpr>(ifCond)->getBuiltinCallee()) 
+  {
+    const CallExpr *call = cast<CallExpr>(ifCond); 
+    if (Builtin::BI__hls_function_name_match == cast<CallExpr>(ifCond)->getBuiltinCallee() ) { 
+      const Expr* E = call->getArg(0); 
+      if (isa<CastExpr>(E)){ 
+        E = cast<CastExpr>(E)->getSubExpr();
+      }
+      const StringLiteral *nameLiteral = cast<StringLiteral>(E);  
+      if (nameLiteral->getBytes().equals(CurFn->getName())) { 
+        return true; 
+      }
+      else { 
+        return false; 
+      }
+    }
+    else { 
+      CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
+      return true; 
+    }
+  }
+
+  if (!ifCond->isEvaluatable(getContext())) {
+    CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
+  }
+  else { 
+    llvm::APSInt Value = ifCond->EvaluateKnownConstInt(getContext());
+    if (Value.getZExtValue() == 0){ 
+      return false; 
+    }
+  }
+  return true; 
+}
+
 int CodeGenFunction::HLSEvaluateICE(Expr *E, StringRef optionName, StringRef pragmaName, int Default ) {
   if (!E)
     return Default;
@@ -411,30 +451,6 @@ static void CollectBundles(const RecordType *RT, CodeGenTypes &CGT,
   Indicies.pop_back();
 }
 
-static void EmitBundleAttr(const VarDecl *D, CodeGenTypes &CGT,
-                           llvm::LLVMContext &Ctx,
-                           SmallVectorImpl<llvm::Metadata *> &MDs) {
-  auto *RT = dyn_cast<RecordType>(D->getType().getCanonicalType());
-  if (!RT)
-    return;
-
-  llvm::Type *T = CGT.ConvertType(D->getType());
-  auto *Base = llvm::ConstantPointerNull::get(T->getPointerTo());
-
-  auto *I32T = llvm::Type::getInt32Ty(Base->getContext());
-  auto *Zero = llvm::ConstantInt::get(I32T, 0);
-  SmallVector<llvm::Value *, 4> Indicies(1, Zero);
-  SmallVector<llvm::Metadata *, 4> GEPs;
-  CollectBundles(RT, CGT, Base, Indicies, GEPs);
-
-  if (GEPs.empty())
-    return;
-
-  MDs.push_back(
-      llvm::MDNode::get(Ctx, {llvm::MDString::get(Ctx, "discrete.components"),
-                              llvm::MDTuple::get(Ctx, GEPs)}));
-}
-
 // emit attribute for variable decl
 static void EmitXlxAttributesImpl(const VarDecl *D, CodeGenTypes &CGT,
                                   llvm::Value *V, llvm::LLVMContext &Ctx,
@@ -464,8 +480,6 @@ static void EmitXlxAttributesImpl(const VarDecl *D, CodeGenTypes &CGT,
         EmitXlxReqdPipeDepthAttr(A, Ctx, MDs, ASTCtx);
     }
   }
-
-  EmitBundleAttr(D, CGT, Ctx, MDs);
 
   if (MDs.empty())
     return;
@@ -629,6 +643,28 @@ static bool IsHLSBurstMaxiType(QualType ty) {
   return false;
 }
 
+static bool IsHlsDirectIOType(QualType ty) {
+  auto Ty = ty.getCanonicalType();
+
+  if (Ty->isClassType() && !Ty->getAsCXXRecordDecl()
+                                 ->getCanonicalDecl()
+                                 ->getQualifiedNameAsString()
+                                 .compare("hls::directio"))
+    return true;
+
+  // hls::directio<type> with template in type
+  if (dyn_cast<TemplateSpecializationType>(Ty)) {
+    TemplateName name =
+        dyn_cast<TemplateSpecializationType>(Ty)->getTemplateName();
+    if (TemplateDecl *decl = name.getAsTemplateDecl()) {
+      std::string base_name = decl->getQualifiedNameAsString();
+      if (base_name == "hls::directio")
+        return true;
+    }
+  }
+  return false;
+}
+
 static bool IsHLSStreamType(QualType ty) {
   auto Ty = ty.getCanonicalType();
 
@@ -671,6 +707,81 @@ static void CreateCallSideEffect(CodeGenModule &CGM, BuilderType &Builder, Strin
 
   CI->setOnlyAccessesInaccessibleMemory();
   CI->setDoesNotThrow();
+}
+
+void CodeGenModule::GenerateDirectIOAnnotationIntrinsic(llvm::IRBuilder<> &Builder, llvm::Value* parm, const ParmVarDecl *parm_decl, QualType type, GEPFields  fields, bool parm_is_pointer)
+{
+  type = type.getCanonicalType();
+  bool cur_is_pointer = false;
+  clang::RecordDecl* recordDecl = nullptr;
+  if (type->isPointerType() || type->isReferenceType()){ 
+    type  = type->getPointeeType();
+    cur_is_pointer = true;
+  }
+  if (IsHlsDirectIOType(type)){ 
+    if (!cur_is_pointer & !parm_is_pointer) {
+      getDiags().Report(parm_decl->getLocation(),
+         diag::warn_invalid_variable_expr);
+      return ;
+    }
+    
+
+    if ( parm_is_pointer) { 
+      llvm::SmallVector<llvm::Value*, 4> idxs;
+      if (fields.size() <= 1 ) { 
+        llvm::Value *args[] = { parm };
+        CreateCallSideEffect(*this, Builder, "directio_interface", args);
+      }
+      else { 
+        for( int i = 0; i < fields.size(); i++ ) { 
+          idxs.push_back( Builder.getInt32(fields[i]));
+        }
+        auto lv = Builder.CreateInBoundsGEP(parm, idxs);
+    
+        llvm::Value *args[] = { lv };
+        CreateCallSideEffect(*this, Builder, "directio_interface", args);
+      }
+      return ;
+    }
+    else { 
+      auto lv = Builder.CreateExtractValue(parm, makeArrayRef(fields));
+
+      llvm::Value *args[] = { lv };
+      CreateCallSideEffect(*this, Builder, "directio_interface", args);
+      return ;
+    }
+  }
+
+  if (cur_is_pointer) { 
+    // current field is pointer type , we can not suppot it , if use specific following pragma 
+    // #pragma HLS interface m_axi port =  arg.pointer_field
+    //
+    return ;
+  }
+
+  if (auto* typedefType = llvm::dyn_cast<clang::TypedefType>(type)) {
+      GenerateDirectIOAnnotationIntrinsic(Builder, parm, parm_decl, typedefType->getDecl()->getUnderlyingType(), fields, parm_is_pointer);
+      return;
+  } else if (auto* elaboratedType = llvm::dyn_cast<clang::ElaboratedType>(type)) {
+      GenerateDirectIOAnnotationIntrinsic(Builder, parm, parm_decl, elaboratedType->getNamedType(), fields, parm_is_pointer);
+      return;
+  } else if (auto* recordType = llvm::dyn_cast<clang::RecordType>(type)) {
+      recordDecl = recordType->getDecl()->getDefinition();
+  } else if (type->isStructureType()) {
+      recordDecl = type->getAsStructureType()->getDecl();
+  } else if (type->isArrayType()) {
+      fields.push_back(0);
+      GenerateDirectIOAnnotationIntrinsic(Builder, parm, parm_decl, getContext().getAsArrayType(type)->getElementType(), fields, parm_is_pointer);
+      return;
+  }
+
+  if (recordDecl) { 
+    for (auto it = recordDecl->field_begin(); it != recordDecl->field_end(); ++it) {
+      fields.push_back(it->getFieldIndex());
+      GenerateDirectIOAnnotationIntrinsic(Builder, parm, parm_decl, it->getType(), fields, parm_is_pointer);
+      fields.pop_back();
+    }
+  }
 }
 
 void CodeGenModule::GenerateStreamAnnotationIntrinsic(llvm::IRBuilder<> &Builder, llvm::Value* parm, const ParmVarDecl *parm_decl, QualType type, GEPFields  fields, bool parm_is_pointer)
@@ -747,7 +858,6 @@ void CodeGenModule::GenerateStreamAnnotationIntrinsic(llvm::IRBuilder<> &Builder
     }
   }
 }
-
 
 void CodeGenFunction::EmitXlxParamAttributes(const ParmVarDecl *D,
                                              llvm::Value *V) {
@@ -948,23 +1058,52 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
   llvm::MDBuilder MDB(Ctx);
 
   SmallVector<Attr *, 4> resultAttrs; 
+  //check resultAttrs after 'HLSIFcond evaluation' , 
+  //if there is conflict and redundant pragma, report warning message , and ignore one 
+  bool find_dataflow = false;
+  bool find_pipeline = false;
+  bool find_inline = false;
+  bool find_performance = false;
   for ( Attr* A: FD->getAttrs()) { 
-    bool HLSIfCondRet = true; 
-    if (const Expr* ifCond = A->getHLSIfCond()) { 
-      if (!ifCond->isEvaluatable(getContext())) {
-        CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
-      }
-      else { 
-        llvm::APSInt Value = ifCond->EvaluateKnownConstInt(getContext());
-        if (Value.getZExtValue() == 0){ 
-          HLSIfCondRet = false; 
-        }
-      }
-    }
+    bool HLSIfCondRet = EvaluateHLSIFCond(A->getHLSIfCond()); 
     if (HLSIfCondRet) { 
+      if (isa<AlwaysInlineAttr>(A) || isa<NoInlineAttr>(A)) { 
+        if (find_inline) { 
+          CGM.getDiags().Report(A->getLocation(), diag::warn_xlx_ignore_duplicate_pragma)
+            << "inline" << "function" ; 
+          continue; 
+        }
+        find_inline = true; 
+      }
+      else if(isa<XCLDataFlowAttr>(A)) { 
+        if (find_dataflow) { 
+          CGM.getDiags().Report(A->getLocation(), diag::warn_xlx_ignore_duplicate_pragma)
+            << "dataflow" << "function" ; 
+          continue; 
+        }
+        find_dataflow = true; 
+      }
+      else if (isa<XlxPipelineAttr>(A)) { 
+        if (find_pipeline) { 
+          CGM.getDiags().Report(A->getLocation(), diag::warn_xlx_ignore_duplicate_pragma)
+            << "pipeline" << "function" ; 
+          continue; 
+        }
+        find_pipeline = true; 
+
+      }
+      else if (isa<XlxPerformanceAttr>(A)) { 
+        if (find_performance) { 
+          CGM.getDiags().Report(A->getLocation(), diag::warn_xlx_ignore_duplicate_pragma)
+            << "performance" << "function" ; 
+          continue; 
+        }
+        find_performance = true; 
+      }
       resultAttrs.push_back(A); 
     }
   }
+
   AttrVec &attrs = const_cast<AttrVec &>(FD->getAttrs()); 
   attrs.clear();
   attrs.append(resultAttrs.begin(), resultAttrs.end()); 
@@ -984,11 +1123,15 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
   }
 
   if (auto inlineAttr =  FD->getAttr<AlwaysInlineAttr>()) { 
+    //becuase , 'alwaysInline' is clang native  attribute, so clang will insert 'AlwaysAttr' in to llvm ir automatically 
+    //Fn->addFnAttr(llvm::Attribute::AlwaysInline);
     llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(inlineAttr->getLocation());
     Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(inlineAttr)), Loc.getAsMDNode()}));
   }
 
   if (auto NoInline = FD->getAttr<NoInlineAttr>()) { 
+    //becuase , 'noInline' is clang native  attribute, so clang will insert 'noinline' in to llvm ir automatically 
+    //Fn->addFnAttr(llvm::Attribute::NoInlineAttr); 
     llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(NoInline->getLocation());
     Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.inline"), MDB.createString(getPragmaContext(NoInline)), Loc.getAsMDNode()}));
   }
@@ -1084,32 +1227,23 @@ static Expr *StripImplicitCast(Expr *FE) {
   return FE;
 }
 
-static DeclRefExpr *GetAssignmentLHS(Expr *FE) {
-  if (auto *Bin = dyn_cast<BinaryOperator>(FE)) {
-    if (!Bin->isAssignmentOp())
-      return nullptr;
+static DeclRefExpr *extractDeclRef(Expr *FE) {
+  FE = StripImplicitCast(FE); 
 
-    auto *E = StripImplicitCast(Bin->getLHS());
-    return dyn_cast<DeclRefExpr>(E);
+  if (auto *array = dyn_cast<ArraySubscriptExpr>(FE)) { 
+    Expr * base = array->getBase(); 
+    base = StripImplicitCast(base); 
+    return extractDeclRef(base);
   }
-
-  if (auto *Cop = dyn_cast<CXXOperatorCallExpr>(FE)) {
-    if (!Cop->isAssignmentOp())
-      return nullptr;
-
-    auto *E = StripImplicitCast(Cop->getArg(0));
-    return dyn_cast<DeclRefExpr>(E);
+  if (isa<DeclRefExpr>(FE)){ 
+    return cast<DeclRefExpr>(FE); 
   }
-
-  if (auto *CleanUp = dyn_cast<ExprWithCleanups>(FE))
-    return GetAssignmentLHS(CleanUp->getSubExpr());
-
-  return nullptr;
+  return nullptr; 
 }
 
 
 void CodeGenFunction::LowerBindOpScope(
-    Stmt *&stmt, SmallVector<const XlxBindOpAttr *, 4> BindOpAttrs) {
+    Stmt *&stmt, std::map<const XlxBindOpAttr *, bool> &BindOpAttrs) {
 
   switch (stmt->getStmtClass()) {
   case Stmt::NullStmtClass: {
@@ -1120,17 +1254,38 @@ void CodeGenFunction::LowerBindOpScope(
 #define EXPR(Type, Base) case Stmt::Type##Class:
 #include "clang/AST/StmtNodes.inc"
     {
+
+      //this is redundant sanity check, because above macro expand can ensure 
+      //only hanlde 'stmt' that is 'expr' 
+      if (!isa<Expr>(stmt)){ 
+        break; 
+      }
+      Expr *expr = cast<Expr>(stmt); 
+      if (isa<ExprWithCleanups>(expr)) { 
+        expr = cast<ExprWithCleanups>(expr)->getSubExpr(); 
+      }
+
+      //check LHS of 'assignment expr' 
+      DeclRefExpr *assignmentDeclRef = nullptr; 
+      if (isa<BinaryOperator>(expr) && dyn_cast<BinaryOperator>(expr)->isAssignmentOp()){
+        assignmentDeclRef = extractDeclRef(cast<BinaryOperator>(expr)->getLHS()); 
+      }
+      else if(isa<CXXOperatorCallExpr>(expr) && cast<CXXOperatorCallExpr>(expr)->isAssignmentOp()){ 
+        assignmentDeclRef = extractDeclRef(cast<CXXOperatorCallExpr>(expr)->getArg(0)); 
+      }
+
       SmallVector<const Attr *, 4> attrs;
-      for (auto attr : BindOpAttrs) {
+      for (auto &kv : BindOpAttrs) {
+        const XlxBindOpAttr* attr = kv.first; 
         auto var_expr = attr->getVariable();
         auto var_ref = dyn_cast<DeclRefExpr>(var_expr);
 
-        auto *declRef = GetAssignmentLHS(dyn_cast<Expr>(stmt));
-        if (declRef && declRef->getDecl() == var_ref->getDecl()) {
+        if (assignmentDeclRef && assignmentDeclRef->getDecl() == var_ref->getDecl()) {
           auto new_attr = XlxBindOpExprAttr::CreateImplicit(
               getContext(), attr->getVariable(), attr->getOp(), attr->getImpl(),
               attr->getLatency(), attr->getRange());
           attrs.push_back(new_attr);
+          kv.second = true; 
         }
       }
       if (attrs.size()) {
@@ -1184,13 +1339,14 @@ void CodeGenFunction::LowerBindOpScope(
         if(isa<CXXConstructExpr>(Cleanup->getSubExpr())) continue;
       */
 
-      for (auto bind_op: BindOpAttrs) { 
+      for (auto &kv: BindOpAttrs) { 
+        auto bind_op = kv.first; 
         auto var_expr = bind_op->getVariable();
         if (!isa<DeclRefExpr>(var_expr)) { 
           //the variable for bind_op is possible  MemberExpr, skip check it
           continue;
         }
-        auto var_ref = static_cast<DeclRefExpr*>(var_expr);
+        auto var_ref = cast<DeclRefExpr>(var_expr);
 
         if (decl == var_ref->getDecl() && 
             !var_decl->isDirectInit()) {
@@ -1198,6 +1354,7 @@ void CodeGenFunction::LowerBindOpScope(
               getContext(), bind_op->getVariable(), bind_op->getOp(), bind_op->getImpl(),
               bind_op->getLatency(), bind_op->getRange());
           decl->addAttr(new_attr);
+          kv.second = true; 
         }
       }
     }
@@ -1216,13 +1373,32 @@ void CodeGenFunction::LowerBindOpScope(
     auto attrs = attributedStmt->getAttrs();
     for (auto attr : attrs) {
       if (isa<XlxBindOpAttr>(attr)) {
-
         auto bindOp = dyn_cast<XlxBindOpAttr>(attr);
-        BindOpAttrs.push_back(bindOp);
-        // strip null terminator
+        BindOpAttrs[bindOp] = false; 
       }
     }
     LowerBindOpScope(subStmt, BindOpAttrs);
+    for(auto kv: BindOpAttrs){ 
+      if (!kv.second){ 
+        for( auto attr: attrs){ 
+          if (isa<XlxBindOpAttr>(attr) && cast<XlxBindOpAttr>(attr) == kv.first){ 
+            //failed locate the assign expression for the lower bind_op, report warning message 
+            Expr *var_ref = kv.first->getVariable(); 
+            std::string var_name ; 
+            llvm::raw_string_ostream os(var_name); 
+            var_ref->printPretty(os, nullptr, PrintingPolicy(getContext().getLangOpts()) ); 
+            CGM.getDiags().Report(kv.first->getLocation(), 
+              diag::warn_xlx_bind_op_failed)  << os.str();
+            break;
+          }
+        }
+      }
+    }
+    for(auto attr: attrs){ 
+      if (isa<XlxBindOpAttr>(attr)){ 
+        BindOpAttrs.erase(cast<XlxBindOpAttr>(attr)); 
+      }
+    }
     attributedStmt->setSubStmt(subStmt);
     break;
   }
@@ -1343,19 +1519,7 @@ void CodeGenFunction::EmitBundleForScope(
   StringRef computeRegionPragmaContext ; 
 
   for (auto *A : Attrs) {
-    bool HLSIfCondRet = true; 
-    if (const Expr* ifCond = A->getHLSIfCond()) { 
-      if (!ifCond->isEvaluatable(getContext())) {
-        CGM.getDiags().Report(ifCond->getExprLoc(), diag::err_xlx_expr_not_ice);
-      }
-      else { 
-        llvm::APSInt Value = ifCond->EvaluateKnownConstInt(getContext());
-        if (Value.getZExtValue() == 0){ 
-          HLSIfCondRet = false; 
-        }
-      }
-    }
-    if (!HLSIfCondRet) { 
+    if (!EvaluateHLSIFCond(A->getHLSIfCond())) { 
       continue; 
     }
 
@@ -2277,7 +2441,7 @@ void CodeGenFunction::EmitSAXILITEOffsetIntrinsic( const SAXILITEOffsetInterface
 
   auto bundName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getBundleName(), false);
   auto offset = Builder.getInt64(HLSEvaluateICE(interface->getOffset(), "offset", "s_axilite", -1));
-  auto isRegister = Builder.getInt1(interface->getIsRegister());
+  auto isRegister = Builder.getInt32(interface->getIsRegister());
   auto signalName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getSignalName(), false);
   auto clockName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getClockName(), false);
   auto implName = llvm::ConstantDataArray::getString(getLLVMContext(), interface->getImplName(), false);
@@ -2381,7 +2545,7 @@ void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceA
     port_width = port_info.second;
   }
 
-  bool isRegister = interface->getIsRegister();
+  int isRegister = interface->getIsRegister();
   int registerMode = (int)interface->getRegisterMode();
   int depth = HLSEvaluateICE(interface->getDepth(), "depth","axis",  0);
   StringRef signalName = interface->getSignalName();
@@ -2389,7 +2553,7 @@ void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceA
 
   llvm::Value* Args[] = {
     port_var,
-    Builder.getInt1(isRegister),
+    Builder.getInt32(isRegister),
     Builder.getInt64(registerMode), 
     Builder.getInt64(depth), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false),
@@ -2442,6 +2606,8 @@ void CodeGenFunction::EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *i
   int latency = HLSEvaluateICE(interface->getLatency(), "latency", "interface " + interface->getMode().str());
   StringRef signalName = interface->getSignalName();
   int depth = HLSEvaluateICE(interface->getDepth(), "depth", "interface " + interface->getMode().str());
+  int addressMode = interface->getAddressMode();
+  bool directIO = interface->getDirectIO();
 
   llvm::Value* Args[] = {
     port_var,
@@ -2450,7 +2616,9 @@ void CodeGenFunction::EmitMemoryInterfaceIntrinsic( const MemoryInterfaceAttr *i
     Builder.getInt64(latency), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false),
     Builder.getInt64(depth),
-    llvm::ConstantDataArray::getString(getLLVMContext(), storageTypeStr, false) /* reuse storageTypeStr for recoding */
+    llvm::ConstantDataArray::getString(getLLVMContext(), storageTypeStr, false), /* reuse storageTypeStr for recoding */
+    Builder.getInt64(addressMode),
+    Builder.getInt32(directIO)
   };
 
   if (interface->getMode() != "ap_memory" &&
@@ -2481,12 +2649,12 @@ void CodeGenFunction::EmitAPFifoInterfaceIntrinsic( const APFifoInterfaceAttr *i
     port_width = port_info.second;
   }
 
-  bool isRegister = interface->getIsRegister();
+  int isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
   int depth = HLSEvaluateICE(interface->getDepth(), "depth", "interface ap_fifo" );
   llvm::Value *Args [] = { 
     port_var,
-    Builder.getInt1(isRegister), 
+    Builder.getInt32(isRegister), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
     Builder.getInt64(depth)
   };
@@ -2513,15 +2681,15 @@ void CodeGenFunction::EmitAPScalarInterfaceIntrinsic(const APScalarInterfaceAttr
     port_width = port_info.second;
   }
 
-  bool isRegister = interface->getIsRegister();
+  int isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
   bool directIO = interface->getDirectIO();
 
   llvm::Value* Args[] = { 
     port_var,
-    Builder.getInt1(isRegister), 
+    Builder.getInt32(isRegister), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false),
-    Builder.getInt1(directIO)
+    Builder.getInt32(directIO)
   };
 
   if (interface->getMode() != "ap_none" &&
@@ -2555,17 +2723,17 @@ void CodeGenFunction::EmitAPScalarInterruptInterfaceIntrinsic(const APScalarInte
     port_width = port_info.second;
   }
 
-  bool isRegister = interface->getIsRegister();
+  int isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
   int interruptValue = HLSEvaluateICE(interface->getInterrupt(), "interrupt",  "interrupt" );
   bool directIO = interface->getDirectIO();
 
   llvm::Value* Args[] = { 
     port_var,
-    Builder.getInt1(isRegister), 
+    Builder.getInt32(isRegister), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
     Builder.getInt64(interruptValue),
-    Builder.getInt1(directIO)
+    Builder.getInt32(directIO)
   };
 
   if (interface->getMode() != "ap_vld" &&
@@ -2642,10 +2810,21 @@ void CodeGenFunction::EmitMAXIAliasIntrinsic( const XlxMAXIAliasAttr* maxi_alias
  
   llvm::SmallVector<llvm::Value *, 8> args;
   for(auto i = maxi_alias->ports_begin(), e = maxi_alias->ports_end(); i != e; ++i) {
+    auto port = *i;
     auto port_info = EmitHLSVariableExpr(*i);
     if (nullptr == port_info.first) return;
+    llvm::Value *port_var = port_info.first;
 
-    args.push_back(port_info.first);   
+    if (IsHLSBurstMaxiType(port->getType())) {
+      if (port_var->getType()->isPointerTy()) {
+        CGM.getDiags().Report(maxi_alias->getLocation(), diag::err_xlx_invalid_port_expr)
+            << "'burst_maxi' cannot be pointer or reference  ";
+        return;
+      }
+      port_var = Builder.CreateExtractValue(port_var, {0});
+    }
+
+    args.push_back(port_var);   
   }
 
   for(auto i = maxi_alias->offsets_begin(), e = maxi_alias->offsets_end(); i != e; ++i) {
@@ -2690,10 +2869,9 @@ void CodeGenFunction::EmitXlxArrayStencilIntrinsic( const XlxArrayStencilAttr* s
     port_width = port_info.second;
   }
  
-  bool isEnable = stencil->getEnabled();
   llvm::Value* args[] = {
     port_var,
-    Builder.getInt1(isEnable)
+    Builder.getInt1(stencil->getOff())
   };
 
   assert(&(CGM.getModule())==CurFn->getParent() && "unexpected");

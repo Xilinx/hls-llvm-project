@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -193,7 +193,7 @@ class SCEVPredicate : public FoldingSetNode {
   FoldingSetNodeIDRef FastID;
 
 public:
-  enum SCEVPredicateKind { P_Union, P_Equal, P_Wrap };
+  enum SCEVPredicateKind { P_Union, P_Equal, P_Wrap, P_AnyWrap};
 
 protected:
   SCEVPredicateKind Kind;
@@ -422,6 +422,57 @@ public:
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const SCEVPredicate *P) {
     return P->getKind() == P_Union;
+  }
+};
+
+class SCEVAnyWrapPredicate final : public SCEVPredicate {
+public:
+  enum IncrementWrapFlags {
+    IncrementAnyWrap = 0,    // No guarantee.
+    IncrementNUW = (1 << 0), // No unsigned wrap.
+    IncrementNSW = (1 << 1), // No signed wrap.
+    IncrementNoWrapMask = (1 << 2) - 1
+  };
+
+  LLVM_NODISCARD static SCEVAnyWrapPredicate::IncrementWrapFlags
+  setFlags(SCEVAnyWrapPredicate::IncrementWrapFlags Flags,
+           SCEVAnyWrapPredicate::IncrementWrapFlags OnFlags) {
+    assert((Flags & IncrementNoWrapMask) == Flags && "Invalid flags value!");
+    assert((OnFlags & IncrementNoWrapMask) == OnFlags &&
+           "Invalid flags value!");
+    return (SCEVAnyWrapPredicate::IncrementWrapFlags)(Flags | OnFlags);
+  }
+
+  LLVM_NODISCARD static SCEVAnyWrapPredicate::IncrementWrapFlags
+  clearFlags(SCEVAnyWrapPredicate::IncrementWrapFlags Flags,
+             SCEVAnyWrapPredicate::IncrementWrapFlags OffFlags) {
+    assert((Flags & IncrementNoWrapMask) == Flags && "Invalid flags value!");
+    assert((OffFlags & IncrementNoWrapMask) == OffFlags &&
+           "Invalid flags value!");
+    return (SCEVAnyWrapPredicate::IncrementWrapFlags)(Flags & ~OffFlags);
+  }
+
+private:
+  const SCEVAddRecExpr *AR;
+  IncrementWrapFlags Flags;
+
+public:
+  explicit SCEVAnyWrapPredicate(const FoldingSetNodeIDRef ID,
+                             const SCEVAddRecExpr *AR,
+                             IncrementWrapFlags Flags);
+
+  /// Returns the set assumed no overflow flags.
+  IncrementWrapFlags getFlags() const { return Flags; }
+
+  /// Implementation of the SCEVPredicate interface
+  const SCEV *getExpr() const override;
+  bool implies(const SCEVPredicate *N) const override;
+  void print(raw_ostream &OS, unsigned Depth = 0) const override;
+  bool isAlwaysTrue() const override;
+
+  /// Methods for support type inquiry through isa, cast, and dyn_cast:
+  static bool classof(const SCEVPredicate *P) {
+    return P->getKind() == P_AnyWrap;
   }
 };
 
@@ -774,6 +825,13 @@ public:
   const SCEV *getPredicatedBackedgeTakenCount(const Loop *L,
                                               SCEVUnionPredicate &Predicates);
 
+  /// Similar to getPredicatedBackedgeTakenCount, it will add a set of
+  /// SCEV NoWrap predicates to Predicates that are required to be true in order for 
+  /// the answer to be correct.
+  const SCEV *
+  getAnyWrapPredicatedBackedgeTakenCount(const Loop *L,
+                                         SCEVUnionPredicate &Predicates);
+
   /// When successful, this returns a SCEVConstant that is greater than or equal
   /// to (i.e. a "conservative over-approximation") of the value returend by
   /// getBackedgeTakenCount.  If such a value cannot be computed, it returns the
@@ -895,9 +953,11 @@ public:
   /// Simplify LHS and RHS in a comparison with predicate Pred. Return true
   /// iff any changes were made. If the operands are provably equal or
   /// unequal, LHS and RHS are set to the same value and Pred is set to either
-  /// ICMP_EQ or ICMP_NE.
+  /// ICMP_EQ or ICMP_NE. ControllingFiniteLoop is set if this comparison
+  /// controls the exit of a loop known to have a finite number of iterations.
   bool SimplifyICmpOperands(ICmpInst::Predicate &Pred, const SCEV *&LHS,
-                            const SCEV *&RHS, unsigned Depth = 0);
+                            const SCEV *&RHS, unsigned Depth = 0,
+                            bool ControllingFiniteLoop = false);
 
   /// Return the "disposition" of the given SCEV with respect to the given
   /// loop.
@@ -1039,6 +1099,10 @@ public:
   getWrapPredicate(const SCEVAddRecExpr *AR,
                    SCEVWrapPredicate::IncrementWrapFlags AddedFlags);
 
+  const SCEVPredicate *
+  getAnyWrapPredicate(const SCEVAddRecExpr *AR,
+                     SCEVAnyWrapPredicate::IncrementWrapFlags AddedFlags);
+
   /// Re-writes the SCEV according to the Predicates in \p A.
   const SCEV *rewriteUsingPredicate(const SCEV *S, const Loop *L,
                                     SCEVUnionPredicate &A);
@@ -1047,6 +1111,12 @@ public:
   const SCEVAddRecExpr *convertSCEVToAddRecWithPredicates(
       const SCEV *S, const Loop *L,
       SmallPtrSetImpl<const SCEVPredicate *> &Preds);
+
+  /// Tries to add nowrap predicates to \p S expression
+  const SCEVAddRecExpr *
+  addAnyWrapPredicates(const SCEV *S, const Loop *L,
+                      SmallPtrSetImpl<const SCEVPredicate *> &Preds,
+                      bool isSigned);
 
   /// Update no-wrap flags of an AddRec. This may drop the cached info about
   /// this AddRec (such as range info) in case if new flags may potentially
@@ -1313,6 +1383,10 @@ private:
   /// function as they are computed.
   DenseMap<const Loop *, BackedgeTakenInfo> PredicatedBackedgeTakenCounts;
 
+  /// Cache the nowrap predicated backedge-taken count of the loops for this
+  /// function as they are computed.
+  DenseMap<const Loop *, BackedgeTakenInfo> AnyWrapPredicatedBackedgeTakenCounts;
+
   /// This map contains entries for all of the PHI instructions that we
   /// attempt to compute constant evolutions for.  This allows us to avoid
   /// potentially expensive recomputation of these properties.  An instruction
@@ -1426,6 +1500,11 @@ private:
   /// Helper function called from createNodeForPHI.
   const SCEV *createAddRecFromPHI(PHINode *PN);
 
+  /// A helper function for createSimpleAffineAddRec to handle loop with exactly
+  /// one backedge taken count. (as those simplify into non recurrent PHI)
+  const SCEV *createTwoIterAffineAddRec(PHINode *PN, ConstantInt *BECst,
+                                        ConstantInt *StartCst);
+
   /// A helper function for createAddRecFromPHI to handle simple cases.
   const SCEV *createSimpleAffineAddRec(PHINode *PN, Value *BEValueV,
                                             Value *StartValueV);
@@ -1461,18 +1540,28 @@ private:
   /// with the purpose of returning complete information.
   const BackedgeTakenInfo &getPredicatedBackedgeTakenInfo(const Loop *L);
 
+  /// Similar to getPredicatedBackedgeTakenInfo, but will add nowrap predicates
+  /// as required with the purpose of returning complete information.
+  const BackedgeTakenInfo &getAnyWrapPredicatedBackedgeTakenInfo(const Loop *L);
+
   /// Compute the number of times the specified loop will iterate.
   /// If AllowPredicates is set, we will create new SCEV predicates as
   /// necessary in order to return an exact answer.
-  BackedgeTakenInfo computeBackedgeTakenCount(const Loop *L,
-                                              bool AllowPredicates = false);
+  /// If AllowAnyWrapPredicates is set, we will create new SCEV nowrap predicates
+  /// as necessary in order to return an exact answer.
+  BackedgeTakenInfo
+  computeBackedgeTakenCount(const Loop *L, bool AllowPredicates = false,
+                            bool AllowAnyWrapPredicates = false);
 
   /// Compute the number of times the backedge of the specified loop will
   /// execute if it exits via the specified block. If AllowPredicates is set,
   /// this call will try to use a minimal set of SCEV predicates in order to
-  /// return an exact answer.
+  /// return an exact answer. If AllowAnyWrapPredicates is set,
+  /// this call will try to use a minimal set of SCEV nowrap predicates in order
+  /// to return an exact answer.
   ExitLimit computeExitLimit(const Loop *L, BasicBlock *ExitingBlock,
-                             bool AllowPredicates = false);
+                             bool AllowPredicates = false,
+                             bool AllowAnyWrapPredicates = false);
 
   /// Compute the number of times the backedge of the specified loop will
   /// execute if its exit condition were a conditional branch of ExitCond,
@@ -1485,17 +1574,20 @@ private:
   ///
   /// If \p AllowPredicates is set, this call will try to use a minimal set of
   /// SCEV predicates in order to return an exact answer.
+  /// If \p AllowAnyWrapPredicates is set, this call will try to use a minimal set of
+  /// SCEV nowrap predicates in order to return an exact answer. 
   ExitLimit computeExitLimitFromCond(const Loop *L, Value *ExitCond,
                                      BasicBlock *TBB, BasicBlock *FBB,
                                      bool ControlsExit,
-                                     bool AllowPredicates = false);
+                                     bool AllowPredicates = false,
+                                     bool AllowAnyWrapPredicates = false);
 
   // Helper functions for computeExitLimitFromCond to avoid exponential time
   // complexity.
 
   class ExitLimitCache {
     // It may look like we need key on the whole (L, TBB, FBB, ControlsExit,
-    // AllowPredicates) tuple, but recursive calls to
+    // AllowPredicates, AllowAnyWrapPredicates) tuple, but recursive calls to
     // computeExitLimitFromCondCached from computeExitLimitFromCondImpl only
     // vary the in \c ExitCond and \c ControlsExit parameters.  We remember the
     // initial values of the other values to assert our assumption.
@@ -1505,19 +1597,21 @@ private:
     BasicBlock *TBB;
     BasicBlock *FBB;
     bool AllowPredicates;
+    bool AllowAnyWrapPredicates;
 
   public:
     ExitLimitCache(const Loop *L, BasicBlock *TBB, BasicBlock *FBB,
-                   bool AllowPredicates)
-        : L(L), TBB(TBB), FBB(FBB), AllowPredicates(AllowPredicates) {}
+                   bool AllowPredicates, bool AllowAnyWrapPredicates)
+        : L(L), TBB(TBB), FBB(FBB), AllowPredicates(AllowPredicates),
+          AllowAnyWrapPredicates(AllowAnyWrapPredicates) {}
 
     Optional<ExitLimit> find(const Loop *L, Value *ExitCond, BasicBlock *TBB,
                              BasicBlock *FBB, bool ControlsExit,
-                             bool AllowPredicates);
+                             bool AllowPredicates, bool AllowAnyWrapPredicates);
 
     void insert(const Loop *L, Value *ExitCond, BasicBlock *TBB,
                 BasicBlock *FBB, bool ControlsExit, bool AllowPredicates,
-                const ExitLimit &EL);
+                bool AllowAnyWrapPredicates, const ExitLimit &EL);
   };
 
   using ExitLimitCacheTy = ExitLimitCache;
@@ -1526,21 +1620,26 @@ private:
                                            const Loop *L, Value *ExitCond,
                                            BasicBlock *TBB, BasicBlock *FBB,
                                            bool ControlsExit,
-                                           bool AllowPredicates);
+                                           bool AllowPredicates,
+                                           bool AllowAnyWrapPredicates);
   ExitLimit computeExitLimitFromCondImpl(ExitLimitCacheTy &Cache, const Loop *L,
                                          Value *ExitCond, BasicBlock *TBB,
                                          BasicBlock *FBB, bool ControlsExit,
-                                         bool AllowPredicates);
+                                         bool AllowPredicates,
+                                         bool AllowAnyWrapPredicates);
 
   /// Compute the number of times the backedge of the specified loop will
   /// execute if its exit condition were a conditional branch of the ICmpInst
   /// ExitCond, TBB, and FBB. If AllowPredicates is set, this call will try
   /// to use a minimal set of SCEV predicates in order to return an exact
+  /// answer. If AllowAnyWrapPredicates is set, this call will try
+  /// to use a minimal set of SCEV nowrap predicates in order to return an exact
   /// answer.
   ExitLimit computeExitLimitFromICmp(const Loop *L, ICmpInst *ExitCond,
                                      BasicBlock *TBB, BasicBlock *FBB,
                                      bool IsSubExpr,
-                                     bool AllowPredicates = false);
+                                     bool AllowPredicates = false,
+                                     bool AllowAnyWrapPredicates = false);
 
   /// Compute the number of times the backedge of the specified loop will
   /// execute if its exit condition were a switch with a single exiting case
@@ -1577,9 +1676,12 @@ private:
   /// Return the number of times an exit condition comparing the specified
   /// value to zero will execute.  If not computable, return CouldNotCompute.
   /// If AllowPredicates is set, this call will try to use a minimal set of
-  /// SCEV predicates in order to return an exact answer.
+  /// SCEV predicates in order to return an exact answer. If
+  /// AllowAnyWrapPredicates is set, this call will try to use a minimal set of
+  /// SCEV nowrap predicates in order to return an exact answer.
   ExitLimit howFarToZero(const SCEV *V, const Loop *L, bool IsSubExpr,
-                         bool AllowPredicates = false);
+                         bool AllowPredicates = false,
+                         bool AllowAnyWrapPredicates = false);
 
   /// Return the number of times an exit condition checking the specified
   /// value for nonzero will execute.  If not computable, return
@@ -1598,13 +1700,18 @@ private:
   ///
   /// If \p AllowPredicates is set, this call will try to use a minimal set of
   /// SCEV predicates in order to return an exact answer.
+  ///
+  /// If \p AllowAnyWrapPredicates is set, this call will try to use a minimal
+  /// set of SCEV nowrap predicates in order to return an exact answer.
   ExitLimit howManyLessThans(const SCEV *LHS, const SCEV *RHS, const Loop *L,
                              bool isSigned, bool ControlsExit,
-                             bool AllowPredicates = false);
+                             bool AllowPredicates = false,
+                             bool AllowAnyWrapPredicates = false);
 
   ExitLimit howManyGreaterThans(const SCEV *LHS, const SCEV *RHS, const Loop *L,
                                 bool isSigned, bool IsSubExpr,
-                                bool AllowPredicates = false);
+                                bool AllowPredicates = false,
+                                bool AllowAnyWrapPredicates = false);
 
   /// Return a predecessor of BB (which may not be an immediate predecessor)
   /// which has exactly one successor from which BB is reachable, or null if
@@ -1787,11 +1894,6 @@ private:
   Optional<std::pair<const SCEV *, SmallVector<const SCEVPredicate *, 3>>>
   createAddRecFromPHIWithCastsImpl(const SCEVUnknown *SymbolicPHI);
 
-  /// Compute the backedge taken count knowing the interval difference, the
-  /// stride and presence of the equality in the comparison.
-  const SCEV *computeBECount(const SCEV *Delta, const SCEV *Stride,
-                             bool Equality);
-
   /// Compute the maximum backedge count based on the range of values
   /// permitted by Start, End, and Stride. This is for loops of the form
   /// {Start, +, Stride} LT End.
@@ -1846,6 +1948,8 @@ private:
   /// allocated. This is used by releaseMemory to locate them all and call
   /// their destructors.
   SCEVUnknown *FirstUnknown = nullptr;
+
+  bool AllowUniqueAddRecWithFlags = false;
 };
 
 /// Analysis pass that exposes the \c ScalarEvolution for a function.

@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -54,6 +54,32 @@ bool llvm::IsGlobalUseEmpty(const GlobalValue &GV) {
     return true;
   GV.removeDeadConstantUsers();
   return GV.use_empty();
+}
+
+bool llvm::IsHLSDirectIO(const Value *V) {
+  for (const User *U : V->users()) {
+    if (auto SL = dyn_cast<DirectIOLabelInst>(U))
+        return true;
+  }
+  if (auto *BC = dyn_cast<BitCastOperator>(V)) {
+    if (IsHLSDirectIO(BC->getOperand(0)))
+      return true;
+  } else if (auto *GEP = dyn_cast<GEPOperator>(V)) {
+    if (IsHLSDirectIO(GEP->getOperand(0)))
+      return true;
+  } else if (auto *A = dyn_cast<Argument>(V)) {
+    // go up into cosim wrapper
+    unsigned ArgID = A->getArgNo();
+    auto F =  A->getParent();
+    for (auto *U :  F->users()) {
+      if (auto *CI = dyn_cast<CallInst>(U)) {
+        auto cval = CI->getArgOperand(ArgID);
+        if (IsHLSDirectIO(cval))
+          return true;
+      }
+    }
+  }
+  return false;
 }
 
 bool llvm::IsHLSStream(const Value *V) {

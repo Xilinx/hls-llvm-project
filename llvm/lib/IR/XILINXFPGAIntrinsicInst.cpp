@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -491,7 +491,8 @@ bool PragmaInst::ShouldBeOnDeclaration() const {
             isa<XlxFunctionAllocationInst>(this) || isa<ResetPragmaInst>(this) ||
             isa<MAXIAliasInst>(this) || isa<NPortChannelInst>(this) ||
             isa<FuncInstantiateInst>(this) || isa<ArrayStencilInst>(this) ||
-            isa<XlxIPInst>(this) || isa<MaxiCacheInst>(this)
+            isa<XlxIPInst>(this) || isa<MaxiCacheInst>(this) ||
+            isa<DirectIOLabelInst>(this)
             ) && "Unexpected pragma");
     return false;
   }
@@ -535,7 +536,9 @@ void XlxFunctionAllocationInst::getAll(
     Function *RegionF) {
 
   for (auto *U : F->users()) {
-    auto *CI = cast<CallInst>(U);
+    auto *CI = dyn_cast<CallInst>(U);
+    if (!CI)
+      continue;
     // only consider this region scope if the region is specified
     if (RegionF && CI->getFunction() != RegionF)
       continue;
@@ -543,6 +546,34 @@ void XlxFunctionAllocationInst::getAll(
       Allocations.push_back(cast<XlxFunctionAllocationInst>(U));
   }
 }
+
+bool FPGASparseMuxInst::isOneHotEncoding() const {
+  // one-hot encoding must be fullcase, that the number of labels equals to the address bitwidth
+  bool isFullcase = getNumMuxValues() == cast<IntegerType>(getCondition()->getType())->getBitWidth();
+  bool labelsAreOneHot = true;
+  for (unsigned i = 0; i < getNumMuxValues(); ++i) {
+    if (!getMuxCase(i)->getValue().isPowerOf2()) {
+      labelsAreOneHot = false; 
+      break;
+    }
+  }
+  return isFullcase && labelsAreOneHot;
+}
+
+bool FPGASparseMuxInst::isOneHotWithZeroEncoding() const {
+  bool isFullcase = getNumMuxValues() == cast<IntegerType>(getCondition()->getType())->getBitWidth();
+  bool labelsAreOneHotExceptZero = true;
+  bool has0 = false;
+  for (unsigned i = 0; i < getNumMuxValues(); ++i) {
+    if (getMuxCase(i)->getValue().isNullValue()) {
+      has0 = true;
+    } else if (!getMuxCase(i)->getValue().isPowerOf2()) {
+      labelsAreOneHotExceptZero = false;
+    }
+  }
+  return isFullcase && labelsAreOneHotExceptZero && has0 && (!hasDefaultValue());
+}
+
 
 const std::string AXISChannelInst::BundleTagName = "fpga.axis.channel";
 const std::string DependenceInst::BundleTagName = "fpga.dependence";
@@ -578,6 +609,7 @@ const std::string ApAckInst::BundleTagName = "xlx_ap_ack";
 const std::string ApVldInst::BundleTagName = "xlx_ap_vld";
 const std::string ApOvldInst::BundleTagName = "xlx_ap_ovld";
 const std::string ApHsInst::BundleTagName = "xlx_ap_hs";
+const std::string ApAutoInst::BundleTagName = "xlx_ap_auto";
 const std::string ApCtrlNoneInst::BundleTagName = "xlx_ap_ctrl_none";
 const std::string ApCtrlChainInst::BundleTagName = "xlx_ap_ctrl_chain";
 const std::string ApCtrlHsInst::BundleTagName = "xlx_ap_ctrl_hs";
@@ -588,4 +620,5 @@ const std::string StreamOfBlocksLabelInst::BundleTagName = "stream_of_blocks_int
 const std::string NPortChannelInst::BundleTagName = "nport_channel";
 const std::string XlxIPInst::BundleTagName = "xlx_ip";
 const std::string MaxiCacheInst::BundleTagName = "xlx_cache";
+const std::string DirectIOLabelInst::BundleTagName = "directio_interface";
 

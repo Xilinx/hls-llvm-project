@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -42,6 +42,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -311,10 +312,6 @@ PHINode *Loop::getInductionVariable(ScalarEvolution &SE) const {
   }
 
   return nullptr;
-}
-
-static bool isRotatedLoop(const Loop *L) {
-  return L->getExitingBlock() == L->getLoopLatch();
 }
 
 void Loop::getAllInductionVariables(ScalarEvolution &SE,

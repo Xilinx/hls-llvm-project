@@ -1,5 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -256,7 +256,7 @@ void Parser::SinkParsedHLSUnrollPragmas(ParsedAttributesWithRange &To,
 
 class XlxPragmaArgParser;
 
-typedef ArgsUnion  (*CallBackParserFunc)(XlxPragmaArgParser& PAP, Parser &P, SourceLocation PragmaLoc);
+typedef ArgsUnion  (*CallBackParserFunc)(XlxPragmaArgParser& PAP, Parser &P, IdentifierLoc optionID, SourceLocation PragmaLoc);
 /// it is used to hold pragma param value
 struct XlxPragmaParam {
   enum Type {
@@ -558,26 +558,6 @@ public:
     return PresentedID.lookup(Name);
   }
   bool CheckAndFilter(StringMap<XlxPragmaParam> ParamMap);
-
-  ArgsUnion parseOptionalEnumVal(
-    StringRef Option, ArrayRef<StringRef> EnumVals, StringRef Implicit)
-  {
-    if (P.TryConsumeToken(tok::equal)) {
-      const Token &Tok = P.getCurToken();
-      if (Tok.is(tok::annot_pragma_XlxHLS_end)) {
-        P.Diag(Tok.getLocation(), diag::warn_pragma_named_argument_missing) << Option;
-        return ArgsUnion();
-      }
-      else {
-        IdentifierInfo *II = Tok.getIdentifierInfo();
-        SourceLocation Loc = P.ConsumeToken();
-        return createIdentLoc(II, Loc);
-      }
-    }
-    else {
-      return createIdentLoc(Implicit);
-    }
-  }
 
   bool getOff()
   {
@@ -882,7 +862,7 @@ bool XlxPragmaArgParser::parse() {
     ///    identifer
     ///    identifer '=' identifer
     ///    identifer '=' integer
-    auto MaybeArg = ParseXlxPragmaArgument(P);
+    IdentifierLoc MaybeArg = ParseXlxPragmaArgument(P);
     if (!MaybeArg.Ident)
       return false;
 
@@ -916,7 +896,7 @@ bool XlxPragmaArgParser::parse() {
     }
 
     if (T == XlxPragmaParam::CallBackParser) {
-      Arg = Param.callback(*this, P, PragmaLoc);
+      Arg = Param.callback(*this, P, MaybeArg, PragmaLoc);
       if (Arg.isNull())
         return false;
     }
@@ -933,7 +913,7 @@ bool XlxPragmaArgParser::parse() {
       if (Param.PresentGroup) {
         auto r = PresentGroups.insert({Param.PresentGroup, MaybeArg});
         if (!r.second) {
-          P.Diag(MaybeArg.Loc, diag::warn_confilict_pragma_parameter)
+          P.Diag(MaybeArg.Loc, diag::warn_conflict_pragma_parameter)
               << ArgName << str(PresentGroups[Param.PresentGroup]);
           return false;
         }
@@ -1093,9 +1073,27 @@ static bool HandleXlxDataflowPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   return true;
 }
 
-static ArgsUnion ParserewindOptionForpipeline(XlxPragmaArgParser &PAP, Parser &P, SourceLocation PragmaLoc)
+static ArgsUnion ParserewindOptionForpipeline(XlxPragmaArgParser &PAP, Parser &P, IdentifierLoc rewindID, SourceLocation PragmaLoc )
 {
-  return PAP.parseOptionalEnumVal("rewind", {"true", "false"}, "true");
+
+  //we support 'rewind' option with followin two format: 
+  //1. rewind 
+  //2. rewind = false/true 
+  if (P.TryConsumeToken(tok::equal)) {
+    const Token &Tok = P.getCurToken();
+    if (!Tok.isOneOf(tok::identifier, tok::string_literal, tok::kw_auto, tok::kw_true, tok::kw_false)) {
+      P.Diag(Tok.getLocation(), diag::warn_pragma_named_argument_missing) << "rewind";
+      return ArgsUnion();
+    }
+    else { 
+      IdentifierInfo *rewindValue = Tok.getIdentifierInfo();
+      SourceLocation Loc = P.ConsumeToken();
+      return PAP.createIdentLoc(rewindValue, Loc);
+    }
+  }
+  else {
+    return PAP.createIdentLoc("true", PragmaLoc); 
+  }
 }
 
 static bool HandleXlxPipelinePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
@@ -1225,7 +1223,7 @@ static bool HandleXlxUnrollPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   if (off) {
     for (auto s : {"factor", "skip_exit_check"}) {
       if (PAP.lookup(s)) {
-        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_conflict_pragma_parameter)
           << s
           << "off=true";
         return false;
@@ -1705,7 +1703,7 @@ static bool HandleOperationAllocationPragma(IdentifierLoc *allocType,
   return true;
 }
 
-static ArgsUnion ParseinstancesOptionForallocation(XlxPragmaArgParser &PAP, Parser &P, 
+static ArgsUnion ParseinstancesOptionForallocation(XlxPragmaArgParser &PAP, Parser &P, IdentifierLoc instancesID, 
                                                   SourceLocation PragmaLoc) { 
   P.TryConsumeToken(tok::equal);
   auto &Ctx = PAP.P.getActions().getASTContext();
@@ -1944,7 +1942,7 @@ static bool HandleOccurrencePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   bool off = PAP.getOff();
   if (off) {
     if (PAP.lookup("cycle")) {
-      PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+      PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_conflict_pragma_parameter)
         << "cycle"
         << "off=true";
       return false;
@@ -2135,7 +2133,7 @@ static bool HandleArrayPartitionPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   if (off) {
     for (auto s : {"type", "block", "cyclic", "complete", "factor"}) {
       if (PAP.lookup(s)) {
-        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_conflict_pragma_parameter)
           << s
           << "off=true";
         return false;
@@ -2199,7 +2197,7 @@ static bool HandleArrayReshapePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   if (off) {
     for (auto s : {"type", "block", "cyclic", "complete", "factor"}) {
       if (PAP.lookup(s)) {
-        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_confilict_pragma_parameter)
+        PAP.P.Diag(PAP.P.getCurToken().getLocation(), diag::err_conflict_pragma_parameter)
           << s
           << "off=true";
         return false;
@@ -2469,7 +2467,8 @@ static IntegerLiteral* GetInterfaceDirectIO(XlxPragmaArgParser &PAP)
 static bool CheckInterfaceDirectIO(XlxPragmaArgParser &PAP, IdentifierLoc &Mode)
 {
   static StringRef validModes[] {
-    "ap_none", "ap_stable", "ap_vld", "ap_ack", "ap_hs", "ap_ovld"
+    "ap_none", "ap_stable", "ap_vld", "ap_ack", "ap_hs", "ap_ovld",
+    "ap_memory", "bram"
   };
   static StringRef option {"direct_io"};
 
@@ -2490,7 +2489,7 @@ static bool CheckInterfaceDirectIO(XlxPragmaArgParser &PAP, IdentifierLoc &Mode)
         }
       }
     }
-    P.Diag(Loc, diag::err_confilict_pragma_parameter) << option << modeName;
+    P.Diag(Loc, diag::err_conflict_pragma_parameter) << option << modeName;
     return false;
   }
   else {
@@ -2556,14 +2555,25 @@ static bool HandleGenericInterfacePragma(Parser &P, Scope *CurScope,
   SmallVector<Expr *, 4> subExprs;
   getSubExprOfVariable(subExprs, var_expr, P);
  
+  int registered;
+  if (PAP.lookup("register")) {
+    registered = 1;
+  }
+  else if (PAP.presentedId("register")) {
+    registered = 0;
+  }
+  else {
+    registered = -1;
+  }
+
   for (auto port_ref : subExprs) {
     if (ModeStr == "ap_fifo") { 
-      ArgsUnion args[] = { port_ref, PAP.presentedId("register"),  PAP.lookup("depth"), PAP.lookup("name")};
+      ArgsUnion args[] = { port_ref, PAP.createIntegerLiteral(registered),  PAP.lookup("depth"), PAP.lookup("name")};
       PAP.addDependenceAttribute("ap_fifo", args) ;
     }
     else { 
       ArgsUnion args[] = {
-        port_ref, ModeId, PAP.presentedId("register"), PAP.lookup("name"),
+        port_ref, ModeId, PAP.createIntegerLiteral(registered), PAP.lookup("name"),
         GetInterfaceDirectIO(PAP)};
       PAP.addDependenceAttribute("ap_scalar", args) ;
     }
@@ -2626,9 +2636,20 @@ static bool HandleInterruptInterfacePragma(Parser &P, Scope *CurScope,
   SmallVector<Expr *, 4> subExprs;
   getSubExprOfVariable(subExprs, var_expr, PAP.P);
  
+  int registered;
+  if (PAP.lookup("register")) {
+    registered = 1;
+  }
+  else if (PAP.presentedId("register")) {
+    registered = 0;
+  }
+  else {
+    registered = -1;
+  }
+
   for (auto port_ref : subExprs) {
     ArgsUnion args[] = {
-      port_ref, ModeId, PAP.presentedId("register"), PAP.lookup("name"),
+      port_ref, ModeId, PAP.createIntegerLiteral(registered), PAP.lookup("name"),
       PAP.lookup("interrupt"), GetInterfaceDirectIO(PAP)};
     PAP.addDependenceAttribute("ap_scalar_interrupt", args) ;
   }
@@ -2647,6 +2668,8 @@ static bool HandleBRAMInterfacePragma(Parser &P, Scope *CurScope,
 
                           optVarRefExpr("port"), optICEExpr("depth"), optICEExpr("latency"),
                           optId("storage_type", "default"), optId("name"),
+                          optEnum("direct_io", {"true", "false"}),
+                          optEnum("address_mode", {"byte", "word"}),
                           optEnum("mode", {"ap_memory", "bram"})};
 
   if (!PAP.CheckAndFilter(ParmMap)) { 
@@ -2703,7 +2726,10 @@ static bool HandleBRAMInterfacePragma(Parser &P, Scope *CurScope,
   getSubExprOfVariable(subExprs, var_expr, P);
  
   for (auto port_ref : subExprs) {
-    ArgsUnion args[] = { port_ref, ModeId, PAP.lookup("storage_type"), PAP.lookup("latency"), PAP.lookup("name"), PAP.lookup("depth")};
+    ArgsUnion args[] = {
+      port_ref, ModeId, PAP.lookup("storage_type"), PAP.lookup("latency"),
+      PAP.lookup("name"), PAP.lookup("depth"), PAP.lookup("address_mode"),
+      GetInterfaceDirectIO(PAP)};
     PAP.addDependenceAttribute( "xlx_memory", args);
   }
   return true;
@@ -2749,9 +2775,16 @@ static bool HandleSAXIInterfacePragma(Parser &P, Scope *CurScope,
   ArgsUnion offset = PAP.lookup("offset");
   ArgsUnion clockName = PAP.lookup("clock");
   ArgsUnion implName = PAP.lookup("storage_impl");
-  ArgsUnion isRegister;
-  if (PAP.presentedId("register")) { 
-    isRegister = PAP.createIntegerLiteral(1);
+
+  int registered;
+  if (PAP.lookup("register")) {
+    registered = 1;
+  }
+  else if (PAP.presentedId("register")) {
+    registered = 0;
+  }
+  else {
+    registered = -1;
   }
 
   Expr *var_expr = PAP["port"].get<Expr*>();
@@ -2759,7 +2792,7 @@ static bool HandleSAXIInterfacePragma(Parser &P, Scope *CurScope,
   getSubExprOfVariable(subExprs, var_expr, P);
  
   for (auto port_ref : subExprs) {
-    ArgsUnion args[] = {port_ref, bundleName, offset, isRegister, PAP.lookup("name"), clockName, implName};
+    ArgsUnion args[] = {port_ref, bundleName, offset, PAP.createIntegerLiteral(registered), PAP.lookup("name"), clockName, implName};
     PAP.addDependenceAttribute("s_axilite", args);
   }
   return true;
@@ -2843,9 +2876,9 @@ static bool HandleAXISInterfacePragma(Parser &P, Scope *CurScope,
   // register default apply to axis
   // register_mode only apply to axis
   IdentifierLoc *RegMode;
-  if (auto Reg = PAP.lookup("register_mode"))
+  if (auto Reg = PAP.lookup("register_mode")) {
     RegMode = Reg.get<IdentifierLoc *>();
-  else if (auto id_loc = PAP.presentedId("both")) {
+  } else if (auto id_loc = PAP.presentedId("both")) {
     RegMode = id_loc;
   } else if (auto id_loc = PAP.presentedId("forward")) {
     RegMode = id_loc;
@@ -2857,6 +2890,28 @@ static bool HandleAXISInterfacePragma(Parser &P, Scope *CurScope,
     RegMode = PAP.createIdentLoc("both");
   }
 
+  auto RegModeStr = RegMode->Ident->getName();
+  int registered;
+  if (PAP.lookup("register")) {
+    registered = 1;
+  }
+  else if (PAP.presentedId("register")) {
+    registered = 0;
+  }
+  else if (RegModeStr.equals_lower("off")) {
+    registered = 0;
+  }
+  else {
+    registered = 1;
+  }
+
+  if (RegModeStr.equals_lower("forward")) {
+    P.Diag(RegMode->Loc, diag::warn_register_mode_forward_deprecated);
+    RegMode = PAP.createIdentLoc("both");
+  } else if (RegModeStr.equals_lower("reverse")) {
+    P.Diag(RegMode->Loc, diag::warn_register_mode_reverse_deprecated);
+    RegMode = PAP.createIdentLoc("both");
+  }
   auto &Actions = P.getActions();
 
   Expr *var_expr = PAP.lookup("port").get<Expr*>();
@@ -2864,7 +2919,7 @@ static bool HandleAXISInterfacePragma(Parser &P, Scope *CurScope,
   ArgsUnion bundleName = PAP.lookup("bundle"); //only used internal, user will not use
   getSubExprOfVariable(subExprs, var_expr, P);
   for (auto port_ref : subExprs) {
-    ArgsUnion args[] = {port_ref, PAP.presentedId("register"), RegMode, PAP.lookup("depth"), PAP.lookup("name"), bundleName};
+    ArgsUnion args[] = {port_ref, PAP.createIntegerLiteral(registered), RegMode, PAP.lookup("depth"), PAP.lookup("name"), bundleName};
     PAP.addDependenceAttribute("axis", args);
   }
   return true;
@@ -2975,7 +3030,7 @@ static bool HandleInterfacePragmaWithPAP(Parser &P, Scope *CurScope,
   return (*Handle)(P, CurScope, Mode, PragmaLoc, PAP);
 }
 
-static ArgsUnion ParseoffsetOptionForinterface(XlxPragmaArgParser &PAP, Parser &P, SourceLocation PragmaLoc) 
+static ArgsUnion ParseoffsetOptionForinterface(XlxPragmaArgParser &PAP, Parser &P, IdentifierLoc offsetID, SourceLocation PragmaLoc) 
 {
   P.TryConsumeToken(tok::equal);
   IdentifierLoc *TypeMode = nullptr;
@@ -3086,6 +3141,8 @@ static bool HandleInterfacePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
      //BRAM, AP_MEMORY
        optICEExpr("depth"), optICEExpr("latency"),
        optId("storage_type", "default"), optId("name"), 
+       optEnum("address_mode", {"byte", "word"}),
+       optEnum("direct_io", {"true", "false"}),
 
      //AP_NONE, AP_STABLE, AP_FIFO, AP_HS, AP_VLD, AP_OVLD, AP_ACK 
        presentId("register"), optId("name"),
@@ -3227,7 +3284,7 @@ static bool HandleMAXIAliasPragma(XlxPragmaArgParser &PAP, Scope *CurScope, Sour
   ArgsUnion distance_arg = PAP.lookup("distance");
 
   if(offset_arg && distance_arg) { 
-    PAP.P.Diag(PragmaLoc, diag::warn_confilict_pragma_parameter)
+    PAP.P.Diag(PragmaLoc, diag::warn_conflict_pragma_parameter)
         << "offset" << "distance" ;
     return false;
   } else if (!offset_arg && !distance_arg) { 
@@ -3513,6 +3570,14 @@ static bool HandleXlxBindOpPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   getSubExprOfVariable(subExprs, var_expr, PAP.P);
   for (Expr *expr : subExprs) {
     ArgsUnion args[] = {expr, op_enum_expr, impl_enum_expr, PAP["latency"]};
+    if (!isa<DeclRefExpr>(expr)) { 
+      std::string var_name ; 
+      llvm::raw_string_ostream os(var_name); 
+      expr->printPretty(os, nullptr, PrintingPolicy(PAP.P.getActions().getASTContext().getLangOpts()) ); 
+
+      PAP.P.Diag(PragmaLoc, diag::err_invalid_variable_in_bind_op) << os.str();
+    }
+
     if (isa<DeclRefExpr>(expr) && isa<FunctionDecl>(cast<DeclRefExpr>(expr)->getDecl())) { 
       PAP.P.Diag(PragmaLoc, diag::err_xlx_attribute_invalid_option_and_because)
         << "'Variable'" 
@@ -3648,7 +3713,7 @@ static bool HandleXlxDependencePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   auto cross_variables = PAP["cross_variables"].get<Expr*>();
   auto var_expr = PAP["variable"].get<Expr*>();
   if (cross_variables && var_expr)  {
-    PAP.P.Diag(PragmaLoc, diag::warn_confilict_pragma_parameter)
+    PAP.P.Diag(PragmaLoc, diag::warn_conflict_pragma_parameter)
         << "cross_variable" << "variable" ;
     return false;
   }

@@ -35,7 +35,6 @@
 #include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/ConstantFolding.h"
-#include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -81,6 +80,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include <cassert>
 #include <cstdint>
 #include <cstring>

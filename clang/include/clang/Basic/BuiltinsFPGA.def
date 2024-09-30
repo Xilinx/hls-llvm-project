@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -82,7 +82,6 @@ BUILTIN(__fpga_pipo_push_release, "vv*", "tn")
 //
 //  Stream
 //
-BUILTIN(__fpga_set_stream_depth, "vv*i", "tn")
 BUILTIN(__fpga_set_stream_of_blocks_depth, "vv*i", "tn")
 
 
@@ -115,7 +114,9 @@ BUILTIN(__fpga_add_task, "vi*i*", "tn")
 BUILTIN(__fpga_add_infinite_task, "vi*i*", "tn")
 BUILTIN(__fpga_nport_channel,  "vv*v*iiiii", "tn")
 BUILTIN(__fpga_ip,  "vcC*a", "tn")
-BUILTIN(__fpga_fence,  "viiA", "tn")
+BUILTIN(__fpga_fence,  "v.", "tn")
+BUILTIN(__fpga_fence_group,  "v.", "tn")
+BUILTIN(__fpga_fence_with_group,  "vii", "n")
 
 //
 // DirectIO
@@ -124,4 +125,5 @@ BUILTIN(__fpga_direct_valid, "bvC*", "tn")
 BUILTIN(__fpga_direct_ready, "bvC*", "tn")
 BUILTIN(__fpga_direct_load, "vv*v*", "tn")
 BUILTIN(__fpga_direct_store, "vv*vC*", "tn")
+
 #undef BUILTIN

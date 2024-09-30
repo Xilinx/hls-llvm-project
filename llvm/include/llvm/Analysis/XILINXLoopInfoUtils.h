@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -60,7 +60,8 @@ struct LoopIndexInfoTy {
 
 /// Collect loop index info for the given loop \p L.
 /// \returns true on success.
-bool getLoopIndexInfo(Loop *L, bool ExitFromHeader, LoopIndexInfoTy &Info);
+bool getLoopIndexInfo(Loop *L, bool ExitFromHeader, LoopIndexInfoTy &Info,
+                      bool HandleXor = false);
 
 /// Returns MDNode that contains the Metadata \p Attr for Loop \p L.
 MDNode *getLoopMetadata(const Loop *L, StringRef Attr);
@@ -207,6 +208,8 @@ ReflowUnrollOption populateUnrollOption(Loop *L, bool WithoutCheck,
                                         unsigned Count, unsigned TripCount,
                                         unsigned TripMultiple,
                                         ScalarEvolution *SE);
+
+Optional<int> getFlattenCheckerEncode(Loop *L);
 } // end namespace llvm
 
 #endif // LLVM_ANALYSIS_XILINXLOOPINFOUTILS_H

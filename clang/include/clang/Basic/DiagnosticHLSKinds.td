@@ -1,7 +1,7 @@
 //==--- DiagnosticHLSKinds.td -----HLS related diagnostics ----------------===//
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -87,11 +87,11 @@ def warn_deprecated_pragma_option_ignored_by_scout: Warning<
 def warn_extra_pragma_hls_token_ignored : Warning<
   "'%0' in '#pragma HLS %1' is ignored">,
   InGroup<ExtraTokens>;
-def warn_confilict_pragma_parameter : Warning<
+def warn_conflict_pragma_parameter : Warning<
   "pragma parameter '%0' conflicts with '%1'">,
   InGroup<InvalidXlxPragmas>;
 
-def err_confilict_pragma_parameter : Error<
+def err_conflict_pragma_parameter : Error<
   "pragma parameter '%0' conflicts with '%1'">;
 
 def err_invalid_option_unless : Error<
@@ -131,6 +131,12 @@ def warn_stream_off_deprecate: Warning<
   "The 'off' option of the 'HLS stream' directive or pragma is deprecated, use type=pipo instead.">, 
   InGroup<IgnoredXlxPragmas>;
 
+def warn_register_mode_forward_deprecated: Warning<
+  "The register mode 'forward' is deprecated, using the register option instead.">, 
+  InGroup<IgnoredXlxPragmas>;
+def warn_register_mode_reverse_deprecated: Warning<
+  "The register mode 'reverse' is deprecated, using the register option instead.">, 
+  InGroup<IgnoredXlxPragmas>;
 
 def error_unknown_interface_mode : Error<
   "The 'mode' option of the 'HLS interface' pragma is either missing or set to incorrect position. Pls guarantee to put it following closely INTERFACE.">;
@@ -171,6 +177,12 @@ def warn_xlx_invalid_resource_option: Warning<
   "Invalid Directive: for current device, %0 is invalid combination for %1">;
 def err_xlx_invalid_resource_option: Error< 
   "Invalid Directive: for current device, %0 is invalid combination for %1">;
+
+def warn_xlx_bind_op_failed: Warning< 
+  "Unknown pragma bind_op variable value '%0', please check that the variable exists in the same scope as the pragma.">;
+
+def err_invalid_variable_in_bind_op : Error< 
+  "Invalid pragma bind_op variable value '%0', the value must be a variable reference expression.">;
 
 def err_xlx_invalid_offset_value: Error<
   "unexpected interface offset value '%0', expects '[slave, direct, off]'">;
@@ -381,6 +393,11 @@ def err_xlx_clock_period_is_invalid: Error<
     "unexpected, the clock period is 0, and can not evaluate the number of cycles of performance region" >; 
 def warn_xlx_performance_option_is_near_to_zero: Warning<
     "the performance pragma is ignored, because option '%0' in performance pragma is too small, with clock period %1, it is near to zero">; 
+def err_hls_function_name_match_arg: Error< 
+    "unexpected argument type, the argument type for  __hls_function_name_match function call must be string literal">; 
+
+def warn_xlx_ignore_duplicate_pragma: Warning<
+    "there are more than one pragma %0 in the %1 scope, ignore the pragma ">; 
 
 }
 

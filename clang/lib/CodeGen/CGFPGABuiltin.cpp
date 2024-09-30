@@ -1,5 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -85,8 +85,6 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
   case FPGA::BI__fpga_pipo_push_acquire:
   case FPGA::BI__fpga_pipo_push_release:
     return EmitBuiltinFPGAPipoBlocking(BuiltinID, E);
-  case FPGA::BI__fpga_set_stream_depth:
-    return EmitBuiltinFPGASetStreamDepth(BuiltinID, E);
   case FPGA::BI__fpga_set_stream_of_blocks_depth:
     return EmitBuiltinFPGASetStreamOfBlocksDepth(BuiltinID, E);
   case FPGA::BI__fpga_maxi_read_req:
@@ -105,6 +103,10 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
     return EmitBuiltinFPGAIP(E);
   case FPGA::BI__fpga_fence:
     return EmitBuiltinFPGAFence(E);
+  case FPGA::BI__fpga_fence_group:
+    return EmitBuiltinFPGAFenceGroup(E);
+  case FPGA::BI__fpga_fence_with_group:
+    return EmitBuiltinFPGAFenceWithGroup(E);
   case FPGA::BI__fpga_direct_valid:
   case FPGA::BI__fpga_direct_ready:
     return EmitBuiltinFPGADirectIOStatus(BuiltinID, E);
@@ -538,7 +540,6 @@ Value *CodeGenFunction::EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID,
     auto *ValPtrAst = E->getArg(1);
     auto ValPtr = EmitPointerWithAlignment(ValPtrAst);
     auto *Val = Builder.CreateLoad(ValPtr);
-    uint64_t Size = CGM.getDataLayout().getTypeAllocSize(Val->getType());
     // This is byte enable bits
     auto BEPtr = EmitPointerWithAlignment(E->getArg(2));
     auto *BETy = BEPtr.getElementType();
@@ -564,19 +565,6 @@ Value *CodeGenFunction::EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID,
     auto *F = Intrinsic::getDeclaration(&CGM.getModule(), ID, Ptr->getType());
     return Builder.CreateCall(F, Ptr);
   }
-}
-
-Value *CodeGenFunction::EmitBuiltinFPGASetStreamDepth(unsigned BuiltinID,
-                                                      const CallExpr *E) {
-
-  auto *streamIdAst = E->getArg(0);
-  auto *streamId = EmitScalarExpr(streamIdAst);
-  auto *depthAst = E->getArg(1);
-  auto *depth = EmitScalarExpr(depthAst);
-  auto *F = Intrinsic::getDeclaration(&CGM.getModule(),
-                                      Intrinsic::fpga_set_stream_depth);
-
-  return Builder.CreateCall(F, {streamId, depth});
 }
 
 Value *CodeGenFunction::EmitBuiltinFPGASetStreamOfBlocksDepth(unsigned BuiltinID,
@@ -1066,25 +1054,16 @@ RValue CodeGenFunction::EmitBuiltinBitSelect(const CallExpr *E) {
 
   // Load the Val from which we select
   Value *Val = ((CGBuilderBaseTy &)Builder).CreateLoad(ValPtr, "");
+  LLVMContext &Context = CGM.getLLVMContext();
+  if (BitTy != llvm::Type::getInt32Ty(Context))
+    Bit = Builder.CreateIntCast(Bit, llvm::Type::getInt32Ty(Context), false, "");
 
-  // If the Bit index argument isn't the same width as the Val, make it so.
-  if (ValTy != BitTy)
-    Bit = Builder.CreateIntCast(Bit, ValTy, false, "");
-
-  // Get a mask for the bit of interest
-  llvm::ConstantInt *One = llvm::ConstantInt::get(ValTy, 1);
-  Value *Mask = Builder.CreateShl(One, Bit, "");
-
-  // And the value with the mask
-  Value *And = Builder.CreateAnd(Val, Mask, "");
-
-  // Truncate down to an i1
-  llvm::ConstantInt *Zero = llvm::ConstantInt::get(ValTy, 0);
-  llvm::Value *Result = Builder.CreateICmpNE(And, Zero, "bit_select");
-
+  auto *PartSelectDecl = Intrinsic::getDeclaration(
+      &CGM.getModule(), Intrinsic::fpga_legacy_part_select, {ValTy});
+  Value *Args[3] = {Val, Bit, Bit};
+  Value *Result = Builder.CreateCall(PartSelectDecl, Args, "bit_select");
   llvm::Type *DestTy = ConvertType(E->getType());
   Result = Builder.CreateIntCast(Result, DestTy, false, "cast");
-
   return RValue::get(Result);
 }
 
@@ -1140,31 +1119,18 @@ RValue CodeGenFunction::EmitBuiltinBitSet(const CallExpr *E) {
               "Fourth argument to __builtin_bit_set must be int type.");
     return RValue::get(0);
   }
+  LLVMContext &Context = CGM.getLLVMContext();
+  if (BitTy != llvm::Type::getInt32Ty(Context))
+    Bit = Builder.CreateIntCast(Bit, llvm::Type::getInt32Ty(Context), false, "");
 
-  // If the Bit index argument isn't the same width as the Val, make it so.
-  if (ValTy != BitTy)
-    Bit = Builder.CreateIntCast(Bit, ValTy, false, "");
+  auto *PartSetDecl = Intrinsic::getDeclaration(
+      &CGM.getModule(), Intrinsic::fpga_legacy_part_set, {ValTy, ReplTy});
 
-  // Load the value and and replacement bits
-  Value *Val = ((CGBuilderBaseTy &)Builder).CreateLoad(ValPtr, "");
-  Value *Repl = ((CGBuilderBaseTy &)Builder).CreateLoad(ReplPtr, "");
-
-  llvm::Constant *Zero = ConstantInt::getNullValue(ReplTy);
-  llvm::Value *ICmp = Builder.CreateICmpNE(Repl, Zero, "");
-
-  llvm::Constant *One = llvm::ConstantInt::get(ValTy, 1);
-  Value *BitClear = Builder.CreateShl(One, Bit, "");
-  BitClear = Builder.CreateNot(BitClear, "");
-  Value *Result = Builder.CreateAnd(Val, BitClear, "");
-
-  Value *ZExt = Builder.CreateZExt(ICmp, ValTy, "");
-  Value *BitSet = Builder.CreateShl(ZExt, Bit, "");
-
-  // Truncate down to an i1
-  Value *Select = Builder.CreateOr(Result, BitSet, "bit_set");
-
-  // Save the result.
-  ((CGBuilderBaseTy &)Builder).CreateStore(Select, RsltPtr);
+  Value *Args[4] = {((CGBuilderBaseTy &)Builder).CreateLoad(ValPtr, ""),
+                    ((CGBuilderBaseTy &)Builder).CreateLoad(ReplPtr, ""), Bit,
+                    Bit};
+  Value *PartSet = Builder.CreateCall(PartSetDecl, Args, "bit_set");
+  ((CGBuilderBaseTy &)Builder).CreateStore(PartSet, RsltPtr);
 
   return RValue::get(RsltPtr);
 }
@@ -1616,47 +1582,61 @@ Value* CodeGenFunction::EmitBuiltinFPGAIP(const CallExpr* E) {
 Value* CodeGenFunction::EmitBuiltinFPGAFence(const CallExpr* E) { 
   std::vector<llvm::Value *> args;
   unsigned ArgNum = E->getNumArgs();
-  assert(ArgNum >= 2);
 
-  llvm::ConstantInt *BeforeNumC = 
-      cast<llvm::ConstantInt>(EmitScalarExpr(E->getArg(0)));
-  llvm::ConstantInt *AfterNumC = 
-      cast<llvm::ConstantInt>(EmitScalarExpr(E->getArg(1)));
-  unsigned BeforeNum = BeforeNumC->getZExtValue();
-  unsigned AfterNum = AfterNumC->getZExtValue();
-  if (BeforeNum + AfterNum != ArgNum - 2) {
-    if (BeforeNum + AfterNum > ArgNum - 2) {
-      CGM.Error(E->getExprLoc(),
-                "Argument number mismatch: too less pointer arguments passed to __fpga_fence");
-    } else { 
-      CGM.Error(E->getExprLoc(),
-                "Argument number mismatch: too many pointer arguments passed to __fpga_fence");
-    }
-    return nullptr;
-  }
-
-  for (unsigned i = 0; i < BeforeNum; i++) {
-    const Expr *Arg = E->getArg(i+2);
+  for (unsigned i = 0; i < ArgNum; i++) {
+    const Expr *Arg = E->getArg(i);
     llvm::Value *Ptr = Arg->getType()->isPointerType() ? 
                            EmitScalarExpr(Arg) :
                            EmitLValue(Arg).getPointer();
     args.push_back(Ptr);
   }
 
-  args.push_back(Builder.getInt32(-1));
-
-  for (unsigned i = 0; i < AfterNum; i++) {
-    const Expr *Arg = E->getArg(i+BeforeNum+2);
-    llvm::Value *Ptr = Arg->getType()->isPointerType() ? 
-                           EmitScalarExpr(Arg) :
-                           EmitLValue(Arg).getPointer();
-    args.push_back(Ptr);
-  }
+  std::vector<llvm::Value *> FArgs(args);
+  FArgs.push_back(Builder.getInt32(-1));
+  FArgs.insert(FArgs.end(), args.begin(), args.end());
 
   auto *fence = llvm::Intrinsic::getDeclaration(
         CurFn->getParent(), Intrinsic::fpga_fence);
   
+  auto *call = Builder.CreateCall(fence, FArgs);
+  return call;
+}
+
+Value*CodeGenFunction::EmitBuiltinFPGAFenceWithGroup(const CallExpr* E) {
+  std::vector<llvm::Value *> args;
+  unsigned ArgNum = E->getNumArgs();
+  if (ArgNum != 2) 
+    CGM.Error(E->getExprLoc(),
+              "Argument number mismatch: __fpga_fence_with_gourp must have exact two arguments");
+
+  for (unsigned i = 0; i < ArgNum; i++) {
+    const Expr *Arg = E->getArg(i);
+    args.push_back(EmitScalarExpr(Arg));
+  }
+
+  auto *fence = llvm::Intrinsic::getDeclaration(
+        CurFn->getParent(), Intrinsic::fpga_fence_with_group);
+
   auto *call = Builder.CreateCall(fence, args);
+  return call;
+}
+
+Value*CodeGenFunction::EmitBuiltinFPGAFenceGroup(const CallExpr* E) {
+  std::vector<llvm::Value *> args;
+  unsigned ArgNum = E->getNumArgs();
+
+  for (unsigned i = 0; i < ArgNum; i++) {
+    const Expr *Arg = E->getArg(i);
+    llvm::Value *Ptr = Arg->getType()->isPointerType() ?
+                           EmitScalarExpr(Arg) :
+                           EmitLValue(Arg).getPointer();
+    args.push_back(Ptr);
+  }
+
+  auto *fence_g = llvm::Intrinsic::getDeclaration(
+        CurFn->getParent(), Intrinsic::fpga_fence_group);
+
+  auto *call = Builder.CreateCall(fence_g, args);
   return call;
 }
 

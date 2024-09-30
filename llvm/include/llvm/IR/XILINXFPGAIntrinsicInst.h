@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -733,6 +733,14 @@ public:
 //  2i+3: i-th case's value
 class FPGASparseMuxInst : public IntrinsicInst {
 public:
+  enum CORE_FEATURES {
+    ONE_HOT_ENCODING = 0,
+    HAS_DEFAULT_INPUT = 1
+  };
+  
+  bool isOneHotEncoding() const;
+  bool isOneHotWithZeroEncoding() const;
+
   static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::fpga_sparse_mux;
   }
@@ -2341,24 +2349,6 @@ DEFINE_SSA_ATTRIBUTE(ArrayView, xcl_array_view)
 DEFINE_SSA_ATTRIBUTE(ReadOnly, xcl_read_only)
 DEFINE_SSA_ATTRIBUTE(WriteOnly, xcl_write_only)
 
-class SetStreamDepthInst : public IntrinsicInst {
-public:
-  static inline bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::fpga_set_stream_depth;
-  }
-
-  static inline bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
-
-  int getDepth() const {
-    ConstantInt *Depth = cast<ConstantInt>(getArgOperand(1));
-    return (int)Depth->getSExtValue();
-  }
-
-  Value *getStreamObject() const { return getArgOperand(0); }
-};
-
 // Intrinsics for pragmas
 class PragmaInst : public IntrinsicInst {
 public:
@@ -2736,12 +2726,12 @@ public:
     return PragmaInst::get<ArrayStencilInst>(V, true);
   }
 
-  bool isEnabled() const {
+  bool isOff() const {
     if (!isValidInst())
       assert(0 && "Illegal array_stencil intrinsic");
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    auto *Enabled = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
-    return Enabled->isOne();
+    auto *OffVal = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
+    return OffVal->isOne();
   }
 
 private:
@@ -3244,6 +3234,7 @@ public:
   }
 
   Value *getStream() const { return getVariable(); }
+#endif
 
   static void get(Value *V, SetVector<ScalarStreamInst *> &PSet,
                   bool PopulateGEP = false) {
@@ -3263,7 +3254,6 @@ public:
   static const ScalarStreamInst *get(const Value *V, bool PopulateGEP = false) {
     return PragmaInst::get<ScalarStreamInst>(V, PopulateGEP);
   }
-#endif
 };
 
 class StreamOfBlocksPragmaInst : public PragmaInst {
@@ -3647,6 +3637,7 @@ public:
 DEFINE_LABEL(Stream)
 DEFINE_LABEL(StreamOfBlocks)
 DEFINE_LABEL(ShiftReg)
+DEFINE_LABEL(DirectIO)
 
 // pre-declare
 class SAXIInst;
@@ -3661,6 +3652,7 @@ class ApAckInst;
 class ApVldInst;
 class ApOvldInst;
 class ApHsInst;
+class ApAutoInst;
 class ApCtrlNoneInst;
 class ApCtrlChainInst;
 class ApCtrlHsInst;
@@ -3692,7 +3684,7 @@ public:
     else if (isa<ApFifoInst>(this) || isa<ApStableInst>(this) ||
              isa<ApNoneInst>(this) || isa<ApAckInst>(this) ||
              isa<ApVldInst>(this) || isa<ApOvldInst>(this) ||
-             isa<ApHsInst>(this))
+             isa<ApHsInst>(this) || isa<ApAutoInst>(this))
       V = BundleDef.inputs()[2];
     // op 1
     else if (isa<ApCtrlNoneInst>(this) || isa<ApCtrlChainInst>(this) ||
@@ -3719,7 +3711,7 @@ public:
     else if (isa<ApFifoInst>(this) || isa<ApStableInst>(this) ||
              isa<ApNoneInst>(this) || isa<ApAckInst>(this) ||
              isa<ApVldInst>(this) || isa<ApOvldInst>(this) ||
-             isa<ApHsInst>(this))
+             isa<ApHsInst>(this) || isa<ApAutoInst>(this))
       this->setOperand(2, newV);
     // op 1
     else if (isa<ApCtrlNoneInst>(this) || isa<ApCtrlChainInst>(this) ||
@@ -3727,6 +3719,33 @@ public:
       this->setOperand(1, newV);
     else
       llvm_unreachable("Other interface intrinsic?!");
+  }
+
+  int getRegister() const {
+
+    SmallVector<OperandBundleDef, 1> BundleDefs;
+    this->getOperandBundlesAsDefs(BundleDefs);
+    assert(BundleDefs.size() == 1 &&
+           "More than one bundle in the same intrinsic?");
+    auto BundleDef = BundleDefs[0];
+
+    Value *V = nullptr;
+    // op 3
+    if (isa<SAXIInst>(this))
+      V = BundleDef.inputs()[3];
+    // op 1
+    else if (isa<AxiSInst>(this) || isa<ApFifoInst>(this) ||
+             isa<ApNoneInst>(this) || isa<ApAckInst>(this) ||
+             isa<ApVldInst>(this) || isa<ApOvldInst>(this) ||
+             isa<ApHsInst>(this) || isa<ApStableInst>(this) || isa<ApAutoInst>(this))
+      V = BundleDef.inputs()[1];
+    else
+      llvm_unreachable("Other unsupport interface for register!");
+
+    if (!V || isa<ConstantAggregateZero>(V))
+      return 0;
+    else
+      return cast<ConstantInt>(V)->getSExtValue();
   }
 
   bool hasRegister() const {
@@ -3745,7 +3764,7 @@ public:
     else if (isa<AxiSInst>(this) || isa<ApFifoInst>(this) ||
              isa<ApNoneInst>(this) || isa<ApAckInst>(this) ||
              isa<ApVldInst>(this) || isa<ApOvldInst>(this) ||
-             isa<ApHsInst>(this) || isa<ApStableInst>(this))
+             isa<ApHsInst>(this) || isa<ApStableInst>(this) || isa<ApAutoInst>(this))
       V = BundleDef.inputs()[1];
     else
       llvm_unreachable("Other unsupport interface for register!");
@@ -4321,6 +4340,34 @@ public:
     this->setOperand(6, newV);
   }
 
+  int64_t getAddressMode() const {
+    if (!isValidInst())
+      assert(0 && "Illegal ap_memory intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    auto *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[7]);
+    return Depth->getSExtValue();
+  }
+
+  void setAddressMode(int64_t newAddressMode) {
+    Type *Int64Ty = Type::getInt64Ty(this->getContext());
+    auto newV = ConstantInt::getSigned(Int64Ty, newAddressMode);
+    this->setOperand(7, newV);
+  }
+
+  bool isDirectIO() const {
+    // Direct IO control info is encoded as the last operand in scalar
+    // interface operand.
+    auto CS = CallSite(const_cast<ApMemoryInst *>(this));
+    auto DirectIO = dyn_cast<ConstantInt>(*(CS.data_operands_end()-1));
+    return !DirectIO->isZero();
+  }
+
+  int32_t getDirectIO() const {
+    auto CS = CallSite(const_cast<ApMemoryInst *>(this));
+    auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+8));
+    return DirectIO->getSExtValue();
+  }
+
   // get call intrinsic from root value
   static void get(Value *V, SetVector<ApMemoryInst *> &PSet, bool Indirect = true) {
     return PragmaInst::get(V, PSet, Indirect);
@@ -4339,10 +4386,16 @@ public:
     return PragmaInst::get<ApMemoryInst>(V, Indirect);
   }
 
+  void setDirectIO() {
+    Type *Int32Ty = Type::getInt32Ty(this->getContext());
+    auto newV = ConstantInt::getSigned(Int32Ty, 1);
+    this->setOperand(8, newV);
+  }
+
 
 private:
   unsigned getNumArgs() const {
-    return 7;
+    return 9;
   }
 
   bool isValidInst() const {
@@ -4410,6 +4463,34 @@ public:
       return cast<ConstantDataSequential>(V)->getRawDataValues();
   }
 
+  int64_t getAddressMode() const {
+    if (!isValidInst())
+      assert(0 && "Illegal bram intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    auto *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[7]);
+    return Depth->getSExtValue();
+  }
+
+  void setAddressMode(int64_t newAddressMode) {
+    Type *Int64Ty = Type::getInt64Ty(this->getContext());
+    auto newV = ConstantInt::getSigned(Int64Ty, newAddressMode);
+    this->setOperand(7, newV);
+  }
+
+  bool isDirectIO() const {
+    // Direct IO control info is encoded as the last operand in scalar
+    // interface operand.
+    auto CS = CallSite(const_cast<BRAMInst *>(this));
+    auto DirectIO = dyn_cast<ConstantInt>(*(CS.data_operands_end()-1));
+    return !DirectIO->isZero();
+  }
+
+  int32_t getDirectIO() const {
+    auto CS = CallSite(const_cast<BRAMInst *>(this));
+    auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+8));
+    return DirectIO->getSExtValue();
+  }
+
   // get call intrinsic from root value
   static void get(Value *V, SetVector<BRAMInst *> &PSet, bool Indirect = true) {
     return PragmaInst::get(V, PSet, Indirect);
@@ -4428,10 +4509,16 @@ public:
     return PragmaInst::get<BRAMInst>(V, Indirect);
   }
 
+  void setDirectIO() {
+    Type *Int32Ty = Type::getInt32Ty(this->getContext());
+    auto newV = ConstantInt::getSigned(Int32Ty, 1);
+    this->setOperand(8, newV);
+  }
+
 
 private:
   unsigned getNumArgs() const {
-    return 7;
+    return 9;
   }
 
   bool isValidInst() const {
@@ -4447,11 +4534,20 @@ class ScalarInterfaceInst : public InterfaceInst {
 public:
   static inline bool classof(const PragmaInst *I) {
     return isa<ApStableInst>(I) || isa<ApNoneInst>(I) || isa<ApAckInst>(I) ||
-           isa<ApVldInst>(I) || isa<ApOvldInst>(I) || isa<ApHsInst>(I);
+           isa<ApVldInst>(I) || isa<ApOvldInst>(I) || isa<ApHsInst>(I) ||
+           isa<ApAutoInst>(I);
   }
 
   static inline bool classof(const Value *V) {
     return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+  static ScalarInterfaceInst *get(Value *V, bool Indirect = true) {
+    return PragmaInst::get<ScalarInterfaceInst>(V, Indirect);
+  }
+
+  static const ScalarInterfaceInst *get(const Value *V, bool Indirect = true) {
+    return PragmaInst::get<ScalarInterfaceInst>(V, Indirect);
   }
 
   bool isDirectIO() const {
@@ -4459,10 +4555,100 @@ public:
     // interface operand.
     auto CS = CallSite(const_cast<ScalarInterfaceInst *>(this));
     auto DirectIO = dyn_cast<ConstantInt>(*(CS.data_operands_end()-1));
-    assert(DirectIO && (DirectIO->isZero() || DirectIO->isOne()) &&
-           "Expect boolean value for direct input/output control");
+    return !DirectIO->isZero();
+  }
 
-    return DirectIO->isOne();
+  int32_t getDirectIO() const {
+    auto CS = CallSite(const_cast<ScalarInterfaceInst *>(this));
+    if (isa<ApStableInst>(this)) {
+      auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+3));
+      return DirectIO->getSExtValue();
+    }
+    else if (isa<ApNoneInst>(this)) {
+      auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+3));
+      return DirectIO->getSExtValue();
+    }
+    else if (isa<ApAckInst>(this)) {
+      auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+3));
+      return DirectIO->getSExtValue();
+    }
+    else if (isa<ApVldInst>(this)) {
+      auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+4));
+      return DirectIO->getSExtValue();
+    }
+    else if (isa<ApOvldInst>(this)) {
+      auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+3));
+      return DirectIO->getSExtValue();
+    }
+    else if (isa<ApHsInst>(this)) {
+      auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+4));
+      return DirectIO->getSExtValue();
+    }
+    else if (isa<ApAutoInst>(this)) {
+      auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+3));
+      return DirectIO->getSExtValue();
+    }
+    else {
+      llvm_unreachable("Other interface intrinsic?!");
+    }
+  }
+
+  void setPragmaDirectIO() {
+    Type *Int32Ty = Type::getInt32Ty(this->getContext());
+    auto newV = ConstantInt::getSigned(Int32Ty, 1);
+    if (isa<ApStableInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApNoneInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApAckInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApVldInst>(this)) {
+      this->setOperand(4, newV);
+    }
+    else if (isa<ApOvldInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApHsInst>(this)) {
+      this->setOperand(4, newV);
+    }
+    else if (isa<ApAutoInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else {
+      llvm_unreachable("Other interface intrinsic?!");
+    }
+  }
+
+  void setClassDirectIO() {
+    Type *Int32Ty = Type::getInt32Ty(this->getContext());
+    auto newV = ConstantInt::getSigned(Int32Ty, 2);
+    if (isa<ApStableInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApNoneInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApAckInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApVldInst>(this)) {
+      this->setOperand(4, newV);
+    }
+    else if (isa<ApOvldInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else if (isa<ApHsInst>(this)) {
+      this->setOperand(4, newV);
+    }
+    else if (isa<ApAutoInst>(this)) {
+      this->setOperand(3, newV);
+    }
+    else {
+      llvm_unreachable("Other interface intrinsic?!");
+    }
   }
 };
 
@@ -4786,6 +4972,57 @@ private:
   }
 };
 
+class ApAutoInst : public ScalarInterfaceInst {
+public:
+  static const std::string BundleTagName;
+  static inline bool classof(const PragmaInst *I) {
+    return I->getOperandBundle(BundleTagName).hasValue();
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
+  }
+
+#if 0
+  bool hasRegister() const {
+    if (!isValidInst())
+      assert(0 && "Illegal ap_auto intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    auto *Reg = cast<ConstantInt>(Bundle.getValue().Inputs[1]);
+    return Reg->isOne();
+  }
+#endif
+
+  // get call intrinsic from root value
+  static void get(Value *V, SetVector<ApAutoInst *> &PSet, bool Indirect = true) {
+    return PragmaInst::get(V, PSet, Indirect);
+  }
+
+  static void get(const Value *V,
+                  SetVector<const ApAutoInst *> &PSet, bool Indirect = true) {
+    return PragmaInst::get(V, PSet, Indirect);
+  }
+
+  static ApAutoInst *get(Value *V, bool Indirect = true) {
+    return PragmaInst::get<ApAutoInst>(V, Indirect);
+  }
+
+  static const ApAutoInst *get(const Value *V, bool Indirect = true) {
+    return PragmaInst::get<ApAutoInst>(V, Indirect);
+  }
+
+
+private:
+  unsigned getNumArgs() const {
+    return 4;
+  }
+
+  bool isValidInst() const {
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    return Bundle && Bundle.getValue().Inputs.size() == getNumArgs();
+  }
+};
+
 class ApCtrlNoneInst : public InterfaceInst {
 public:
   static const std::string BundleTagName;
@@ -5044,6 +5281,40 @@ public:
           IsBefore = false;     
       }
     }
+  }
+};
+
+class FPGAFenceGroupInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_fence_group;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  unsigned getNumObjects() const {
+    return getNumArgOperands();
+  }
+
+  iterator_range<op_iterator> objects() {
+    return arg_operands();
+  }
+ 
+  iterator_range<const_op_iterator> objects() const {
+    return arg_operands();
+  }
+};
+
+class FPGAFenceWithGroupInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_fence_with_group;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 };
 

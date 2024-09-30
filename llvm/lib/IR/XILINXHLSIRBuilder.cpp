@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -861,7 +861,7 @@ Value *HLSIRBuilder::CreateSparseMux(Value *Cond, Value *Default,
     AllArgs.push_back(Arg);
 
   auto *Mux = Intrinsic::getDeclaration(getModule(), Intrinsic::fpga_sparse_mux,
-                                        {Args[1]->getType(), Cond->getType()});
+                                        {Default->getType(), Cond->getType()});
   return CreateCall(Mux, AllArgs, Name);
 }
 
@@ -2288,7 +2288,7 @@ Value *HLSIRBuilder::CreatePipoPragmaInst(Value *V, int32_t Depth,
 }
 
 Value *HLSIRBuilder::CreateSAXIPragmaInst(Value *V, StringRef Bundle,
-                                          uint64_t Offset, bool HasRegister,
+                                          uint64_t Offset, int32_t HasRegister,
                                           StringRef SignalName, StringRef ClockName,
                                           StringRef ImplName,
                                           int64_t BitSize) {
@@ -2297,7 +2297,7 @@ Value *HLSIRBuilder::CreateSAXIPragmaInst(Value *V, StringRef Bundle,
   return Insert(PragmaInst::Create<SAXIInst>(
       {V, ConstantDataArray::getString(Ctx, Bundle, false),
        ConstantInt::getSigned(Type::getInt64Ty(Ctx), Offset),
-       ConstantInt::get(Type::getInt1Ty(Ctx), HasRegister),
+       ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
        ConstantDataArray::getString(Ctx, SignalName, false),
        ConstantDataArray::getString(Ctx, ClockName, false),
        ConstantDataArray::getString(Ctx, ImplName, false)},
@@ -2328,7 +2328,7 @@ Value *HLSIRBuilder::CreateMAXIPragmaInst(
       nullptr, M, BitSize, Source));
 }
 
-Value *HLSIRBuilder::CreateAXISPragmaInst(Value *V, bool HasRegister,
+Value *HLSIRBuilder::CreateAXISPragmaInst(Value *V, int32_t HasRegister,
                                           int64_t RegisterMode, int64_t Depth,
                                           StringRef SignalName, StringRef BundleName,
                                           int64_t BitSize) {
@@ -2336,7 +2336,7 @@ Value *HLSIRBuilder::CreateAXISPragmaInst(Value *V, bool HasRegister,
   auto &Ctx = M->getContext();
   Type *Int64Ty = Type::getInt64Ty(Ctx);
   return Insert(PragmaInst::Create<AxiSInst>(
-      {V, ConstantInt::get(Type::getInt1Ty(Ctx), HasRegister),
+      {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
        ConstantInt::getSigned(Int64Ty, RegisterMode),
        ConstantInt::getSigned(Int64Ty, Depth),
        ConstantDataArray::getString(Ctx, SignalName, false),
@@ -2344,14 +2344,14 @@ Value *HLSIRBuilder::CreateAXISPragmaInst(Value *V, bool HasRegister,
       nullptr, M, BitSize));
 }
 
-Value *HLSIRBuilder::CreateAPFIFOPragmaInst(Value *V, bool HasRegister,
+Value *HLSIRBuilder::CreateAPFIFOPragmaInst(Value *V, int32_t HasRegister,
                                             StringRef SignalName,
                                             int64_t Depth,
                                             int64_t BitSize) {
   auto *M = getModule();
   auto &Ctx = M->getContext();
   return Insert(PragmaInst::Create<ApFifoInst>(
-      {V, ConstantInt::get(Type::getInt1Ty(Ctx), HasRegister),
+      {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
        ConstantDataArray::getString(Ctx, SignalName, false),
        ConstantInt::getSigned(Type::getInt64Ty(Ctx), Depth)},
       nullptr, M, BitSize));
@@ -2362,7 +2362,9 @@ Value *HLSIRBuilder::CreateAPMemoryPragmaInst(Value *V, int64_t StorageTypeOp,
                                             int64_t Latency,
                                             StringRef SignalName,
                                             int64_t Depth,
-                                            int64_t BitSize) {
+                                            int64_t BitSize,
+                                            int64_t AddressMode,
+                                            bool IsDirectIO) {
   auto *M = getModule();
   auto &Ctx = M->getContext();
   return Insert(PragmaInst::Create<ApMemoryInst>(
@@ -2371,18 +2373,47 @@ Value *HLSIRBuilder::CreateAPMemoryPragmaInst(Value *V, int64_t StorageTypeOp,
        ConstantInt::getSigned(Type::getInt64Ty(Ctx), Latency),
        ConstantDataArray::getString(Ctx, SignalName, false),
        ConstantInt::getSigned(Type::getInt64Ty(Ctx), Depth),
-       ConstantDataArray::getString(Ctx, "", false)},
+       ConstantDataArray::getString(Ctx, "", false),
+       ConstantInt::get(Type::getInt64Ty(Ctx), AddressMode),
+       ConstantInt::get(Type::getInt32Ty(Ctx), IsDirectIO)},
       nullptr, M, BitSize));
 }
 
-Value *HLSIRBuilder::CreateApNonePragmaInst(Value *V, bool HasRegister,
+Value *HLSIRBuilder::CreateApNonePragmaInst(Value *V, int32_t HasRegister,
                                             StringRef SignalName,
-                                            int64_t BitSize) {
+                                            int64_t BitSize, bool IsDirectIO) {
   auto *M = getModule();
   auto &Ctx = M->getContext();
   return Insert(PragmaInst::Create<ApNoneInst>(
-      {V, ConstantInt::get(Type::getInt1Ty(Ctx), HasRegister),
-       ConstantDataArray::getString(Ctx, SignalName, false)},
+      {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
+       ConstantDataArray::getString(Ctx, SignalName, false),
+       ConstantInt::get(Type::getInt1Ty(Ctx), IsDirectIO)},
+      nullptr, M, BitSize));
+}
+
+Value *HLSIRBuilder::CreateApHsPragmaInst(Value *V, int32_t HasRegister,
+                                          StringRef SignalName,
+                                          int64_t Interrupt,
+                                          int64_t BitSize, bool IsDirectIO) {
+  auto *M = getModule();
+  auto &Ctx = M->getContext();
+  return Insert(PragmaInst::Create<ApHsInst>(
+      {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
+       ConstantDataArray::getString(Ctx, SignalName, false),
+       ConstantInt::getSigned(Type::getInt64Ty(Ctx), Interrupt),
+       ConstantInt::get(Type::getInt1Ty(Ctx), IsDirectIO)},
+      nullptr, M, BitSize));
+}
+
+Value *HLSIRBuilder::CreateApAutoPragmaInst(Value *V, int32_t HasRegister,
+                                            StringRef SignalName,
+                                            int64_t BitSize, bool IsDirectIO) {
+  auto *M = getModule();
+  auto &Ctx = M->getContext();
+  return Insert(PragmaInst::Create<ApAutoInst>(
+      {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
+       ConstantDataArray::getString(Ctx, SignalName, false),
+       ConstantInt::get(Type::getInt1Ty(Ctx), IsDirectIO)},
       nullptr, M, BitSize));
 }
 

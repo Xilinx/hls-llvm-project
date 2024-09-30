@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -33,7 +33,8 @@ bool llvm::isForLoop(const Loop *L) {
 }
 
 bool llvm::isRotatedLoop(const Loop *L) {
-  return L->getExitingBlock() == L->getLoopLatch();
+  BasicBlock *Latch = L->getLoopLatch();
+  return Latch && L->isLoopExiting(Latch);
 }
 
 PHINode *llvm::getIndVarOrAuxiliaryIndVar(const Loop *L, ScalarEvolution &SE) {
@@ -46,8 +47,8 @@ PHINode *llvm::getIndVarOrAuxiliaryIndVar(const Loop *L, ScalarEvolution &SE) {
 
 // The loop index must be an induction variable with constant step and loop
 // invariant upper bound.
-bool llvm::getLoopIndexInfo(Loop *L, bool ExitFromHeader,
-                            LoopIndexInfoTy &Info) {
+bool llvm::getLoopIndexInfo(Loop *L, bool ExitFromHeader, LoopIndexInfoTy &Info,
+                            bool HandleXor) {
   BasicBlock *H = L->getHeader();
 
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
@@ -75,11 +76,37 @@ bool llvm::getLoopIndexInfo(Loop *L, bool ExitFromHeader,
   if (!BR || !BR->isConditional())
     return false;
 
-  ICmpInst *Cmp = dyn_cast<ICmpInst>(BR->getCondition());
+  auto ExitCond = BR->getCondition();
+  bool InversePredicate = false;
+  if (BinaryOperator *BO = dyn_cast<BinaryOperator>(ExitCond)) {
+    if (HandleXor && BO->getOpcode() == Instruction::Xor) {
+      auto Op0 = BO->getOperand(0);
+      auto Op1 = BO->getOperand(1);
+      if (isa<ConstantInt>(Op0)) {
+        std::swap(Op0, Op1);
+      }
+
+      if (auto CI = dyn_cast<ConstantInt>(Op1)) {
+        if (CI == ConstantInt::getTrue(H->getContext())) {
+          /// xor a, true <=> not a
+          ExitCond = Op0;
+          InversePredicate = true;
+        } else if (CI == ConstantInt::getFalse(H->getContext())) {
+          /// xor a, false <=> a
+          ExitCond = Op0;
+        }
+      }
+    }
+  }
+
+  ICmpInst *Cmp = dyn_cast<ICmpInst>(ExitCond);
   if (!Cmp)
     return false;
 
   CmpInst::Predicate Pred = Cmp->getPredicate();
+  if (InversePredicate) {
+    Pred = CmpInst::getInversePredicate(Pred);
+  }
 
   Value *Idx = Cmp->getOperand(0);
   Value *Upper = Cmp->getOperand(1);
@@ -175,6 +202,9 @@ MDNode *llvm::getLoopMetadata(const Loop *L, StringRef Attr) {
   for (unsigned i = 1, e = LoopID->getNumOperands(); i < e; ++i) {
     MDNode *MD = dyn_cast<MDNode>(LoopID->getOperand(i));
     if (!MD)
+      continue;
+
+    if (MD->getNumOperands() == 0)
       continue;
 
     MDString *S = dyn_cast<MDString>(MD->getOperand(0));
@@ -613,4 +643,11 @@ MDNode *llvm::GetUnrollMetadata(MDNode *LoopID, StringRef Name) {
       return MD;
   }
   return nullptr;
+}
+
+Optional<int> llvm::getFlattenCheckerEncode(Loop *L) {
+  if (MDNode *MD = getLoopMetadata(L, "llvm.loop.flatten.checker"))
+    return mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
+
+  return None;
 }

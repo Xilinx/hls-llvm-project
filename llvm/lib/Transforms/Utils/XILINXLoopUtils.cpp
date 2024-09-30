@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -51,10 +51,12 @@ void llvm::addLoopMetadata(Loop *L, StringRef Attr,
       MDNode *MD = cast<MDNode>(LoopID->getOperand(i));
 
       // Already have given Attr? Drop it.
-      if (const MDString *S = dyn_cast<MDString>(MD->getOperand(0)))
-        if ((S->getString() == Attr) ||
-            (IsUnrollLoopMD && IsUnrollLoopMetadata(S->getString())))
-          continue;
+      if (MD->getNumOperands() > 0) {
+        if (const MDString *S = dyn_cast<MDString>(MD->getOperand(0)))
+          if ((S->getString() == Attr) ||
+              (IsUnrollLoopMD && IsUnrollLoopMetadata(S->getString())))
+            continue;
+      }
 
       MDs.push_back(LoopID->getOperand(i));
     }
@@ -86,9 +88,11 @@ void llvm::removeLoopMetadata(Loop *L, StringRef Attr) {
       MDNode *MD = cast<MDNode>(LoopID->getOperand(i));
 
       // Already have given Attr? Drop it.
-      if (const MDString *S = dyn_cast<MDString>(MD->getOperand(0)))
-        if (S->getString() == Attr)
-          continue;
+      if (MD->getNumOperands() > 0) {
+        if (const MDString *S = dyn_cast<MDString>(MD->getOperand(0)))
+          if (S->getString() == Attr)
+            continue;
+      }
 
       MDs.push_back(LoopID->getOperand(i));
     }
@@ -204,4 +208,11 @@ void llvm::addFlattenOff(Loop *L, StringRef Source, DILocation *Loc) {
   if (Loc)
     MD.push_back(Loc);
   addLoopMetadata(L, "llvm.loop.flatten.enable", MD);
+}
+
+void llvm::addFlattenCheckerEncode(Loop *L, int Encode, int BitNum) {
+  SmallVector<Metadata *, 1> MD{ConstantAsMetadata::get(
+      ConstantInt::get(Type::getIntNTy(GetContext(L), BitNum), Encode))};
+
+  addLoopMetadata(L, "llvm.loop.flatten.checker", MD);
 }

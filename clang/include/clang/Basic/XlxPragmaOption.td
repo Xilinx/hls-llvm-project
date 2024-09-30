@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -402,7 +402,7 @@ def XlxOccurrencePragma : HLSPragma {
 // scope default is loop 
 def XlxPerformancePragma : HLSPragma {
     let Name = "performance";
-    let Desc = "Allows a single pragma to parallelize a loop nests based on a performance target, and can be accomplished by internally applying pipeline, unroll, and array partition pragmas to the associated loops/arrays."; 
+    let Desc = "Allows a single pragma to parallelize a loop nest based on a performance target, and can be accomplished by internally applying pipeline, unroll, and array partition pragmas to the associated loops/arrays."; 
     let Objects = [Loop, Region]; 
     let Options = [
                    OptDoubleConstExprOption<"target_ti", "0.0", "Specify the value of transaction interval that is targeted for the scope.">,
@@ -620,7 +620,9 @@ def XlxBRAMInterfacePragma : HLSPragma {
   let Options = [ 
   OptIntDefaultConstExprOption<"depth", 1, "Specifies the maximum number of samples for the test bench to process. This is required for pointer interfaces using ap_fifo mode.">,
   OptIntDefaultConstExprOption<"latency", -1, "Specify the latency for ap_memory and m_axi interfaces">, 
-  OptIDExprOption<"storage_type", "default", "For bram and ap_memory, specify the type of storage to use.">
+  OptIDExprOption<"storage_type", "default", "For bram and ap_memory, specify the type of storage to use.">,
+  OptEnumExprOption<"address_mode", ["byte", "word"], "Specify if addressing should use byte or word increment.">,
+  OptEnumExprOption<"direct_io", ["true", "false"], "Specify DirectIO property for memory access", Hidden>
   ];
 }
 
@@ -698,7 +700,7 @@ def XlxInterfacePragma: HLSPragma, ModesFormat {
 
 def XlxCachePragma : HLSPragma { 
   let Name = "cache";
-  let Desc = "cache";
+  let Desc = "The cache pragma instantiates a cache, with a selectable number of lines and words per line, for a MAXI top level array.";
   let Objects = [Parameter, Function];
   let Options = [
     ReqVariableExprOption<"port", "Specify the interface for which cache is used.">,

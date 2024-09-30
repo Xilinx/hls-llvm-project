@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -74,6 +74,8 @@ void addFlatten(Loop *L, StringRef Source = "infer-from-design", DILocation *Loc
 /// Add flatten off(force not to flatten) metadata to Loop \p L.
 void addFlattenOff(Loop *L, StringRef Source = "infer-from-design", DILocation *Loc = nullptr);
 
+/// Add flatten checker encode metadata to Loop \p L.
+void addFlattenCheckerEncode(Loop *L, int Encode, int BitNum);
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_UTILS_XILINXLOOPINFOUTILS_H

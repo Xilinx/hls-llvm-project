@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3479,8 +3479,7 @@ public:
   /// PIPO builtins
   llvm::Value *EmitBuiltinFPGAPipoStatus(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitBuiltinFPGAPipoBlocking(unsigned BuiltinID, const CallExpr *E);
-  /// set STREAM depth
-  llvm::Value *EmitBuiltinFPGASetStreamDepth(unsigned BuiltinID, const CallExpr*E);
+
   llvm::Value *EmitBuiltinFPGASetStreamOfBlocksDepth(unsigned BuiltinID, const CallExpr*E);
 
   /// Manual burst builtins
@@ -3493,6 +3492,8 @@ public:
   llvm::Value * EmitBuiltinFPGANPortChannel(const CallExpr *E);
   llvm::Value * EmitBuiltinFPGAIP(const CallExpr *E);
   llvm::Value * EmitBuiltinFPGAFence(const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGAFenceGroup(const CallExpr *E);
+  llvm::Value * EmitBuiltinFPGAFenceWithGroup(const CallExpr *E);
 
   /// Direct Input/Output builtins
   llvm::Value *EmitBuiltinFPGADirectIOStatus(unsigned BuiltinID, const CallExpr *E);
@@ -3799,7 +3800,7 @@ public:
   //===--------------------------------------------------------------------===//
 
   /// Set Xilinx specific attributes for global variable
-  void LowerBindOpScope(Stmt* &stmt, SmallVector<const XlxBindOpAttr*, 4> attrs);
+  void LowerBindOpScope(Stmt* &stmt, std::map<const XlxBindOpAttr*, bool> &attrs);
   void EmitXlxAttributes(const VarDecl *D, llvm::Value *V);
   void EmitXlxParamAttributes(const ParmVarDecl *D, llvm::Value* V);
   void EmitXlxFunctionAttributes(const FunctionDecl *FD, llvm::Function *F);
@@ -3864,6 +3865,7 @@ public:
   void EmitXlxDependenceIntrinsic(const XlxDependenceAttr *attr) ;
   void EmitXCLDependenceIntrinsic(const XCLDependenceAttr *attr) ;
   void EmitXlxCacheIntrinsic(const XlxCacheAttr *cache);
+  bool EvaluateHLSIFCond(const Expr* ifCond) ; 
 
   
 

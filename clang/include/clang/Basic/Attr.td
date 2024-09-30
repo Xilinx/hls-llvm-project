@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3154,7 +3154,7 @@ def XlxArrayStencil: Attr{
   let Documentation = [Undocumented];
   let Args = [
               ExprArgument<"Variable">,
-              DefaultBoolArgument<"Enabled", 1>
+              DefaultBoolArgument<"Off", 1>
              ];
 }
 
@@ -3560,7 +3560,7 @@ def SAXILITEOffsetInterface: InheritableAttr{
               ExprArgument<"Port">,
               StringArgument<"BundleName">,
               ExprArgument<"Offset">, 
-              BoolArgument<"IsRegister">,
+              DefaultIntArgument<"IsRegister", -1>,
               StringArgument<"SignalName">,
               StringArgument<"ClockName">,
               StringArgument<"ImplName">
@@ -3603,7 +3603,7 @@ def AXIStreamInterface: InheritableAttr{
   let Documentation = [Undocumented];
   let Args = [
               ExprArgument<"Port">,
-              BoolArgument<"IsRegister">,
+              DefaultIntArgument<"IsRegister", -1>,
               EnumArgument<"RegisterMode", "RegisterModeEnum", ["forward","reverse", "both", "off" ], ["forward","reverse", "both", "off" ]>,
               ExprArgument<"Depth">, 
               StringArgument<"SignalName">,
@@ -3623,7 +3623,9 @@ def MemoryInterface: InheritableAttr{
               StringArgument<"StorageType">,
               ExprArgument<"Latency">,
               StringArgument<"SignalName">,
-              ExprArgument<"Depth">
+              ExprArgument<"Depth">,
+              EnumArgument<"AddressMode", "AddressModeEnum", ["byte","word"], ["byte","word"]>,
+              BoolArgument<"DirectIO">
              ];
 }
 
@@ -3636,7 +3638,7 @@ def APFifoInterface:InheritableAttr{
   let Documentation = [Undocumented];
   let Args = [
               ExprArgument<"Port">,
-              BoolArgument<"IsRegister">,
+              DefaultIntArgument<"IsRegister", -1>,
               ExprArgument<"Depth">,
               StringArgument<"SignalName">
              ];
@@ -3651,7 +3653,7 @@ def APScalarInterface: InheritableAttr{
   let Args = [
               ExprArgument<"Port">,
               StringArgument<"Mode">,
-              BoolArgument<"IsRegister">,
+              DefaultIntArgument<"IsRegister", -1>,
               StringArgument<"SignalName">,
               BoolArgument<"DirectIO">
              ];
@@ -3667,7 +3669,7 @@ def APScalarInterruptInterface: InheritableAttr{
   let Args = [
               ExprArgument<"Port">,
               StringArgument<"Mode">,
-              BoolArgument<"IsRegister">,
+              DefaultIntArgument<"IsRegister", -1>,
               StringArgument<"SignalName">,
               ExprArgument<"Interrupt">,
               BoolArgument<"DirectIO">

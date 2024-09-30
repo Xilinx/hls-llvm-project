@@ -181,6 +181,14 @@ class DominatorTree : public DominatorTreeBase<BasicBlock, false> {
   /// \brief Provide an overload for a Use.
   bool isReachableFromEntry(const Use &U) const;
 
+  // Ensure base class overloads are visible.
+  using Base::findNearestCommonDominator;
+
+  /// Find the nearest instruction I that dominates both I1 and I2, in the sense
+  /// that a result produced before I will be available at both I1 and I2.
+  Instruction *findNearestCommonDominator(Instruction *I1,
+                                          Instruction *I2) const;
+
   /// \brief Verify the correctness of the domtree by re-computing it.
   ///
   /// This should only be used for debugging as it aborts the program if the

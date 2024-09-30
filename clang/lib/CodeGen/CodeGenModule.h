@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1271,6 +1272,7 @@ public:
 
   using GEPFields = SmallVector<unsigned int, 4>; 
   void GenerateStreamAnnotationIntrinsic(llvm::IRBuilder< > &Builder, llvm::Value* parm, const ParmVarDecl *decl , const QualType type, GEPFields fields, bool is_pointer);
+  void GenerateDirectIOAnnotationIntrinsic(llvm::IRBuilder< > &Builder, llvm::Value* parm, const ParmVarDecl *decl , const QualType type, GEPFields fields, bool is_pointer);
 
 private:
   llvm::Constant *GetOrCreateLLVMFunction(

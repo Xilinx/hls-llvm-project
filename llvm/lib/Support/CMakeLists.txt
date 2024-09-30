@@ -163,8 +163,6 @@ add_llvm_library(LLVMSupport
   Triple.cpp
   Twine.cpp
   Unicode.cpp
-  XILINXFPGAPlatformBasic.cpp
-  XILINXFPGACoreInstFactory.cpp
   XILINXSystemInfo.cpp
   YAMLParser.cpp
   YAMLTraits.cpp
@@ -176,6 +174,16 @@ add_llvm_library(LLVMSupport
   regfree.c
   regstrlcpy.c
   xxhash.cpp
+  
+  #Platform 
+  XILINXFPGAPlatformBasic.cpp
+  XILINXFPGACoreInstFactory.cpp
+  XilinxPlat/PortAndExprTreeNode.cpp
+  XilinxPlat/SqliteSelector.cpp
+  XilinxPlat/CoreInst.cpp
+  XilinxPlat/CoreQuerier.cpp
+  XilinxPlat/ChipInfo.cpp
+  XilinxPlat/TargetPlatform.cpp
 
 # System
   Atomic.cpp

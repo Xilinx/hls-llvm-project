@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -120,6 +120,8 @@ enum OP_TYPE
     OP_DRECIP = 520,
     OP_DLOG = 521,
     OP_DEXP = 522,
+    OP_CTLZ = 523,
+    OP_CTTZ = 524,
     OP_CTPOP = 525,
     OP_SETEQ = 526,
     OP_SETNE = 527,
@@ -217,6 +219,16 @@ enum OP_TYPE
     OP_RETURN = 1203,
     OP_DOTPRA3 = 1210,
     OP_DOTPRA3ADD = 1211,
+    OP_APFLOATADD = 1212,
+    OP_APFLOATSUB = 1213,
+    OP_APFLOATMUL = 1214,
+    OP_APFLOATDIV = 1215,
+    OP_APFLOATCMP = 1216,
+    OP_APFLOATFMA = 1217,
+    OP_APFLOATSQR = 1218,
+    OP_APFLOATFIXED2FLOAT = 1219,
+    OP_APFLOATFLOAT2FIXED = 1220,
+    OP_APFLOATFLOAT2FLOAT = 1221,
     OP_SPECDT = 2000,
     OP_SPECPORT = 2001,
     OP_SPECINTERFACE = 2006,
@@ -385,6 +397,7 @@ enum IMPL_TYPE
     ONEHOTENCODING_DONTCARE,
     COMPACTENCODING_REALDEF,
     ONEHOTENCODING_REALDEF,
+    REG_SLICE,
     //NOIMPL, for resource pragma without impl
     NOIMPL = 200,
     NOIMPL_SHIFTREG,
@@ -526,6 +539,8 @@ private:
   bool isRAM() const;
   // is ROM ?
   bool isROM() const;
+  // is NP ROM ?
+  bool isNPROM() const;
 
 private:
   CoreBasic(); // private and not implemented

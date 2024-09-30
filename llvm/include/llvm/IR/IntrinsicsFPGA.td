@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -532,9 +532,6 @@ def int_fpga_seq_store_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>,
 def int_fpga_get_printf_buffer : Intrinsic<[LLVMAnyPointerType<llvm_anyint_ty>], [],
                                     [IntrNoMem]>;
 
-// Abstracted function to write to printf buffer
-def int_fpga_set_stream_depth : Intrinsic<[], [llvm_vararg_ty], [IntrWillReturn]>;
-
 // llvm.recip
 def int_fpga_recip : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>],
                                [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
@@ -586,5 +583,15 @@ def int_fpga_any : Intrinsic<[llvm_i64_ty], [], [IntrNoMem, IntrWillReturn]>;
 // void llvm.fpga.fence(...)
 def int_fpga_fence : Intrinsic<[], 
                                [llvm_vararg_ty],
-                               [IntrArgMemOnly]>;
+                               [IntrArgMemOnly, IntrWillReturn]>;
+
+// void llvm.fpga.fence.group(...)
+def int_fpga_fence_group : Intrinsic<[llvm_i32_ty], 
+                                     [llvm_vararg_ty],
+                                     [IntrArgMemOnly, IntrWillReturn]>;
+
+// void llvm.fpga.fence.with.group(i32 %group1, i32 %group2)
+def int_fpga_fence_with_group : Intrinsic<[], 
+                                          [llvm_i32_ty, llvm_i32_ty],
+                                          [IntrWillReturn]>;
 }

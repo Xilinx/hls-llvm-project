@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -310,6 +310,28 @@ static ModRefInfo GetLocation(const Instruction *Inst, MemoryLocation &Loc,
       // These intrinsics don't really modify the memory, but returning Mod
       // will allow them to be handled conservatively.
       return ModRefInfo::Mod;
+    case Intrinsic::fpga_seq_load_begin:
+    case Intrinsic::fpga_seq_store_begin: {
+      auto SEI = dyn_cast<SeqBeginInst>(II);
+      Loc = MemoryLocation::get(SEI);
+      return ModRefInfo::ModRef;
+    }
+    case Intrinsic::fpga_seq_load: {
+      auto SLI = dyn_cast<SeqLoadInst>(II);
+      Loc = MemoryLocation::get(SLI->getPointerOperand());
+      return ModRefInfo::ModRef;
+    }
+    case Intrinsic::fpga_seq_store: {
+      auto SSI = dyn_cast<SeqStoreInst>(II);
+      Loc = MemoryLocation::get(SSI->getPointerOperand());
+      return ModRefInfo::ModRef;
+    }
+    case Intrinsic::fpga_seq_load_end:
+    case Intrinsic::fpga_seq_store_end: {
+      auto SEI = dyn_cast<SeqEndInst>(II);
+      Loc = MemoryLocation::get(SEI->getPointerOperand());
+      return ModRefInfo::ModRef;
+    }
     default:
       break;
     }

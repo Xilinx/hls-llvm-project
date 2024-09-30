@@ -20,6 +20,7 @@
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
@@ -288,27 +289,36 @@ llvm::SplitAllCriticalEdges(Function &F,
 }
 
 BasicBlock *llvm::SplitBlock(BasicBlock *Old, Instruction *SplitPt,
-                             DominatorTree *DT, LoopInfo *LI) {
+                             DominatorTree *DT, LoopInfo *LI,
+                             PostDominatorTree *PDT) {
   BasicBlock::iterator SplitIt = SplitPt->getIterator();
   while (isa<PHINode>(SplitIt) || SplitIt->isEHPad())
     ++SplitIt;
+  SmallPtrSet<BasicBlock*, 4> OrigSuccs(succ_begin(Old), succ_end(Old));
   BasicBlock *New = Old->splitBasicBlock(SplitIt, Old->getName()+".split");
-
   // The new block lives in whichever loop the old one did. This preserves
   // LCSSA as well, because we force the split point to be after any PHI nodes.
-  if (LI)
+  if (LI) {
     if (Loop *L = LI->getLoopFor(Old))
       L->addBasicBlockToLoop(New, *LI);
+  }
 
-  if (DT)
-    // Old dominates New. New node dominates all other nodes dominated by Old.
-    if (DomTreeNode *OldNode = DT->getNode(Old)) {
-      std::vector<DomTreeNode *> Children(OldNode->begin(), OldNode->end());
+  SmallVector<DominatorTree::UpdateType, 4> Updates;
+  Updates.push_back({DominatorTree::Insert, Old, New});
+  for (auto Succ : OrigSuccs) {
+    Updates.push_back({DominatorTree::Insert, New, Succ});
+    Updates.push_back({DominatorTree::Delete, Old, Succ});
+  }
+  
+  if (DT) {
+    DT->applyUpdates(Updates); 
+  }
+ 
 
-      DomTreeNode *NewNode = DT->addNewBlock(New, Old);
-      for (DomTreeNode *I : Children)
-        DT->changeImmediateDominator(I, NewNode);
-    }
+  if (PDT) {
+    PDT->applyUpdates(Updates);
+  }
+          
 
   return New;
 }
@@ -661,8 +671,10 @@ ReturnInst *llvm::FoldReturnIntoUncondBranch(ReturnInst *RI, BasicBlock *BB,
 TerminatorInst *
 llvm::SplitBlockAndInsertIfThen(Value *Cond, Instruction *SplitBefore,
                                 bool Unreachable, MDNode *BranchWeights,
-                                DominatorTree *DT, LoopInfo *LI) {
+                                DominatorTree *DT, LoopInfo *LI,
+                                PostDominatorTree *PDT) {
   BasicBlock *Head = SplitBefore->getParent();
+  SmallPtrSet<BasicBlock*, 2> OrigSuccessors(succ_begin(Head), succ_end(Head));
   BasicBlock *Tail = Head->splitBasicBlock(SplitBefore->getIterator());
   TerminatorInst *HeadOldTerm = Head->getTerminator();
   LLVMContext &C = Head->getContext();
@@ -678,17 +690,16 @@ llvm::SplitBlockAndInsertIfThen(Value *Cond, Instruction *SplitBefore,
   HeadNewTerm->setMetadata(LLVMContext::MD_prof, BranchWeights);
   ReplaceInstWithInst(HeadOldTerm, HeadNewTerm);
 
+  SmallVector<DominatorTree::UpdateType, 4> Updates;
+  Updates.push_back({DominatorTree::Insert, Head, Tail});
+  Updates.push_back({DominatorTree::Insert, Head, ThenBlock});
+  Updates.push_back({DominatorTree::Insert, ThenBlock, Tail});
+  for (auto Succ : OrigSuccessors) {
+    Updates.push_back({DominatorTree::Insert, Tail, Succ});
+    Updates.push_back({DominatorTree::Delete, Head, Succ});
+  }
   if (DT) {
-    if (DomTreeNode *OldNode = DT->getNode(Head)) {
-      std::vector<DomTreeNode *> Children(OldNode->begin(), OldNode->end());
-
-      DomTreeNode *NewNode = DT->addNewBlock(Tail, Head);
-      for (DomTreeNode *Child : Children)
-        DT->changeImmediateDominator(Child, NewNode);
-
-      // Head dominates ThenBlock.
-      DT->addNewBlock(ThenBlock, Head);
-    }
+    DT->applyUpdates(Updates);
   }
 
   if (LI) {
@@ -697,6 +708,11 @@ llvm::SplitBlockAndInsertIfThen(Value *Cond, Instruction *SplitBefore,
       L->addBasicBlockToLoop(Tail, *LI);
     }
   }
+
+  if (PDT) {
+    PDT->applyUpdates(Updates);
+  }
+
 
   return CheckTerm;
 }

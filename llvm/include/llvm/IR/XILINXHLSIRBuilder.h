@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -348,7 +348,7 @@ public:
   Value *CreatePipoPragmaInst(Value *V, int32_t Depth, int32_t Type, int64_t BitSize = -1,
                               StringRef Source = "");
   Value *CreateSAXIPragmaInst(Value *V, StringRef Bundle, uint64_t Offset,
-                              bool HasRegister, StringRef SignalName, StringRef ClockName,
+                              int32_t HasRegister, StringRef SignalName, StringRef ClockName,
                               StringRef ImplName,
                               int64_t BitSize = -1);
   Value *CreateMAXIPragmaInst(Value *V, StringRef Bundle, int64_t Depth,
@@ -358,18 +358,28 @@ public:
                               int64_t MaxReadBurstLen, int64_t MaxWriteBurstLen,
                               int64_t Latency, int64_t MaxWidenBitwidth,
                               StringRef ChannelID, int64_t BitSize = -1, StringRef Source = "");
-  Value *CreateAXISPragmaInst(Value *V, bool HasRegister, int64_t RegisterMode,
+  Value *CreateAXISPragmaInst(Value *V, int32_t HasRegister, int64_t RegisterMode,
                               int64_t Depth, StringRef SignalName, StringRef BundleName,
                               int64_t BitSize = -1);
-  Value *CreateAPFIFOPragmaInst(Value *V, bool HasRegister,
+  Value *CreateAPFIFOPragmaInst(Value *V, int32_t HasRegister,
                                 StringRef SignalName, int64_t Depth,
                                 int64_t BitSize = -1);
   Value *CreateAPMemoryPragmaInst(Value *V, int64_t StorageTypeOp,
                                 int64_t StorageTypeImpl,
                                 int64_t Latency,
                                 StringRef SignalName, int64_t Depth,
-                                int64_t BitSize = -1);
-  Value *CreateApNonePragmaInst(Value *V, bool HasRegister, StringRef SignalName, int64_t BitSize = -1);
+                                int64_t BitSize = -1, int64_t AddressMode = 1,
+                                bool IsDirectIO = false);
+  Value *CreateApNonePragmaInst(Value *V, int32_t HasRegister,
+                                StringRef SignalName, int64_t BitSize = -1,
+                                bool IsDirectIO = false);
+  Value *CreateApHsPragmaInst(Value *V, int32_t HasRegister,
+                              StringRef SignalName,
+                              int64_t Interrupt = -1,
+                              int64_t BitSize = -1, bool IsDirectIO = false);
+  Value *CreateApAutoPragmaInst(Value *V, int32_t HasRegister,
+                                StringRef SignalName, int64_t BitSize = -1,
+                                bool IsDirectIO = false);
   Value *CreateApCtrlNonePragmaInst(StringRef SignalName, int64_t BitSize = -1);
   Value *CreateApCtrlChainPragmaInst(StringRef SignalName, int64_t BitSize = -1);
   Value *CreateApCtrlHsPragmaInst(StringRef SignalName, int64_t BitSize = -1);
@@ -377,7 +387,9 @@ public:
   /// Create bram/ap_memory PragmaInst
   template <class Kind>
   Value *CreateBRAMPragmaInst(Value *V, int64_t StorageType, int64_t ImplType,
-                              int64_t Latency, StringRef SignalName, int64_t BitSize = -1) {
+                              int64_t Latency, StringRef SignalName,
+                              int64_t BitSize = -1, int64_t AddressMode = 1,
+                              bool IsDirectIO = false) {
     auto *M = getModule();
     auto &Ctx = M->getContext();
     Type *Int64Ty = Type::getInt64Ty(Ctx);
@@ -385,20 +397,23 @@ public:
         {V, ConstantInt::getSigned(Int64Ty, StorageType),
          ConstantInt::getSigned(Int64Ty, ImplType),
          ConstantInt::getSigned(Int64Ty, Latency),
-         ConstantDataArray::getString(Ctx, SignalName)},
+         ConstantDataArray::getString(Ctx, SignalName),
+         ConstantInt::get(Type::getInt64Ty(Ctx), AddressMode),
+         ConstantInt::get(Type::getInt32Ty(Ctx), IsDirectIO)},
         nullptr, M, BitSize));
   }
 
   /// Create ap_none/ap_ack/ap_vld/ap_ovld/ap_hs/ap_stable PragmaInst
   template <class Kind>
-  Value *CreateScalarPragmaInst(Value *V, bool HasRegister,
-                                StringRef SignalName,
-                                int64_t BitSize = -1) {
+  Value *CreateScalarPragmaInst(Value *V, int32_t HasRegister,
+                                StringRef SignalName, int64_t BitSize = -1,
+                                bool IsDirectIO = false) {
     auto *M = getModule();
     auto &Ctx = M->getContext();
     return Insert(PragmaInst::Create<Kind>(
         {V, ConstantInt::get(Type::getInt1Ty(Ctx), HasRegister),
-         ConstantDataArray::getString(Ctx, SignalName)},
+         ConstantDataArray::getString(Ctx, SignalName),
+         ConstantInt::get(Type::getInt1Ty(Ctx), IsDirectIO)},
         nullptr, M, BitSize));
   }
 };

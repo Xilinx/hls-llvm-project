@@ -1,4 +1,5 @@
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -261,6 +262,7 @@ HLS_PRAGMA_DEF(Bind_Storage)
   OptIntConstExpr(depth, 1)\
   OptIntConstExpr(latency, -1)\
   OptIDExpr(storage_type, default)\
+  OptEnumExpr(address_mode, { "byte" COMMA_SPERATOR "word" }, word)\
   OptIDExpr(name, "")
 
 #define HLS_SUB_PRAGMA_SCALAR\

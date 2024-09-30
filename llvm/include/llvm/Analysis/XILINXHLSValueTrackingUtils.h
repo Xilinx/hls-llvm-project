@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -40,6 +40,7 @@ class Type;
 
 bool IsGlobalUseEmpty(const GlobalValue &GV);
 
+bool IsHLSDirectIO(const Value *V);
 bool IsHLSStream(const Value *V);
 
 // Return true if \p Call is a HLS region

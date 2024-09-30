@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2222,7 +2222,9 @@ OptimizeGlobalVars(Module &M, TargetLibraryInfo *TLI,
 /// returns 'Init' modified to reflect 'Val' stored into it.  At this point, the
 /// GEP operands of Addr [0, OpNo) have been stepped into.
 static Constant *EvaluateStoreInto(Constant *Init, Constant *Val,
-                                   ConstantExpr *Addr, unsigned OpNo) {
+                                   ConstantExpr *Addr, unsigned OpNo,
+                                   std::vector<Constant *> &OldConsts) {
+  OldConsts.push_back(Init);
   // Base case of the recursion.
   if (OpNo == Addr->getNumOperands()) {
     assert(Val->getType() == Init->getType() && "Type mismatch!");
@@ -2239,7 +2241,7 @@ static Constant *EvaluateStoreInto(Constant *Init, Constant *Val,
     ConstantInt *CU = cast<ConstantInt>(Addr->getOperand(OpNo));
     unsigned Idx = CU->getZExtValue();
     assert(Idx < STy->getNumElements() && "Struct index out of range!");
-    Elts[Idx] = EvaluateStoreInto(Elts[Idx], Val, Addr, OpNo+1);
+    Elts[Idx] = EvaluateStoreInto(Elts[Idx], Val, Addr, OpNo+1, OldConsts);
 
     // Return the modified struct.
     return ConstantStruct::get(STy, Elts);
@@ -2255,7 +2257,7 @@ static Constant *EvaluateStoreInto(Constant *Init, Constant *Val,
 
   assert(CI->getZExtValue() < NumElts);
   Elts[CI->getZExtValue()] =
-    EvaluateStoreInto(Elts[CI->getZExtValue()], Val, Addr, OpNo+1);
+    EvaluateStoreInto(Elts[CI->getZExtValue()], Val, Addr, OpNo+1, OldConsts);
 
   if (Init->getType()->isArrayTy())
     return ConstantArray::get(cast<ArrayType>(InitTy), Elts);
@@ -2273,10 +2275,16 @@ static void CommitValueTo(Constant *Val, Constant *Addr) {
 
   ConstantExpr *CE = cast<ConstantExpr>(Addr);
   GlobalVariable *GV = cast<GlobalVariable>(CE->getOperand(0));
-  Constant *OriInit = GV->getInitializer();
-  GV->setInitializer(EvaluateStoreInto(OriInit, Val, CE, 2));
-  if (OriInit->use_empty() && isSafeToDestroyConstant(OriInit))
-    OriInit->destroyConstant();
+  std::vector<Constant *> OldConsts;
+  GV->setInitializer(
+      EvaluateStoreInto(GV->getInitializer(), Val, CE, 2, OldConsts));
+  
+  for (Constant *OriInit : OldConsts) {
+    if (OriInit->use_empty() && isSafeToDestroyConstant(OriInit))
+      OriInit->destroyConstant();
+    else
+      break;
+  }
 }
 
 /// Evaluate static constructors in the function, if we can.  Return true if we

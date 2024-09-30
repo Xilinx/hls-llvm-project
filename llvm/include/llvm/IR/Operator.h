@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -64,6 +65,10 @@ public:
   static bool classof(const Value *V) {
     return isa<Instruction>(V) || isa<ConstantExpr>(V);
   }
+
+  /// Return true if this operator has flags which may cause this operator
+  /// to evaluate to poison despite having non-poison inputs.
+  bool hasPoisonGeneratingFlags() const;
 };
 
 /// Utility class for integer operators which may exhibit overflow - Add, Sub,

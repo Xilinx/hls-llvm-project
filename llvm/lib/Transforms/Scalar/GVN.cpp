@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -69,6 +69,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
@@ -1378,6 +1379,39 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
       if (LInfo->getLoopFor(LI->getParent()) && ValuesPerBlock.size() > 1 &&
           LI->getType()->isIntegerTy() && !isa<Argument>(LI->getOperand(0)))
         return false;
+
+      auto hasDependencePragma = [](Value *V, Loop *L) -> bool {
+        for (User *U : V->users()) {
+          if (CallInst *CI = dyn_cast<CallInst>(U)) {
+            if (L->contains(CI->getParent())) {
+              if (isa<DependenceInst>(CI))
+                return true;
+              Function *CalledF = CI->getCalledFunction();
+              if (CalledF && CalledF->getName() == "_ssdm_SpecDependence")
+                return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      Value *Ptr = LI->getPointerOperand();
+      if (!isa<GEPOperator>(Ptr)) {
+        for (const AvailableValueInBlock &AV : ValuesPerBlock) {
+          BasicBlock *BB = AV.BB;
+          if (!AV.AV.isSimpleValue()) 
+            continue;
+
+          Value *SV = AV.AV.getSimpleValue();
+          if (isa<UndefValue>(SV))
+            continue;
+
+          if (Loop *L = LInfo->getLoopFor(BB)) {
+            if (hasDependencePragma(Ptr, L))
+              return false;
+          }
+        }
+      }
     }
     DEBUG(dbgs() << "GVN REMOVING NONLOCAL LOAD: " << *LI << '\n');
 

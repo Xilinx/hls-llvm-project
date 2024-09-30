@@ -1,5 +1,5 @@
 // (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023, Advanced Micro Devices, Inc.
+// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -47,6 +47,24 @@
 
 using namespace clang;
 using namespace sema;
+
+static Expr* leftmost(Expr *E)
+{
+  while (true) {
+    if (auto *ME = dyn_cast<MemberExpr>(E)) {
+      E = ME->getBase();
+    }
+    else if (auto *SE = dyn_cast<ArraySubscriptExpr>(E)) {
+      E = SE->getBase();
+    }
+    else if (auto *CE = dyn_cast<CastExpr>(E)) {
+      E = CE->getSubExpr();
+    }
+    else {
+      return E;
+    }
+  }
+}
 
 static std::string str(const Twine &Name) { return Name.str(); }
 
@@ -552,11 +570,20 @@ static Attr *handleXlxArrayStencilAttr(Sema &S, Stmt *St, const AttributeList &A
   if (A.isArgExpr(0) && A.getArg(0)) {
     var_ref = A.getArgAsExpr(0);
   }
-  bool isOff = ExtractInteger(S, A, /* Arg ID */ 1, /*LB*/ 0, /*UB*/ 1).getValue();
-  bool isEnabled = !isOff;
+
+  bool isOff;
+  {
+    auto res = ExtractInteger(S, A, /* Arg ID */ 1, /*LB*/ 0, /*UB*/ 1);
+    if (res.hasValue()) {
+      isOff = (bool)res.getValue();
+    }
+    else {
+      isOff = false;
+    }
+  }
 
   return ::new (S.Context)
-      XlxArrayStencilAttr(A.getRange(), S.Context, var_ref, isEnabled,
+      XlxArrayStencilAttr(A.getRange(), S.Context, var_ref, isOff,
                       A.getAttributeSpellingListIndex());
 }
 
@@ -1855,16 +1882,12 @@ Attr *handleAXIStreamInterface( Sema&S, Stmt* stm, const AttributeList &A, Sourc
 {
   Expr *port = A.getArgAsExpr(0);
 
-  bool isRegister = false;
-  if (A.getArg(1)) { 
-    isRegister = true;
-  }
+  int isRegister = ExtractInteger(S, A, 1, /*LB*/ -1, /*UB*/ 1).getValue();
 
   StringRef register_mode = "both";
   if (A.getArg(2)) { 
     register_mode = A.getArgAsIdent(2)->Ident->getName();
   }
-
 
   Expr *depth = nullptr;
   if (A.getArg(3) ){ 
@@ -1897,10 +1920,7 @@ Attr *handleAPFifoInterface( Sema &S, Stmt *stmt, const AttributeList &A, Source
 {
   Expr *port = A.getArgAsExpr(0);
 
-  bool isRegister = false;
-  if (A.getArg(1)){ 
-    isRegister = true;
-  }
+  int isRegister = ExtractInteger(S, A, 1, /*LB*/ -1, /*UB*/ 1).getValue();
 
   Expr *depth = nullptr;
   if (A.getArg(2)) { 
@@ -1924,16 +1944,24 @@ Attr *handleAPFifoInterface( Sema &S, Stmt *stmt, const AttributeList &A, Source
       A.getAttributeSpellingListIndex());
 }
 
+static void checkPortWithDirectIO(Sema &S, Expr *port)
+{
+  DeclRefExpr *base = cast<DeclRefExpr>(leftmost(port));
+  QualType Ty {base->getDecl()->getType().getCanonicalType()};
+  if (!Ty->isPointerType() && !Ty->isReferenceType()) {
+    S.Diag(port->getExprLoc(), diag::err_invalid_option_unless)
+        << "direct_io"
+        << "'port' value is passed by pointer or by reference";
+  }
+}
+
 Attr *handleAPScalarInterface( Sema &S, Stmt *stmt, const AttributeList &A, SourceRange range) 
 {
   Expr *port = A.getArgAsExpr(0);
 
   StringRef mode = A.getArgAsIdent(1)->Ident->getName();
 
-  bool isRegister = false;
-  if (A.getArg(2)) { 
-    isRegister = true;
-  }
+  int isRegister = ExtractInteger(S, A, 2, /*LB*/ -1, /*UB*/ 1).getValue();
 
   StringRef signal_name= "";
   if (A.getArg(3)) { 
@@ -1948,13 +1976,7 @@ Attr *handleAPScalarInterface( Sema &S, Stmt *stmt, const AttributeList &A, Sour
       directIO = (bool)res.getValue();
     }
     if (directIO == true) {
-      ParmVarDecl *param {cast<ParmVarDecl>(cast<DeclRefExpr>(port)->getDecl())};
-      QualType Ty {param->getOriginalType().getCanonicalType()};
-      if (!Ty->isPointerType() && !Ty->isReferenceType()) {
-        S.Diag(A.getLoc(), diag::err_invalid_option_unless)
-            << "direct_io"
-            << "'port' is pointer or reference type";
-      }
+      checkPortWithDirectIO(S, port);
     }
   }
 
@@ -1970,10 +1992,7 @@ Attr *handleAPScalarInterruptInterface( Sema &S, Stmt *stmt, const AttributeList
 
   StringRef mode = A.getArgAsIdent(1)->Ident->getName();
 
-  bool isRegister = false;
-  if (A.getArg(2)) { 
-    isRegister = true;
-  }
+  int isRegister = ExtractInteger(S, A, 2, /*LB*/ -1, /*UB*/ 1).getValue();
 
   StringRef signal_name= "";
   if (A.getArg(3)) { 
@@ -1996,13 +2015,7 @@ Attr *handleAPScalarInterruptInterface( Sema &S, Stmt *stmt, const AttributeList
       directIO = (bool)res.getValue();
     }
     if (directIO == true) {
-      ParmVarDecl *param {cast<ParmVarDecl>(cast<DeclRefExpr>(port)->getDecl())};
-      QualType Ty {param->getOriginalType().getCanonicalType()};
-      if (!Ty->isPointerType() && !Ty->isReferenceType()) {
-        S.Diag(A.getLoc(), diag::err_invalid_option_unless)
-            << "direct_io"
-            << "'port' is pointer or reference type";
-      }
+      checkPortWithDirectIO(S, port);
     }
   }
 
@@ -2017,7 +2030,6 @@ Attr *handleSAXILITEOffsetInterfaceAttr(Sema &S, Stmt *stmt, const AttributeList
   Expr* port = A.getArgAsExpr(0);
   StringRef  bundleName = ""; 
   Expr* offset_expr = nullptr; 
-  bool IsRegister = false;
   StringRef signal_name = "";
   StringRef clock_name = "";
   StringRef impl_name = "";
@@ -2037,12 +2049,7 @@ Attr *handleSAXILITEOffsetInterfaceAttr(Sema &S, Stmt *stmt, const AttributeList
     offset_expr = createIntegerLiteral(-1, S, SourceLocation());
   }
 
-  if (A.getArg(3)) {
-    IsRegister = true;
-  }
-  else { 
-    IsRegister = false;
-  }
+  int IsRegister = ExtractInteger(S, A, 3, /*LB*/ -1, /*UB*/ 1).getValue();
 
   if (A.getArg(4)) { 
     signal_name = A.getArgAsIdent(4)->Ident->getName();
@@ -2096,11 +2103,32 @@ Attr* handleMemoryInterface(Sema &S, Stmt* stmt, const AttributeList &A, SourceR
     depth = createIntegerLiteral(-1, S, SourceLocation());
   }
 
+  StringRef address_mode = (mode == "bram") ? "byte" : "word";
+  if (A.getArg(6)) {
+    address_mode = A.getArgAsIdent(6)->Ident->getName();
+  }
+  MemoryInterfaceAttr::AddressModeEnum address_mode_enum;
+  MemoryInterfaceAttr::ConvertStrToAddressModeEnum(address_mode, address_mode_enum);
+
+  bool directIO = false;
+  if (A.getArg(7)) {
+    Expr *expr = A.getArgAsExpr(7);
+    auto res = EvaluateInteger(S, expr, 7, "DirectIO", A.getLoc(), 0, 1);
+    if (res.hasValue()) {
+      directIO = (bool)res.getValue();
+    }
+    if (directIO == true) {
+      checkPortWithDirectIO(S, port);
+    }
+  }
+
   S.CheckBRAMAdaptorExprs(latency, 
                           A.getLoc(),
                           "latency");
 
-  return new (S.Context) MemoryInterfaceAttr(A.getRange(), S.Context, port, mode, storage_type, latency, signal_name, depth, A.getAttributeSpellingListIndex());
+  return new (S.Context) MemoryInterfaceAttr(
+    A.getRange(), S.Context, port, mode, storage_type, latency, signal_name,
+    depth, address_mode_enum, directIO, A.getAttributeSpellingListIndex());
 }
 
 
@@ -2151,7 +2179,7 @@ Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange ran
     users = createIntegerLiteral(1, S, SourceLocation());
   }
 
-  XlxCacheAttr::BurstMode burst;
+  XlxCacheAttr::BurstMode burst = XlxCacheAttr::On;
   if (A.getArg(5)) {
     auto id = A.getArgAsIdent(5);
     if (!XlxCacheAttr::ConvertStrToBurstMode(id->Ident->getName(), burst)) {
@@ -2165,7 +2193,7 @@ Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange ran
     XlxCacheAttr::ConvertStrToBurstMode("on", burst);
   }
 
-  XlxCacheAttr::WriteMode write;
+  XlxCacheAttr::WriteMode write = XlxCacheAttr::Write_back;
   if (A.getArg(6)) {
     auto id = A.getArgAsIdent(6);
     if (!XlxCacheAttr::ConvertStrToWriteMode(id->Ident->getName(), write)) {
@@ -3434,7 +3462,7 @@ public:
 
 //========================== finish dataflow lawyer checker
 //========================//
-void GenerateDataFlowProc(CompoundStmt *dataflow_region, ASTContext &Context) {
+void GenerateDataFlowProc(CompoundStmt *dataflow_region, Expr* hlsIfCond, ASTContext &Context) {
   // SLX begin: Avoid crash in outlining,
   // see libraries/llvm-project/clang/test/CodeGenHLS/directives_scope_goto.c
   if (FindGoto(dataflow_region).Found)
@@ -3462,6 +3490,7 @@ void GenerateDataFlowProc(CompoundStmt *dataflow_region, ASTContext &Context) {
 
     auto *outline =
         XCLOutlineAttr::CreateImplicit(Context, Name, iter->getSourceRange());
+    outline->setHLSIfCond(hlsIfCond); 
     SmallVector<Attr *, 4> attrs;
     attrs.push_back(outline);
     if (isa<AttributedStmt>(iter)) {
@@ -4252,7 +4281,7 @@ static Stmt *hoistXlxAttrs(
             CheckDataflowRegion(S, new_attrs[i]->getLocation(), dyn_cast<CompoundStmt>(for_stmt->getBody()),
                                 local_decls);
           }
-          GenerateDataFlowProc(dyn_cast<CompoundStmt>(for_stmt->getBody()),
+          GenerateDataFlowProc(dyn_cast<CompoundStmt>(for_stmt->getBody()), new_attrs[i]->getHLSIfCond(), 
                                context);
         }
       }
@@ -4467,6 +4496,7 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
     SmallVector<const Attr *, 4> &func_body_attrs = hoistedAttrs[nullptr];
     // some stupid test case add two dataflow in body, check it
 
+#if 0
     bool find_dataflow = false;
     bool find_pipeline = false;
     bool find_inline = false;
@@ -4556,6 +4586,63 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
       }
       funcDecl->addAttr(const_cast<Attr *>(func_body_attrs[i]));
     }
+#else 
+    bool dataflow_processed = false; 
+    for(const Attr* attr : func_body_attrs) { 
+      if(isa<XlxInlineAttr>(attr)) { 
+        XlxInlineAttr *xlxInline = const_cast<XlxInlineAttr*>(cast<XlxInlineAttr>(attr)); 
+        if (xlxInline->getOn()) { 
+          AlwaysInlineAttr* alwaysInlineAttr =  ::new (S.Context)
+                AlwaysInlineAttr(xlxInline->getRange(), S.Context, xlxInline->getSpellingListIndex());
+          alwaysInlineAttr->setPragmaContext(xlxInline->getPragmaContext()); 
+          alwaysInlineAttr->setHLSIfCond(xlxInline->getHLSIfCond()); 
+          attr = alwaysInlineAttr; 
+        }
+        else { 
+          NoInlineAttr* noInlineAttr =  ::new (S.Context)
+                NoInlineAttr(xlxInline->getRange(), S.Context, xlxInline->getSpellingListIndex());
+          noInlineAttr->setPragmaContext(xlxInline->getPragmaContext()); 
+          noInlineAttr->setHLSIfCond(xlxInline->getHLSIfCond()); 
+          attr = noInlineAttr; 
+        }
+      }
+      else if (isa<XCLDataFlowAttr>(attr)) { 
+        if (!dataflow_processed) { 
+          if (context.getLangOpts().StrictDataflow) {
+            ArrayRef<ParmVarDecl *> parameters = funcDecl->parameters();
+            SmallVector<VarDecl *, 4> local_decls(parameters.begin(),
+                                                  parameters.end());
+            if (CheckDataflowRegion(S, attr->getLocation(), 
+                                    dyn_cast<CompoundStmt>(funcDecl->getBody()),
+                                    local_decls)) {
+              GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()), attr->getHLSIfCond(), 
+                                   context);
+            } else {
+              // Dataflow strict check failed, skip XCLDataflow 
+              continue;
+            }
+          } else {
+            GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()), attr->getHLSIfCond(), 
+                                 context);
+          }
+        }
+        dataflow_processed = true; 
+      }
+      else if (isa<XlxPerformanceAttr>(attr)) { 
+        Stmt *FuncBody = funcDecl->getBody();
+        CompoundStmt *Body = dyn_cast<CompoundStmt>(FuncBody);
+        AttributedStmt *AtStmt = AttributedStmt::Create(
+            context, attr->getLocation(), attr, FuncBody);
+        Stmt *NewBody = CompoundStmt::Create(
+            context, AtStmt, Body->getLBracLoc(), Body->getRBracLoc());
+        funcDecl->setBody(NewBody);
+        //for performance pragma applying on top function, only generate 
+        //directive.scope/hint in llvm ir 
+        continue; 
+      }
+      funcDecl->addAttr(const_cast<Attr*>(attr)); 
+    }
+#endif 
   }
 
   /* do Type Check for Top Argument */

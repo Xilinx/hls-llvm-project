@@ -407,6 +407,9 @@ static bool unswitchTrivialBranch(Loop &L, BranchInst &BI, DominatorTree &DT,
   OldPH->getInstList().splice(std::prev(OldPH->end()),
                               BI.getParent()->getInstList(), BI);
   OldPH->getTerminator()->eraseFromParent();
+  SmallVector<DominatorTree::UpdateType, 4> Updates;
+  Updates.push_back({DominatorTree::Insert, ParentBB, UnswitchedBB});
+  Updates.push_back({DominatorTree::Insert, ParentBB, NewPH});
   BI.setSuccessor(LoopExitSuccIdx, UnswitchedBB);
   BI.setSuccessor(1 - LoopExitSuccIdx, NewPH);
 
@@ -497,16 +500,30 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
 
   SmallVector<std::pair<ConstantInt *, BasicBlock *>, 4> ExitCases;
   ExitCases.reserve(ExitCaseIndices.size());
+  SmallVector<DominatorTree::UpdateType, 4> Updates;
   // We walk the case indices backwards so that we remove the last case first
   // and don't disrupt the earlier indices.
+  auto ParentB = SI.getParent();
+  SmallPtrSet<BasicBlock*, 4> OrigRemoveSuccs;
   for (unsigned Index : reverse(ExitCaseIndices)) {
     auto CaseI = SI.case_begin() + Index;
     // Save the value of this case.
     ExitCases.push_back({CaseI->getCaseValue(), CaseI->getCaseSuccessor()});
+    OrigRemoveSuccs.insert(CaseI->getCaseSuccessor());
     // Delete the unswitched cases.
     SI.removeCase(CaseI);
   }
-
+  SmallPtrSet<BasicBlock*, 4> RemainSuccs;
+  for (auto Case : SI.cases()) {
+    RemainSuccs.insert(Case.getCaseSuccessor());
+  }
+  RemainSuccs.insert(SI.getDefaultDest());
+  for (auto Succ : OrigRemoveSuccs) {
+    if (RemainSuccs.count(Succ))
+      continue;
+    Updates.push_back({DominatorTree::Delete, ParentB, Succ});
+  }
+  DT.applyUpdates(Updates);
   // Check if after this all of the remaining cases point at the same
   // successor.
   BasicBlock *CommonSuccBB = nullptr;
@@ -522,6 +539,7 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
     // We can't remove the default edge so replace it with an edge to either
     // the single common remaining successor (if we have one) or an unreachable
     // block.
+    auto OrigDefaultDest = SI.getDefaultDest();
     if (CommonSuccBB) {
       SI.setDefaultDest(CommonSuccBB);
     } else {
@@ -533,6 +551,10 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
       SI.setDefaultDest(UnreachableBB);
       DT.addNewBlock(UnreachableBB, ParentBB);
     }
+    if (RemainSuccs.count(OrigDefaultDest) <= 0 && OrigDefaultDest != CommonSuccBB) {
+      DT.applyUpdates({{DominatorTree::Delete, ParentB, OrigDefaultDest}});
+    }
+
   } else {
     // If we're not unswitching the default, we need it to match any cases to
     // have a common successor or if we have no cases it is the common
@@ -612,6 +634,7 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
     BasicBlock *UnswitchedBB = CasePair.second;
 
     NewSI->addCase(CaseVal, UnswitchedBB);
+    DT.applyUpdates({{DominatorTree::Insert, OldPH, UnswitchedBB}});
     updateDTAfterUnswitch(UnswitchedBB, OldPH, DT);
   }
 
@@ -619,6 +642,7 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
   // entering the loop.
   if (DefaultExitBB) {
     NewSI->setDefaultDest(DefaultExitBB);
+    DT.applyUpdates({{DominatorTree::Insert, OldPH, DefaultExitBB}});
     updateDTAfterUnswitch(DefaultExitBB, OldPH, DT);
 
     // We removed all the exit cases, so we just copy the cases to the
