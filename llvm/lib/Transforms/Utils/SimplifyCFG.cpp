@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1029,6 +1029,17 @@ bool SimplifyCFGOpt::FoldValueComparisonIntoPredecessors(TerminatorInst *TI,
     Value *PCV = isValueEqualityComparison(PTI); // PredCondVal
 
     if (PCV == CV && TI != PTI) {
+
+      if (HLS) {
+        /// Here simplifycfg may convert the loop exiting condition into
+        /// SwitchInst, why make later passes unhappy, so here we will disable
+        /// such transformation if the Pred is the loop header and branch on the
+        /// induction variable
+        if (LoopHeaders && LoopHeaders->count(Pred) && isa<BranchInst>(PTI) &&
+            isa<PHINode>(PCV) && cast<PHINode>(CV)->getParent() == Pred)
+          return false;
+      }
+
       SmallSetVector<BasicBlock*, 4> FailBlocks;
       if (!SafeToMergeTerminators(TI, PTI, &FailBlocks)) {
         for (auto *Succ : FailBlocks) {

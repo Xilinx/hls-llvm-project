@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -126,6 +126,8 @@ private:
   /// These are constants we have checked and know to be simple enough to live
   /// in a static initializer of a global.
   SmallPtrSet<Constant*, 8> SimpleConstants;
+
+  SmallPtrSet<GlobalVariable*, 8> WrittenGV;
 
   const DataLayout &DL;
   const TargetLibraryInfo *TLI;

@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -52,6 +52,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
@@ -178,7 +179,16 @@ ModRefInfo AAResults::getModRefInfo(Instruction *I, ImmutableCallSite Call) {
 ModRefInfo AAResults::getModRefInfo(ImmutableCallSite CS,
                                     const MemoryLocation &Loc) {
   ModRefInfo Result = ModRefInfo::ModRef;
-
+  if (const SeqAccessInst *SeqAccess = 
+          dyn_cast<SeqAccessInst>(CS.getInstruction())) {
+    if (const SeqBeginInst *SeqBegin = SeqAccess->getPointerOperand())
+      return getModRefInfo(SeqBegin, Loc);
+  } else if (const SeqEndInst *SeqEnd = 
+                 dyn_cast<SeqEndInst>(CS.getInstruction())) {
+    if (const SeqBeginInst *SeqBegin = SeqEnd->getPointerOperand())
+      return getModRefInfo(SeqBegin, Loc);
+  }
+  
   for (const auto &AA : AAs) {
     Result = intersectModRef(Result, AA->getModRefInfo(CS, Loc));
 

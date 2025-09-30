@@ -1,5 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -27,7 +27,6 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/Basic/SourceManager.h"
-#include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/Parse/ParseDiagnostic.h"
 #include "clang/Sema/DelayedDiagnostic.h"
 #include "clang/Sema/LoopHint.h"
@@ -1187,16 +1186,20 @@ static Attr *handleXlxStableContent(Sema &S, Stmt *St, const AttributeList &A,
 
 static Attr *handleXlxStable(Sema &S, Stmt *St, const AttributeList &A,
                              SourceRange Range) {
-  if (A.getNumArgs() != 1) {
+  if (A.getNumArgs() != 2) {
     S.Diag(A.getLoc(), diag::err_attribute_wrong_number_arguments)
-        << A.getName() << 1;
+        << A.getName() << 2;
   }
 
   Expr *variable = nullptr;
+  IdentifierLoc * off_ident = nullptr; 
   if (A.isArgExpr(0) && A.getArg(0)) {
     variable = A.getArgAsExpr(0);
   }
-  return ::new (S.Context) XlxStableAttr(A.getRange(), S.Context, variable,
+  if (A.getArg(1)){ 
+    off_ident = A.getArgAsIdent(1);
+  }
+  return ::new (S.Context) XlxStableAttr(A.getRange(), S.Context, variable, off_ident ? true : false,
                                          A.getAttributeSpellingListIndex());
 }
 
@@ -1775,7 +1778,7 @@ Attr *handleMAXIInterface(Sema &S, Stmt*stm, const AttributeList &A, SourceRange
   if (A.getArg(2)) { 
     depth = A.getArgAsExpr(2);
   }
-  else { 
+  else {
     depth = createIntegerLiteral(-1, S, SourceLocation());
   }
 
@@ -1890,10 +1893,10 @@ Attr *handleAXIStreamInterface( Sema&S, Stmt* stm, const AttributeList &A, Sourc
   }
 
   Expr *depth = nullptr;
-  if (A.getArg(3) ){ 
+  if (A.getArg(3)) {
     depth = A.getArgAsExpr(3);
   }
-  else { 
+  else {
     depth = createIntegerLiteral(-1, S, SourceLocation());
   }
 
@@ -1926,7 +1929,7 @@ Attr *handleAPFifoInterface( Sema &S, Stmt *stmt, const AttributeList &A, Source
   if (A.getArg(2)) { 
     depth = A.getArgAsExpr(2);
   }
-  else { 
+  else {
     depth = createIntegerLiteral(-1, S, SourceLocation());
   }
 
@@ -2163,20 +2166,21 @@ Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange ran
     isDefaultDepth = true; 
   }
 
-  Expr *ways = nullptr;
+  Expr *ports = nullptr;
   if (A.getArg(3)) {
-    ways = A.getArgAsExpr(3);
+    ports = A.getArgAsExpr(3);
   }
   else {
-    ways = createIntegerLiteral(1, S, SourceLocation());
+    ports = createIntegerLiteral(1, S, SourceLocation());
   }
 
-  Expr *users = nullptr;
+
+  Expr *l2lines = nullptr;
   if (A.getArg(4)) {
-    users = A.getArgAsExpr(4);
+    l2lines = A.getArgAsExpr(4);
   }
   else {
-    users = createIntegerLiteral(1, S, SourceLocation());
+    l2lines = createIntegerLiteral(0, S, SourceLocation());
   }
 
   XlxCacheAttr::BurstMode burst = XlxCacheAttr::On;
@@ -2204,7 +2208,7 @@ Attr *handleXlxCache(Sema &S, Stmt* stm, const AttributeList &A, SourceRange ran
   }
 
   return new (S.Context)XlxCacheAttr(A.getRange(), S.Context, 
-    port, lines, depth, isDefaultDepth, ways, users, burst, write,
+    port, lines, depth, isDefaultDepth, ports, l2lines, burst, write,
     A.getAttributeSpellingListIndex());
 }
 
@@ -2370,6 +2374,9 @@ static void handleHLSPreserve(Sema &S, Decl *D, const AttributeList &Attr) {
   D->addAttr(::new(S.Context) HLSPreserveAttr(Attr.getRange(), S.Context, Attr.getAttributeSpellingListIndex()));
 }
 
+static void handleHLSTopTask(Sema &S, Decl *D, const AttributeList &Attr) {
+  D->addAttr(::new(S.Context) HLSTopTaskAttr(Attr.getRange(), S.Context, Attr.getAttributeSpellingListIndex()));
+}
 
 bool Sema::ProcessXlxDeclAttributes(Scope *scope, Decl *D,
                                     const AttributeList &Attr) {
@@ -2405,6 +2412,9 @@ bool Sema::ProcessXlxDeclAttributes(Scope *scope, Decl *D,
     return true;
   case AttributeList::AT_HLSPreserve: 
     handleHLSPreserve(*this, D, Attr);
+    return true;
+  case AttributeList::AT_HLSTopTask:
+    handleHLSTopTask(*this, D, Attr);
     return true;
   };
 
@@ -2653,10 +2663,12 @@ bool Sema::CheckFPGADataFootPrintHintExprs(Expr *Depth, SourceLocation Loc,
   if (Depth->isValueDependent())
     return false;
 
-  auto DepthInt = EvaluateInteger(*this, Depth, /*Idx*/ 0, AttrName, Loc,
-                                  /*LB*/ -1, /*UB*/ INT32_MAX);
-  if (!DepthInt.hasValue())
-    return true;
+  if (isa<IntegerLiteral>(Depth)) {
+    auto DepthInt = EvaluateInteger(*this, Depth, /*Idx*/ 0, AttrName, Loc,
+                                    /*LB*/ -1, /*UB*/ INT32_MAX);
+    if (!DepthInt.hasValue())
+      return true;
+  }
 
   return false;
 }
@@ -3001,45 +3013,6 @@ ExprResult Sema::CheckOrBuildPartialConstExpr(Expr *E) {
   return PCE.TransformExpr(E);
 }
 
-/*
- * some clarify for HoistXlxScope:
- *
- * 1. ASConsumer:
- *  HandleTopLevelDecl is called after parser generate one Decl
- *  take notation that Class/Function instantiate  in
- * SemaTemplateInstantiate.cpp file  will generate new TopLevelDecl , and call
- * ASTConsumer::HandleTopLevelDecl
- *
- * 2. can we use a standalone FrontendAction to handle HoistXlxScope ?
- *    No,  ParseAST is drived by FrontendAction, CodeGenAction is subclass of
- *    FrontendAction, we can not add a standalone Action which call Parse source
- * code and generate AST in memory, and feed the memory AST to CodgenAction,
- *    Clang 's action mechanism doesn't support it
- *
- * 3. When HoistXlxScope is called ?
- * ParseAST call HandleTopLevelDecl for Sema's ASTConsumer , then
- * ASTConsumer::HandleTopLevelDecl is called, and do Xlx Scope Hoist
- *
- */
-
-class XlxAttrHoistConsumer : public SemaConsumer {
-  Sema *sema_ptr;
-
-public:
-  virtual bool HandleTopLevelDecl(DeclGroupRef D);
-  virtual void InitializeSema(Sema &sema);
-  void HoistXlxScope(Decl *decl);
-};
-
-void XlxAttrHoistConsumer::InitializeSema(Sema &sema) { sema_ptr = &sema; }
-
-bool XlxAttrHoistConsumer::HandleTopLevelDecl(DeclGroupRef D) {
-  for (DeclGroupRef::iterator I = D.begin(), E = D.end(); I != E; I++) {
-    HoistXlxScope(*I);
-  }
-  return true;
-}
-
 /*======================================= following is for Dataflow-Lawyer
  * checker ==================*/
 // If Statement is an incemement or decrement, return true and sets the
@@ -3068,10 +3041,9 @@ static bool ProcessIterationStmt(Sema &S,
       break;
     }
     DRE = dyn_cast<DeclRefExpr>(UO->getSubExpr()->IgnoreImpCasts());
-    return DRE;
+    return true;
   }
-
-  if (CXXOperatorCallExpr *Call = dyn_cast<CXXOperatorCallExpr>(Statement)) {
+  else if (CXXOperatorCallExpr *Call = dyn_cast<CXXOperatorCallExpr>(Statement)) {
     FunctionDecl *FD = Call->getDirectCallee();
     if (FD && FD->isOverloadedOperator()) {
       switch (FD->getOverloadedOperator()) {
@@ -3085,7 +3057,63 @@ static bool ProcessIterationStmt(Sema &S,
         break;
       }
       DRE = dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreImpCasts());
-      return DRE;
+      return true;
+    }
+  }
+  else if (BinaryOperator * BO = dyn_cast<BinaryOperator>(Statement)){ 
+    Expr * lhs = BO->getLHS();  
+    if (!isa<DeclRefExpr>(lhs)) { 
+      return false; 
+    }
+    DRE = cast<DeclRefExpr>(lhs); 
+
+    Expr * rhs = BO->getRHS(); 
+    if(BO->getOpcode() == clang::BO_Assign){ 
+      //check i = i +  const_val, i = const_val + i
+      //or , i = i - const_val
+      if (BinaryOperator *subBO = dyn_cast<BinaryOperator>(rhs)) { 
+        if (subBO->getOpcode() == clang::BO_Add){ 
+          // i = i + const_val or i = const_val + i
+          if (subBO->getRHS() == lhs) { 
+            llvm::APSInt initVal(32);
+            auto ICE = S.HLSVerifyIntegerConstantExpression(subBO->getLHS(), &initVal);
+            if (!ICE.isInvalid()){ 
+              return true; 
+            }
+          }
+          else if (subBO->getLHS() == lhs){ 
+            llvm::APSInt initVal(32);
+            auto ICE = S.HLSVerifyIntegerConstantExpression(subBO->getRHS(), &initVal);
+            if (!ICE.isInvalid()) { 
+              return true; 
+            }
+          }
+        }
+        else if (subBO->getOpcode() == clang::BO_Sub){ 
+          //check pattern:  i = i - const_val
+          llvm::APSInt initVal(32);
+          auto ICE = S.HLSVerifyIntegerConstantExpression(subBO->getRHS(), &initVal);
+          if (!ICE.isInvalid()) { 
+            return true; 
+          }
+        }
+      }
+    }
+    else if (BO->getOpcode() == clang::BO_AddAssign){ 
+      //check i += const_val 
+      llvm::APSInt initVal(32);
+      auto ICE = S.HLSVerifyIntegerConstantExpression(BO->getRHS(), &initVal);
+      if (!ICE.isInvalid()) { 
+        return true; 
+      }
+    }
+    else if (BO->getOpcode() == clang::BO_SubAssign){ 
+      //check i -= const_val
+      llvm::APSInt initVal(32);
+      auto ICE = S.HLSVerifyIntegerConstantExpression(BO->getRHS(), &initVal);
+      if (!ICE.isInvalid()) { 
+        return true; 
+      }
     }
   }
   Diags.Report(Statement->getLocStart(),
@@ -3103,17 +3131,19 @@ static bool CheckLoopIterationVariable(Sema &S,
     if (Istmt->isSingleDecl()) {
       auto *DIVar = Istmt->getSingleDecl();
       if (DIVar == CondVar && DIVar == IncVar)
-        assert( isa<VarDecl>(DIVar) && "unexpected, Semantic Check should have assumed it is varDecl");
-        if (Expr *initExpr = cast<VarDecl>(DIVar)->getInit())  { 
-          llvm::APSInt initVal(32);
-          auto ICE = S.HLSVerifyIntegerConstantExpression(initExpr, &initVal);
-          if (ICE.isInvalid() || initVal.getSExtValue() != 0 ) {
-            Diags.Report(InitStmt->getLocStart(),
-               diag::warn_ignore_xcl_dataflow_on_invalid_loop_initial_stmt);
-            return false;
-          }
-          return true;
+        assert(isa<VarDecl>(DIVar) && 
+            "unexpected, Semantic Check should have assumed it is varDecl");
+      if (Expr *initExpr = cast<VarDecl>(DIVar)->getInit())  { 
+        llvm::APSInt initVal(32);
+        auto ICE = S.HLSVerifyIntegerConstantExpression(initExpr, &initVal);
+        if (ICE.isInvalid()) { 
+          // HLS support loop index start is not zero from 25.1 | initVal.getSExtValue() != 0 )
+          Diags.Report(InitStmt->getLocStart(),
+             diag::warn_ignore_xcl_dataflow_on_invalid_loop_initial_stmt);
+          return false;
         }
+        return true;
+      }
       else {
         Diags.Report(
             InitStmt->getLocStart(),
@@ -3460,55 +3490,6 @@ public:
 
 
 
-//========================== finish dataflow lawyer checker
-//========================//
-void GenerateDataFlowProc(CompoundStmt *dataflow_region, Expr* hlsIfCond, ASTContext &Context) {
-  // SLX begin: Avoid crash in outlining,
-  // see libraries/llvm-project/clang/test/CodeGenHLS/directives_scope_goto.c
-  if (FindGoto(dataflow_region).Found)
-    return;
-  // SLX end
-
-
-  for (auto &iter : dataflow_region->body()) {
-    if (isa<ReturnStmt>(iter))
-      continue;
-
-    if (isa<NullStmt>(iter)) {
-      continue;
-    }
-    // is HLS stmt
-    if (isa<AttributedStmt>(iter)) {
-      auto sub_stmt = dyn_cast<AttributedStmt>(iter)->getSubStmt();
-      if (isa<NullStmt>(sub_stmt))
-        continue;
-    }
-
-    StringRef Name = "proc";
-    if (auto *LS = dyn_cast<LabelStmt>(iter))
-      Name = LS->getName();
-
-    auto *outline =
-        XCLOutlineAttr::CreateImplicit(Context, Name, iter->getSourceRange());
-    outline->setHLSIfCond(hlsIfCond); 
-    SmallVector<Attr *, 4> attrs;
-    attrs.push_back(outline);
-    if (isa<AttributedStmt>(iter)) {
-      AttributedStmt *attrStmt = dyn_cast<AttributedStmt>(iter);
-      ArrayRef<const Attr *> old_attrs = attrStmt->getAttrs();
-      llvm::SmallVector<const Attr *, 4> new_attrs;
-      new_attrs.push_back(outline);
-      new_attrs.append(old_attrs.begin(), old_attrs.end());
-
-      iter = AttributedStmt::Create(Context, attrs[0]->getLocation(), new_attrs,
-                                    attrStmt->getSubStmt());
-    } else {
-      iter =
-          AttributedStmt::Create(Context, attrs[0]->getLocation(), attrs, iter);
-    }
-  }
-}
-
 static const Type *getOriginalType(Expr *expr) {
   const Type *type = expr->getType().getTypePtr();
   if (isa<DeclRefExpr>(expr)) {
@@ -3519,6 +3500,7 @@ static const Type *getOriginalType(Expr *expr) {
   }
   return type;
 }
+
 
 //get the loop statement 'for/while/do-while' , if there is no such loop statement return nullptr; 
 //becaues , hls support 'if-conditional pragma' , so if the pragma is in the if statment , return nullptr; 
@@ -3536,9 +3518,16 @@ static Stmt * getParentLoopStmt(SmallVectorImpl<Stmt*> &parents)
   int parent_index = parents.size() - 2; 
 
   //skip LabelStmt
-  while (isa<LabelStmt>(parents[parent_index])){ 
+  while (isa<LabelStmt>(parents[parent_index]) && parent_index > 0 ){ 
     parent_index --; 
   }
+  //for following situation, we should return nullptr
+  /* Lable: 
+  *  #pragma HLS  ... 
+  */ 
+  if (parent_index == 0) 
+    return nullptr; 
+
   Stmt *parentStmt = parents[parent_index - 1] ; 
 
   if(isa<ForStmt>(parentStmt) || isa<WhileStmt>(parentStmt) ||
@@ -3568,6 +3557,7 @@ static bool isInFunctionBodyStmt(SmallVectorImpl<Stmt*> &parents)
     return false; 
 }
 
+static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S); 
 static Stmt *hoistXlxAttrs(
     SmallVector<Stmt *, 8> &parents,
     llvm::DenseMap<Stmt *, SmallVector<const Attr *, 4>> &hoistedAttrs,
@@ -3669,7 +3659,6 @@ static Stmt *hoistXlxAttrs(
           // during emit stmt,  stmt's XlxPiepline would be ignored
         }
       } else if (isa<XCLDataFlowAttr>(attr)) {
-        Stmt *parent_1 = parents[parent_size - 1];
         // XCLDataflow apply in fuction body, if loop_stmt is nullptr
         Stmt *loop_stmt = getParentLoopStmt(parents); 
         bool isInFunctionBody = false; 
@@ -3817,7 +3806,6 @@ static Stmt *hoistXlxAttrs(
           left.push_back(attr);
         }
       } else if (isa<XlxFunctionAllocationAttr>(attr)) {
-        Stmt *parent_1 = parents[parent_size - 1];
         // XCLDataflow apply in fuction body, if parent_2 is nullptr
         Stmt *parent_2 = nullptr;
         if (parent_size >= 2) {
@@ -3945,16 +3933,16 @@ static Stmt *hoistXlxAttrs(
       }
       else if(auto interface = dyn_cast<MAXIInterfaceAttr>(attr)) {
       
-        llvm::APSInt Int(32);
-        auto ICE = S.HLSVerifyIntegerConstantExpression(
-              interface->getDepth(), &Int);
-        if (ICE.isInvalid()) {
-            Diags.Report(interface->getDepth()->getLocStart(),
-                         diag::warn_xlx_attribute_ignore_because_invalid_option)
-                << "MAXI Interface"
-                << "'depth' is not const integer" << interface->getDepth()->getSourceRange();
-            continue;
-        }
+//      llvm::APSInt Int(32);
+//      auto ICE = S.HLSVerifyIntegerConstantExpression(
+//            interface->getDepth(), &Int);
+//      if (ICE.isInvalid()) {
+//          Diags.Report(interface->getDepth()->getLocStart(),
+//                       diag::warn_xlx_attribute_ignore_because_invalid_option)
+//              << "MAXI Interface"
+//              << "'depth' is not const integer" << interface->getDepth()->getSourceRange();
+//          continue;
+//      }
 
         left.push_back(attr);
       }  
@@ -4032,35 +4020,21 @@ static Stmt *hoistXlxAttrs(
           continue;
         }
 
-        bool ReqLoopRegion = Performance->getPerformanceScope() == XlxPerformanceAttr::Loop;
         
         unsigned Offset = 1;
         for(; Offset < parent_size; ++Offset) {
           Stmt *Parent = parents[parent_size - Offset];
-          if (ReqLoopRegion &&
-              (isa<ForStmt>(Parent) || isa<WhileStmt>(Parent) ||
-               isa<DoStmt>(Parent))) {
+          if (isa<ForStmt>(Parent) || isa<WhileStmt>(Parent) ||
+               isa<DoStmt>(Parent)) {
             break;
-          } else if(!ReqLoopRegion && isa<CompoundStmt>(Parent)) {
-            break;
-          }
-        }
-
-        /// check loop pragma related to a loop 
-        if(ReqLoopRegion && Offset == parent_size) {
-          Diags.Report(attr->getLocation(),
-                       diag::warn_xlx_attribute_ignore_because_invalid_option)
-              << "performance"
-              << "it is not in a loop"
-              << Performance->getRange();
-          continue;
+          } 
         }
 
         if (Offset == parent_size) {
           // it is function performance
           hoistedAttrs[nullptr].push_back(attr);
         } else {
-          // it is performance on loop or region
+          // it is performance on loop 
           hoistedAttrs[parents[parent_size - Offset]].push_back(attr);
         }
       }
@@ -4083,14 +4057,6 @@ static Stmt *hoistXlxAttrs(
     }
     break;
   }
-  case Stmt::NullStmtClass: {
-    break;
-  }
-#define STMT(Type, Base)
-#define ABSTRACT_STMT(Op)
-#define EXPR(Type, Base) case Stmt::Type##Class:
-#include "clang/AST/StmtNodes.inc"
-    { break; }
   case Stmt::CompoundStmtClass: {
     auto *compound = dyn_cast<CompoundStmt>(stmt);
     for (auto &iter : compound->body()) {
@@ -4201,6 +4167,29 @@ static Stmt *hoistXlxAttrs(
     parents.pop_back();
     break;
   }
+  /*
+  `-CompoundStmt 0xb4b2a00 <col:34, line:9:5>
+  `-CXXOperatorCallExpr 0xb4b2980 <line:5:7, line:8:9> 'void':'void'
+    |-ImplicitCastExpr 0xb4b2968 <col:8, col:9> 'void (*)() const' <FunctionToPointerDecay>
+    | `-DeclRefExpr 0xb4b28e0 <col:8, col:9> 'void () const' lvalue CXXMethod 0xb4b2140 'operator()' 'void () const'
+    `-ImplicitCastExpr 0xb4b29e8 <line:5:7, line:8:7> 'const (lambda at x.cpp:5:7)' <NoOp>
+      `-LambdaExpr 0xb4b26f8 <line:5:7, line:8:7> '(lambda at x.cpp:5:7)'
+        |-CXXRecordDecl 0xb4b2000 <line:5:7> col:7 implicit class definition
+        | |-DefinitionData lambda pass_in_registers trivially_copyable can_const_default_init
+  */
+  case Stmt::CXXOperatorCallExprClass: { 
+    //llvm::dbgs() << "get CXXOperatorCallExpr\n"; 
+    auto cxxOperatorCall = dyn_cast<CXXOperatorCallExpr>(stmt);
+    Decl *callee = cxxOperatorCall->getCalleeDecl(); 
+    //llvm::dbgs() << "the callee for the CXXOperatorCallExpr is: \n"; 
+    //callee->dump(); 
+    if (isa<CXXMethodDecl>(callee) && cast<CXXMethodDecl>(callee)->getParent()->isLambda()){ 
+      //llvm::dbgs() << " geth callee expr is lambda expression: "; 
+      //llvm::dbgs() << "get lambda expression, get function object"; 
+      doHoistXlxScope(cast<CXXMethodDecl>(callee), S);
+    }
+    break; 
+  }
   default:
     break;
   }
@@ -4281,8 +4270,6 @@ static Stmt *hoistXlxAttrs(
             CheckDataflowRegion(S, new_attrs[i]->getLocation(), dyn_cast<CompoundStmt>(for_stmt->getBody()),
                                 local_decls);
           }
-          GenerateDataFlowProc(dyn_cast<CompoundStmt>(for_stmt->getBody()), new_attrs[i]->getHLSIfCond(), 
-                               context);
         }
       }
 
@@ -4481,9 +4468,11 @@ static bool IsArrayOfStreamWithStruct(const ParmVarDecl *Param) {
 static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
   DiagnosticsEngine &Diags = S.getDiagnostics();
   ASTContext &context = S.getASTContext();
-  // llvm::dbgs() << " ============================= do Hoist on Function
-  // ==============\n"; funcDecl->dump(); llvm::dbgs() <<
-  // "\n===============================================================\n";
+  /*
+   llvm::dbgs() << " ============================= do Hoist on Function ==============\n" ;
+   funcDecl->dump(); 
+   llvm::dbgs() << "\n===============================================================\n";
+  */
   // HoistedAttrs is used to record target stmt where that the attribute should
   // be attached hoistedAttrs[ target_stmt] = attr; hoistedAttrs[nullptr] meanse
   // , the attribute will be hoisted out ,and be attached to function decl
@@ -4496,97 +4485,6 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
     SmallVector<const Attr *, 4> &func_body_attrs = hoistedAttrs[nullptr];
     // some stupid test case add two dataflow in body, check it
 
-#if 0
-    bool find_dataflow = false;
-    bool find_pipeline = false;
-    bool find_inline = false;
-    bool find_performance = false;
-    Attr const *PerAttr = nullptr;
-    for (auto s = func_body_attrs.begin(); func_body_attrs.end() != s;) {
-      if (isa<XCLDataFlowAttr>(*s)) {
-        if (!find_dataflow) {
-          find_dataflow = true;
-          s++;
-        } else {
-          s = func_body_attrs.erase(s);
-        }
-      } else if (isa<XlxPipelineAttr>(*s)) {
-        if (!find_pipeline) {
-          find_pipeline = true;
-          s++;
-        } else {
-          s = func_body_attrs.erase(s);
-        }
-      } else if (isa<XlxInlineAttr>(*s)) {
-        if (!find_inline) {
-          find_inline = true;
-          s++;
-        } else {
-          s = func_body_attrs.erase(s);
-        }
-      } else if(isa<XlxPerformanceAttr>(*s)) {
-        if (!find_performance) {
-          PerAttr = *s;
-          find_performance = true;
-        }
-        s = func_body_attrs.erase(s);
-      } else {
-        s++;
-      }
-    }
-
-    Stmt *FuncBody = funcDecl->getBody();
-    if (PerAttr && FuncBody) {
-      CompoundStmt *Body = dyn_cast<CompoundStmt>(FuncBody);
-      if (Body) {
-        AttributedStmt *AtStmt = AttributedStmt::Create(
-            context, PerAttr->getLocation(), PerAttr, FuncBody);
-        Stmt *NewBody = CompoundStmt::Create(
-            context, AtStmt, Body->getLBracLoc(), Body->getRBracLoc());
-        funcDecl->setBody(NewBody);
-      }
-    }
-
-    for (unsigned long i = 0; i < func_body_attrs.size(); i++) {
-      if (isa<XCLDataFlowAttr>(func_body_attrs[i])) {
-        if (context.getLangOpts().StrictDataflow) {
-          ArrayRef<ParmVarDecl *> parameters = funcDecl->parameters();
-          SmallVector<VarDecl *, 4> local_decls(parameters.begin(),
-                                                parameters.end());
-          if (CheckDataflowRegion(S, func_body_attrs[i]->getLocation(), 
-                                  dyn_cast<CompoundStmt>(funcDecl->getBody()),
-                                  local_decls)) {
-            GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()),
-                                 context);
-          } else {
-            // Dataflow strict check failed, skip XCLDataflow 
-            continue;
-          }
-        } else {
-          GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()),
-                               context);
-        }
-      }
-      else if(isa<XlxInlineAttr>(func_body_attrs[i])) { 
-        XlxInlineAttr *xlxInline = const_cast<XlxInlineAttr*>(cast<XlxInlineAttr>(func_body_attrs[i])); 
-        if (xlxInline->getOn()) { 
-          AlwaysInlineAttr* alwaysInlineAttr =  ::new (S.Context)
-                AlwaysInlineAttr(xlxInline->getRange(), S.Context, xlxInline->getSpellingListIndex());
-          alwaysInlineAttr->setPragmaContext(xlxInline->getPragmaContext()); 
-          alwaysInlineAttr->setHLSIfCond(xlxInline->getHLSIfCond()); 
-          func_body_attrs[i] = alwaysInlineAttr; 
-        }
-        else { 
-          NoInlineAttr* noInlineAttr =  ::new (S.Context)
-                NoInlineAttr(xlxInline->getRange(), S.Context, xlxInline->getSpellingListIndex());
-          noInlineAttr->setPragmaContext(xlxInline->getPragmaContext()); 
-          noInlineAttr->setHLSIfCond(xlxInline->getHLSIfCond()); 
-          func_body_attrs[i] = noInlineAttr; 
-        }
-      }
-      funcDecl->addAttr(const_cast<Attr *>(func_body_attrs[i]));
-    }
-#else 
     bool dataflow_processed = false; 
     for(const Attr* attr : func_body_attrs) { 
       if(isa<XlxInlineAttr>(attr)) { 
@@ -4612,37 +4510,17 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
             ArrayRef<ParmVarDecl *> parameters = funcDecl->parameters();
             SmallVector<VarDecl *, 4> local_decls(parameters.begin(),
                                                   parameters.end());
-            if (CheckDataflowRegion(S, attr->getLocation(), 
+            if (!CheckDataflowRegion(S, attr->getLocation(), 
                                     dyn_cast<CompoundStmt>(funcDecl->getBody()),
                                     local_decls)) {
-              GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()), attr->getHLSIfCond(), 
-                                   context);
-            } else {
-              // Dataflow strict check failed, skip XCLDataflow 
               continue;
             }
-          } else {
-            GenerateDataFlowProc(dyn_cast<CompoundStmt>(funcDecl->getBody()), attr->getHLSIfCond(), 
-                                 context);
-          }
+          } 
         }
         dataflow_processed = true; 
       }
-      else if (isa<XlxPerformanceAttr>(attr)) { 
-        Stmt *FuncBody = funcDecl->getBody();
-        CompoundStmt *Body = dyn_cast<CompoundStmt>(FuncBody);
-        AttributedStmt *AtStmt = AttributedStmt::Create(
-            context, attr->getLocation(), attr, FuncBody);
-        Stmt *NewBody = CompoundStmt::Create(
-            context, AtStmt, Body->getLBracLoc(), Body->getRBracLoc());
-        funcDecl->setBody(NewBody);
-        //for performance pragma applying on top function, only generate 
-        //directive.scope/hint in llvm ir 
-        continue; 
-      }
       funcDecl->addAttr(const_cast<Attr*>(attr)); 
     }
-#endif 
   }
 
   /* do Type Check for Top Argument */
@@ -4677,9 +4555,7 @@ static void doHoistXlxScope(FunctionDecl *funcDecl, Sema &S) {
   }
 }
 
-class XlxAttrHoistConsumer;
-
-void XlxAttrHoistConsumer::HoistXlxScope(Decl *D) {
+void Sema::HoistXlxScope(Decl *D) {
 
   // Ignore dependent declarations.
   if (D->getDeclContext() && D->getDeclContext()->isDependentContext())
@@ -4705,7 +4581,7 @@ void XlxAttrHoistConsumer::HoistXlxScope(Decl *D) {
 
     FunctionDecl *funcDecl = cast<FunctionDecl>(D);
     if (funcDecl->hasBody()) {
-      doHoistXlxScope(funcDecl, *sema_ptr);
+      doHoistXlxScope(funcDecl, *this);
     }
     break;
   }
@@ -4741,16 +4617,3 @@ void XlxAttrHoistConsumer::HoistXlxScope(Decl *D) {
   }
 }
 
-ASTConsumer *Sema::BuildXlxHoistConsumer(ASTConsumer &Consumer) {
-  if (getLangOpts().HLSExt) {
-    // llvm::dbgs() << "================ build Sema Consumer ==============\n";
-    // build MultiplexConsumer , do XlxAttribute Hoist immediatly after Parser
-    // produce AST
-    std::vector<std::unique_ptr<ASTConsumer>> Consumers;
-    Consumers.push_back(std::move(llvm::make_unique<XlxAttrHoistConsumer>()));
-    Consumers.push_back(std::move(std::unique_ptr<ASTConsumer>(&Consumer)));
-
-    return new MultiplexConsumer(std::move(Consumers));
-  } else
-    return &Consumer;
-}

@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -72,6 +72,9 @@ InterfaceInfo getInterfaceInfoFromIntrinsic(Use &U, IntrinsicInst *II) {
   } else if (isa<FPGAFIFOInst>(II)) {
     if (cast<FPGAFIFOInst>(II)->getFIFOOperand() == U.get())
       return InterfaceInfo(InterfaceMode::Fifo, ImplementType::HLSStream);
+  } else if (isa<SPIRPIPEInst>(II)) {
+    if (cast<SPIRPIPEInst>(II)->getPIPEOperand() == U.get())
+      return InterfaceInfo(InterfaceMode::Fifo, ImplementType::Array);
   } else if (isa<AXISIntrinsicInst>(II)) {
     if (U.getOperandNo() < AXISIntrinsicInst::NumChannels)
       return InterfaceInfo(InterfaceMode::AXIS,

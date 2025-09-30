@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===//
 //
@@ -6655,76 +6655,420 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
   case attr::X:                                                                \
     return getDerived().Transform##X##Attr(cast<X##Attr>(R));
 
-#define XLX_PRAGMA_SPELLING_ATTR(X)                                            \
-  case attr::X:                                                                \
-    return getDerived().Transform##X##Attr(cast<X##Attr>(R));
 #include "clang/Basic/AttrList.inc"
- /* currently, there are still following OpenCL attribute from 
-  * XLXLab, they are partly obsoleted, TODO, clean them 
-  attr::OpenCLUnrollHint:
-  attr::MAXIAdaptor:
-  attr::BRAMAdaptor:
-  attr::FPGADataFootPrintHint:
-  attr::FPGAMaxiMaxWidenBitwidth:
-  attr::FPGAMaxiLatency:
-  attr::FPGAMaxiNumRdOutstand:
-  attr::FPGAMaxiNumWtOutstand:
-  attr::FPGAMaxiRdBurstLength:
-  attr::FPGAMaxiWtBurstLength:
-  */
 
-  case attr::XlxOccurrence:
-  {
-    Sema &S = getSema();
-    const Attr *attr = getDerived().instantiateTemplateAttr(R);
-    const XlxOccurrenceAttr* A = cast<XlxOccurrenceAttr>(attr); 
-    Expr* Cycle = A->getCycle(); 
-    if (Cycle != cast<XlxOccurrenceAttr>(R)->getCycle()) { 
-      S.CheckXlxOccurrenceExprs(Cycle, A->getLocation(), A->getSpelling()); 
+  case attr::MAXIAdaptor: {
+    const auto *A = cast<MAXIAdaptorAttr>(R);
+    Expr * tempInstNumReadOutstanding;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getNumReadOutstanding()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstNumReadOutstanding = Result.get();
     }
-  
-    return attr; 
+    Expr * tempInstNumWriteOutstanding;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getNumWriteOutstanding()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstNumWriteOutstanding = Result.get();
+    }
+    Expr * tempInstMaxReadBurstLength;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getMaxReadBurstLength()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMaxReadBurstLength = Result.get();
+    }
+    Expr * tempInstMaxWriteBurstLength;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getMaxWriteBurstLength()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMaxWriteBurstLength = Result.get();
+    }
+    Expr * tempInstLatency;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getLatency()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLatency = Result.get();
+    }
+    return new (SemaRef.Context) MAXIAdaptorAttr(R->getRange(), SemaRef.Context, A->getName(), tempInstNumReadOutstanding, tempInstNumWriteOutstanding, tempInstMaxReadBurstLength, tempInstMaxWriteBurstLength, tempInstLatency, A->getSpellingListIndex());
   }
 
-  case attr::FPGAResourceHint:
-  case attr::XCLLatency:
-  case attr::XlxPipeline:
-  case attr::XlxInline:
-  case attr::XCLInline:
-  case attr::XCLDataFlow:
-  case attr::XlxLoopTripCount:
-  case attr::XlxArrayView:
-  case attr::XlxResetIntrinsic:
-  case attr::XlxArrayGeometry:
-  case attr::XlxAggregate:
-  case attr::XlxStable:
-  case attr::XlxStableContent:
-  case attr::XlxDataPack:
-  case attr::XlxUnrollHint:
-  case attr::XlxCrossDependence:
-  case attr::FPGAResourceLimitHint:
-  case attr::XlxMAXIAlias:
-  case attr::XlxPerformance:
-  case attr::XlxFuncInstantiate:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    return attr;
+
+
+  case attr::BRAMAdaptor: {
+    const auto *A = cast<BRAMAdaptorAttr>(R);
+    Expr * tempInstRAMType;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getRAMType()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstRAMType = Result.get();
+    }
+    Expr * tempInstRAMImpl;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getRAMImpl()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstRAMImpl = Result.get();
+    }
+    Expr * tempInstLatency;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getLatency()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLatency = Result.get();
+    }
+    return new (SemaRef.Context) BRAMAdaptorAttr(A->getRange(), SemaRef.Context, A->getName(), A->getMode(), tempInstRAMType, tempInstRAMImpl, tempInstLatency, A->getSpellingListIndex() );
   }
-  case attr::XlxFunctionAllocation:
-  {
+
+  case attr::SAXIAdaptor: {
+    const auto *A = cast<SAXIAdaptorAttr>(R);
+    return new (SemaRef.Context) SAXIAdaptorAttr(A->getRange(), SemaRef.Context, A->getClock(), A->getSpellingListIndex());
+  }
+
+  case attr::FPGAAddressInterface: {
+    const auto *A = cast<FPGAAddressInterfaceAttr>(R);
+    return new (SemaRef.Context)
+        FPGAAddressInterfaceAttr(A->getRange(), SemaRef.Context, A->getMode(),
+                                 A->getAdaptor(), A->getOffsetMode(), A->getSpellingListIndex());
+  }
+  case attr::FPGADataFootPrintHint: {
+    const auto *A = cast<FPGADataFootPrintHintAttr>(R);
+    Expr *tempInstDepth;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDepth());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDepth = Result.get();
+    }
+    return new (SemaRef.Context)
+        FPGADataFootPrintHintAttr(A->getRange(), SemaRef.Context, tempInstDepth, A->getSpellingListIndex());
+  }
+  case attr::FPGAFunctionCtrlInterface: {
+    const auto *A = cast<FPGAFunctionCtrlInterfaceAttr>(R);
+    return new (SemaRef.Context) FPGAFunctionCtrlInterfaceAttr(A->getRange(), 
+        SemaRef.Context, A->getMode(), A->getName(), A->getSpellingListIndex());
+
+  }
+  case attr::MAXIInterface: {
+    const auto *A = cast<MAXIInterfaceAttr>(R);
+    Expr * tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+    Expr* Depth = getDerived().TransformExpr(A->getDepth()).get();
+    if (!Depth)
+      return nullptr;
+    Expr *NumReadOutstanding =
+        getDerived().TransformExpr(A->getNumReadOutstanding()).get();
+    if (!NumReadOutstanding)
+      return nullptr;
+    Expr *NumWriteOutstanding =
+        getDerived().TransformExpr(A->getNumWriteOutstanding()).get();
+    if (!NumWriteOutstanding)
+      return nullptr;
+    Expr *MaxReadBurstLength =
+        getDerived().TransformExpr(A->getMaxReadBurstLength()).get();
+    if (!MaxReadBurstLength)
+      return nullptr;
+    Expr *MaxWriteBurstLength =
+        getDerived().TransformExpr(A->getMaxWriteBurstLength()).get();
+    if (!MaxWriteBurstLength)
+      return nullptr;
+    Expr *Latency = getDerived().TransformExpr(A->getLatency()).get();
+    if (!Latency)
+      return nullptr;
+    Expr *MaxWidenBitWidth =
+        getDerived().TransformExpr(A->getMaxWidenBitWidth()).get();
+    if (!MaxWidenBitWidth)
+      return nullptr;
+    Expr *Channel = getDerived().TransformExpr(A->getChannel()).get();
+    if (!Channel)
+      return nullptr;
+    return new (SemaRef.Context) MAXIInterfaceAttr(A->getRange(), 
+        SemaRef.Context, tempInstPort, A->getBundleName(),
+        Depth, A->getOffsetMode(), A->getSignalName(), NumReadOutstanding,
+        NumWriteOutstanding, MaxReadBurstLength, MaxWriteBurstLength,
+        Latency, MaxWidenBitWidth, Channel, A->getSpellingListIndex());
+  }
+  case attr::SAXILITEOffsetInterface: {
+    const auto *A = cast<SAXILITEOffsetInterfaceAttr>(R);
+    Expr * tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort()).get(); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+    Expr *Offset = getDerived().TransformExpr(A->getOffset()).get();
+    if (!Offset)
+      return nullptr;
+    return new (SemaRef.Context) SAXILITEOffsetInterfaceAttr(A->getRange(), 
+        SemaRef.Context, tempInstPort, A->getBundleName(),
+        Offset, A->getIsRegister(), A->getSignalName(), A->getClockName(),
+        A->getImplName(), A->getSpellingListIndex());
+  }
+  case attr::AXIStreamInterface: {
+    const auto *A = cast<AXIStreamInterfaceAttr>(R);
+    Expr * tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+    Expr *Depth = getDerived().TransformExpr(A->getDepth()).get();
+    if (!Depth)
+      return nullptr;
+    return new (SemaRef.Context) AXIStreamInterfaceAttr(A->getRange(), 
+        SemaRef.Context, tempInstPort, A->getIsRegister(),
+        A->getRegisterMode(), Depth, A->getSignalName(), A->getBundleName(), A->getSpellingListIndex());
+  }
+  case attr::MemoryInterface: {
+    const auto *A = cast<MemoryInterfaceAttr>(R);
+
+    Expr * tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+
+    Expr *Latency = getDerived().TransformExpr(A->getLatency()).get();
+    if (!Latency)
+      return nullptr;
+    Expr *Depth = getDerived().TransformExpr(A->getDepth()).get();
+    if (!Depth)
+      return nullptr;
+    return new (SemaRef.Context) MemoryInterfaceAttr(A->getRange(), 
+        SemaRef.Context, tempInstPort, A->getMode(),
+        A->getStorageType(), Latency, A->getSignalName(), Depth,
+        A->getAddressMode(), A->getDirectIO(), A->getSpellingListIndex());
+  }
+  case attr::APFifoInterface: {
+    const auto *A = cast<APFifoInterfaceAttr>(R);
+    Expr * tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+
+    Expr *Depth = getDerived().TransformExpr(A->getDepth()).get();
+    if (!Depth)
+      return nullptr;
+    return new (SemaRef.Context) APFifoInterfaceAttr(A->getRange(), 
+        SemaRef.Context, tempInstPort, A->getIsRegister(), Depth,
+        A->getSignalName(), A->getSpellingListIndex());
+  }
+  case attr::APScalarInterface: {
+    const auto *A = cast<APScalarInterfaceAttr>(R);
+    Expr * tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+    return new (SemaRef.Context) APScalarInterfaceAttr(A->getRange(),
+        SemaRef.Context, tempInstPort, A->getMode(),
+        A->getIsRegister(), A->getSignalName(), A->getDirectIO(), A->getSpellingListIndex());
+  }
+  case attr::APScalarInterruptInterface: {
+    const auto *A = cast<APScalarInterruptInterfaceAttr>(R);
+
+    Expr * tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort()); 
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+
+    return new (SemaRef.Context) APScalarInterruptInterfaceAttr(A->getRange(), 
+        SemaRef.Context, tempInstPort, A->getMode(),
+        A->getIsRegister(), A->getSignalName(), A->getInterrupt(),
+        A->getDirectIO(), A->getSpellingListIndex());
+  }
+  case attr::FPGAMaxiLatency: {
+    const auto *A = cast<FPGAMaxiLatencyAttr>(R);
+    Expr *tempInstLatency;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getLatency());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLatency = Result.get();
+    }
+    return new (SemaRef.Context)
+        FPGAMaxiLatencyAttr(A->getRange(), SemaRef.Context, tempInstLatency, A->getSpellingListIndex());
+  }
+  case attr::FPGAMaxiMaxWidenBitwidth: {
+    const auto *A = cast<FPGAMaxiMaxWidenBitwidthAttr>(R);
+    Expr *tempInstMaxWidenBitwidth;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getMaxWidenBitwidth());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMaxWidenBitwidth = Result.get();
+    }
+    return new (SemaRef.Context) FPGAMaxiMaxWidenBitwidthAttr(A->getRange(), 
+        SemaRef.Context, tempInstMaxWidenBitwidth, A->getSpellingListIndex());
+  }
+  case attr::FPGAMaxiNumRdOutstand: {
+    const auto *A = cast<FPGAMaxiNumRdOutstandAttr>(R);
+    Expr *tempInstNumRdOutstand;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getNumRdOutstand());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstNumRdOutstand = Result.get();
+    }
+    return new (SemaRef.Context) FPGAMaxiNumRdOutstandAttr(A->getRange(), 
+        SemaRef.Context, tempInstNumRdOutstand, A->getSpellingListIndex());
+  }
+  case attr::FPGAMaxiNumWtOutstand: {
+    const auto *A = cast<FPGAMaxiNumWtOutstandAttr>(R);
+    Expr *tempInstNumWtOutstand;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getNumWtOutstand());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstNumWtOutstand = Result.get();
+    }
+    return new (SemaRef.Context) FPGAMaxiNumWtOutstandAttr(A->getRange(), 
+        SemaRef.Context, tempInstNumWtOutstand, A->getSpellingListIndex());
+  }
+  case attr::FPGAMaxiRdBurstLen: {
+    const auto *A = cast<FPGAMaxiRdBurstLenAttr>(R);
+    Expr *tempInstRdBurstLen;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getRdBurstLen());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstRdBurstLen = Result.get();
+    }
+    return new (SemaRef.Context) FPGAMaxiRdBurstLenAttr(A->getRange(), 
+        SemaRef.Context, tempInstRdBurstLen, A->getSpellingListIndex());
+  }
+  case attr::FPGAMaxiWtBurstLen: {
+    const auto *A = cast<FPGAMaxiWtBurstLenAttr>(R);
+    Expr *tempInstWtBurstLen;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getWtBurstLen());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstWtBurstLen = Result.get();
+    }
+    return new (SemaRef.Context) FPGAMaxiWtBurstLenAttr(A->getRange(), 
+        SemaRef.Context, tempInstWtBurstLen, A->getSpellingListIndex());
+  }
+  case attr::FPGARegister: {
+    const auto *A = cast<FPGARegisterAttr>(R);
+    return A->clone(SemaRef.Context);
+  }
+  case attr::FPGAResourceHint: {
+    const auto *A = cast<FPGAResourceHintAttr>(R);
+    Expr *tempInstLatency = nullptr;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getLatency());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLatency = Result.get();
+    }
+    return new (SemaRef.Context)
+        FPGAResourceHintAttr(A->getRange(), SemaRef.Context,  A->getCore(),
+                             A->getMetadata(), tempInstLatency, A->getSpellingListIndex());
+  }
+  case attr::FPGAResourceLimitHint: {
+    const auto *A = cast<FPGAResourceLimitHintAttr>(R);
+    Expr *tempInstLimit;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getLimit());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLimit = Result.get();
+    }
+    return new (SemaRef.Context) FPGAResourceLimitHintAttr(A->getRange(), 
+        SemaRef.Context, A->getInstanceType(),
+        A->getInstanceName(), tempInstLimit, A->getSpellingListIndex());
+  }
+  case attr::FPGAScalarInterface: {
+    const auto *A = cast<FPGAScalarInterfaceAttr>(R);
+    return new (SemaRef.Context) FPGAScalarInterfaceAttr(A->getRange(), 
+        SemaRef.Context, A->getMode(), A->getAdaptor(), A->getSpellingListIndex());
+  }
+  case attr::FPGAScalarInterfaceWrapper: {
+    const auto *A = cast<FPGAScalarInterfaceWrapperAttr>(R);
+    Expr *tempInstOffset;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getOffset());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstOffset = Result.get();
+    }
+    return new (SemaRef.Context) FPGAScalarInterfaceWrapperAttr(A->getRange(), 
+        SemaRef.Context, A->getMode(), A->getAdaptor(),
+        tempInstOffset, A->getSpellingListIndex());
+  }
+  case attr::FPGASignalName: {
+    const auto *A = cast<FPGASignalNameAttr>(R);
+    return A->clone(SemaRef.Context);
+  }
+#if 0
+  case attr::XlxFunctionAllocation: {
+    const auto *A = cast<XlxFunctionAllocationAttr>(R);
+    Expr * tempInstFunction;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getFunction());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstFunction = Result.get();
+    }
+    Expr * tempInstLimit;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getLimit());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLimit = Result.get();
+    }
+    return new (SemaRef.Context) XlxFunctionAllocationAttr(A->getRange(), SemaRef.Context, *A, tempInstFunction, tempInstLimit);
+  }
+#endif
+
+  case attr::XlxFunctionAllocation: {
 #if 0
     llvm::dbgs() << "FunctionAllocationAttr: \n";
     dyn_cast<XlxFunctionAllocationAttr>(R)->getFunction()->dump();
 #endif
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    const XlxFunctionAllocationAttr* function_alloc = dyn_cast<XlxFunctionAllocationAttr>(attr);
-    Expr * tempInstFunction;
+    const Attr *attr = getDerived().instantiateTemplateAttr(R);
+    const XlxFunctionAllocationAttr *function_alloc =
+        dyn_cast<XlxFunctionAllocationAttr>(attr);
+    Expr *tempInstFunction;
     {
       tempInstFunction = function_alloc->getFunction();
-      if (!tempInstFunction){ 
-        auto func_pointer = dyn_cast<XlxFunctionAllocationAttr>(R)->getFunction();
-        getSema().Diag(func_pointer->getLocStart(),
-               diag::warn_xlx_attribute_ignore_because_invalid_option)
+      if (!tempInstFunction) {
+        auto func_pointer =
+            dyn_cast<XlxFunctionAllocationAttr>(R)->getFunction();
+        SemaRef.Diag(func_pointer->getExprLoc(),
+                       diag::warn_xlx_attribute_ignore_because_invalid_option)
             << "ALLOCATION"
             << "Instances value is not valid function pointer expression";
 
@@ -6737,40 +7081,44 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
 #endif
       if (isa<UnaryOperator>(tempInstFunction)) {
         if (cast<UnaryOperator>(tempInstFunction)->getOpcode() == UO_AddrOf) {
-          tempInstFunction = cast<UnaryOperator>(tempInstFunction)->getSubExpr();
-        }
-        else {
-          getSema().Diag(tempInstFunction->getLocStart(),
-                 diag::warn_xlx_attribute_ignore_because_invalid_option)
+          tempInstFunction =
+              cast<UnaryOperator>(tempInstFunction)->getSubExpr();
+        } else {
+          SemaRef.Diag(tempInstFunction->getExprLoc(),
+                         diag::warn_xlx_attribute_ignore_because_invalid_option)
               << "ALLOCATION"
               << "Instances value is not valid function pointer expression";
           return nullptr;
         }
       }
-  
-      if (isa<UnresolvedLookupExpr>(tempInstFunction) || isa<UnresolvedMemberExpr>(tempInstFunction)) { 
-        OverloadExpr * ovl_expr = dyn_cast<OverloadExpr>(tempInstFunction);
-        FunctionDecl *decl = SemaRef.ResolveSingleFunctionTemplateSpecialization(ovl_expr);
-        if (!decl) { 
-          getSema().Diag(tempInstFunction->getLocStart(),
-               diag::warn_xlx_attribute_ignore_because_invalid_option)
-            << "ALLOCATION"
-            << "Instances value is not valid function pointer expression";
-          //can not return  nullptr,  later, codegen will ignore the invalid Attribute 
-        }
-        else { 
-          ExprResult ret = getSema().BuildDeclRefExpr(decl, decl->getType(), VK_LValue, tempInstFunction->getLocStart());
+
+      if (isa<UnresolvedLookupExpr>(tempInstFunction) ||
+          isa<UnresolvedMemberExpr>(tempInstFunction)) {
+        OverloadExpr *ovl_expr = dyn_cast<OverloadExpr>(tempInstFunction);
+        FunctionDecl *decl =
+            SemaRef.ResolveSingleFunctionTemplateSpecialization(ovl_expr);
+        if (!decl) {
+          SemaRef.Diag(tempInstFunction->getExprLoc(),
+                         diag::warn_xlx_attribute_ignore_because_invalid_option)
+              << "ALLOCATION"
+              << "Instances value is not valid function pointer expression";
+          // can not return  nullptr,  later, codegen will ignore the invalid
+          // Attribute
+        } else {
+          ExprResult ret = SemaRef.BuildDeclRefExpr(
+              decl, decl->getType(), VK_LValue, tempInstFunction->getExprLoc());
           tempInstFunction = ret.get();
         }
       }
-#if   0
+#if 0
       tempInstFunction->dump();
-#endif 
+#endif
     }
-    return new (SemaRef.getASTContext()) XlxFunctionAllocationAttr(function_alloc->getLocation(), SemaRef.getASTContext(), tempInstFunction, function_alloc->getLimit(), function_alloc->getSpellingListIndex());
+    return new (SemaRef.Context)
+        XlxFunctionAllocationAttr(R->getRange(), SemaRef.Context, 
+                                  tempInstFunction, function_alloc->getLimit(), function_alloc->getSpellingListIndex());
 
-
-#if  0
+#if 0
     Expr* func_ref = dyn_cast<XlxFunctionAllocationAttr>(attr)->getFunction();
     MarkDeclIsUsed marker(SemaRef);
     marker.Visit(func_ref);
@@ -6780,151 +7128,821 @@ const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
     SemaRef.MarkDeclarationsReferencedInExpr(limit);
 #endif
   }
-  case attr::XlxDependence:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxDependenceAttr>(attr)->getVariable();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XCLArrayGeometry: {
+    const auto *A = cast<XCLArrayGeometryAttr>(R);
+    auto *tempInstDims =
+        new (SemaRef.Context, 16) Expr *[A->dims_size()];
+    {
+
+      Expr **TI = tempInstDims;
+      Expr **I = A->dims_begin();
+      Expr **E = A->dims_end();
+      for (; I != E; ++I, ++TI) {
+        ExprResult Result = getDerived().TransformExpr(*I);
+        if (Result.isInvalid())
+          return nullptr;
+        *TI = Result.get();
+      }
+    }
+    return new (SemaRef.Context) XCLArrayGeometryAttr(A->getRange(), 
+        SemaRef.Context, tempInstDims, A->dims_size(), A->getSpellingListIndex());
   }
-  case attr::XlxBindStorage:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxBindStorageAttr>(attr)->getVariable();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XCLArrayView: {
+    const auto *A = cast<XCLArrayViewAttr>(R);
+    Expr *tempInstArray;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getArray());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstArray = Result.get();
+    }
+    auto *tempInstShape =
+        new (SemaRef.Context, 16) Expr *[A->shape_size()];
+    {
+
+      Expr **TI = tempInstShape;
+      Expr **I = A->shape_begin();
+      Expr **E = A->shape_end();
+      for (; I != E; ++I, ++TI) {
+        ExprResult Result = getDerived().TransformExpr(*I);
+        if (Result.isInvalid())
+          return nullptr;
+        *TI = Result.get();
+      }
+    }
+    return new (SemaRef.Context)
+        XCLArrayViewAttr(A->getRange(), SemaRef.Context, A->getAccessMode(),
+                         tempInstArray, tempInstShape, A->shape_size(), A->getSpellingListIndex());
   }
-//  case attr::XlxArrayXForm:
-//  {
-//    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-//    Expr* var = dyn_cast<XlxArrayXFormAttr>(attr)->getVariable();
-//    MarkDeclIsUsed  marker(SemaRef);
-//    marker.Visit(var);
-//    return attr;
-//  }
-  case attr::XlxArrayPartitionXForm:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    auto * PartitionAttr = dyn_cast<XlxArrayPartitionXFormAttr>(attr); 
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(PartitionAttr->getVariable());
-    marker.Visit(PartitionAttr->getFactor()); 
-    return attr;
+  case attr::XCLArrayXForm: {
+    const auto *A = cast<XCLArrayXFormAttr>(R);
+    Expr *tempInstFactor;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getFactor());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstFactor = Result.get();
+    }
+    Expr *tempInstDim;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getDim());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDim = Result.get();
+    }
+    return new (SemaRef.Context)
+        XCLArrayXFormAttr(A->getRange(), SemaRef.Context,  A->getType(),
+                          tempInstFactor, tempInstDim, A->getSpellingListIndex());
   }
-  case attr::XlxArrayReshapeXForm:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    auto* ReshapeAttr = dyn_cast<XlxArrayReshapeXFormAttr>(attr); 
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(ReshapeAttr->getVariable());
-    marker.Visit(ReshapeAttr->getFactor()); 
-    return attr;
+  case attr::XCLDataFlow: {
+    const auto *A = cast<XCLDataFlowAttr>(R);
+    return new (SemaRef.Context)
+        XCLDataFlowAttr(A->getRange(), SemaRef.Context, A->getPropagation(), A->getSpellingListIndex());
   }
-  case attr::XlxDisaggr: 
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxDisaggrAttr>(attr)->getVariable();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XCLDependence: {
+    const auto *A = cast<XCLDependenceAttr>(R);
+    Expr *tempInstVariable;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstDistance;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getDistance());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDistance = Result.get();
+    }
+    return new (SemaRef.Context) XCLDependenceAttr(A->getRange(), 
+        SemaRef.Context, tempInstVariable, A->getXClass(),
+        A->getType(), A->getDirection(), tempInstDistance, A->getCompel(), A->getSpellingListIndex());
   }
-  case attr::XlxArrayStencil:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxArrayStencilAttr>(attr)->getVariable();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XCLFlattenLoop: {
+    const auto *A = cast<XCLFlattenLoopAttr>(R);
+    return new (SemaRef.Context)
+        XCLFlattenLoopAttr(A->getRange(), SemaRef.Context, A->getEnable(), A->getSpellingListIndex());
   }
-  case attr::XlxBindOp:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxBindOpAttr>(attr)->getVariable();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XCLInline: {
+    const auto *A = cast<XCLInlineAttr>(R);
+    return new (SemaRef.Context)
+        XCLInlineAttr(A->getRange(), SemaRef.Context, A->getRecursive(), A->getSpellingListIndex());
   }
-  case attr::XlxReqdPipeDepth:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxReqdPipeDepthAttr>(attr)->getVariable();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XCLLatency: {
+    const auto *A = cast<XCLLatencyAttr>(R);
+    Expr *tempInstMin;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getMin());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMin = Result.get();
+    }
+    Expr *tempInstMax;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getMax());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMax = Result.get();
+    }
+    return new (SemaRef.Context)
+        XCLLatencyAttr(A->getRange(), SemaRef.Context, tempInstMin, tempInstMax, A->getSpellingListIndex());
+  }
+  case attr::XCLLoopTripCount: {
+    const auto *A = cast<XCLLoopTripCountAttr>(R);
+    Expr *tempInstMin;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getMin());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMin = Result.get();
+    }
+    Expr *tempInstMax;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getMax());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMax = Result.get();
+    }
+    Expr *tempInstAvg;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getAvg());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstAvg = Result.get();
+    }
+    return new (SemaRef.Context) XCLLoopTripCountAttr(A->getRange(), 
+        SemaRef.Context, tempInstMin, tempInstMax, tempInstAvg, A->getSpellingListIndex());
+  }
+  case attr::XCLPipelineLoop: {
+    const auto *A = cast<XCLPipelineLoopAttr>(R);
+    Expr *tempInstII;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getII());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstII = Result.get();
+    }
+    return new (SemaRef.Context)
+        XCLPipelineLoopAttr(A->getRange(), SemaRef.Context, tempInstII, A->getSpellingListIndex());
+  }
+  case attr::XCLPipelineWorkitems: {
+    const auto *A = cast<XCLPipelineWorkitemsAttr>(R);
+    Expr *tempInstII;
+    {
+
+      ExprResult Result = getDerived().TransformExpr(A->getII());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstII = Result.get();
+    }
+    return new (SemaRef.Context)
+        XCLPipelineWorkitemsAttr(A->getRange(), SemaRef.Context, tempInstII, A->getSpellingListIndex());
+  }
+  case attr::XCLReqdPipeDepth: {
+    const auto *A = cast<XCLReqdPipeDepthAttr>(R);
+    Expr *tempInstDepth;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDepth());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDepth = Result.get();
+    }
+    return new (SemaRef.Context) XCLReqdPipeDepthAttr(A->getRange(), 
+        SemaRef.Context, tempInstDepth, A->getType(), A->getSpellingListIndex());
   }
 
-  case attr::MAXIInterface: 
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<MAXIInterfaceAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XlxAggregate: {
+    const auto *A = cast<XlxAggregateAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context) XlxAggregateAttr(A->getRange(), 
+        SemaRef.Context, tempInstVariable, A->getCompact(), A->getSpellingListIndex());
   }
-  case attr::SAXILITEOffsetInterface: 
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<SAXILITEOffsetInterfaceAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XlxArrayPartitionXForm: {
+
+    const auto *A = cast<XlxArrayPartitionXFormAttr>(R);
+    Expr *tempInstVariable = nullptr;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstFactor = nullptr;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getFactor());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstFactor = Result.get();
+    }
+    Expr *tempInstDim = nullptr;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDim());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDim = Result.get();
+    }
+    return new (SemaRef.Context) XlxArrayPartitionXFormAttr(A->getRange(), 
+        SemaRef.Context, tempInstVariable, A->getType(),
+        tempInstFactor, tempInstDim, A->getDynamic(), A->getOff(), A->getSpellingListIndex());
   }
-  case attr::AXIStreamInterface:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<AXIStreamInterfaceAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XlxArrayGeometry: {
+    const auto *A = cast<XlxArrayGeometryAttr>(R);
+    auto *tempInstDims =
+        new (SemaRef.Context, 16) Expr *[A->dims_size()];
+    {
+      Expr **TI = tempInstDims;
+      Expr **I = A->dims_begin();
+      Expr **E = A->dims_end();
+      for (; I != E; ++I, ++TI) {
+        ExprResult Result = getDerived().TransformExpr(*I);
+        if (Result.isInvalid())
+          return nullptr;
+        *TI = Result.get();
+      }
+    }
+    return new (SemaRef.Context) XlxArrayGeometryAttr(A->getRange(), 
+        SemaRef.Context, tempInstDims, A->dims_size(), A->getSpellingListIndex());
   }
-  case attr::MemoryInterface:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<MemoryInterfaceAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+
+  case attr::XlxArrayReshapeXForm: {
+    const auto *A = cast<XlxArrayReshapeXFormAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstFactor;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getFactor());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstFactor = Result.get();
+    }
+    Expr *tempInstDim;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDim());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDim = Result.get();
+    }
+    return new (SemaRef.Context) XlxArrayReshapeXFormAttr(A->getRange(),
+        SemaRef.Context, tempInstVariable, A->getType(),
+        tempInstFactor, tempInstDim, A->getOff(), A->getSpellingListIndex());
   }
-  case attr::APFifoInterface:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<APFifoInterfaceAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XlxArrayStencil: {
+    const auto *A = cast<XlxArrayStencilAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context) XlxArrayStencilAttr(A->getRange(), 
+        SemaRef.Context, tempInstVariable, A->getOff(), A->getSpellingListIndex());
   }
-  case attr::APScalarInterface:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<APScalarInterfaceAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XlxArrayView: {
+    const auto *A = cast<XlxArrayViewAttr>(R);
+    Expr *tempInstArray;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getArray());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstArray = Result.get();
+    }
+    auto *tempInstShape =
+        new (SemaRef.Context, 16) Expr *[A->shape_size()];
+    {
+      Expr **TI = tempInstShape;
+      Expr **I = A->shape_begin();
+      Expr **E = A->shape_end();
+      for (; I != E; ++I, ++TI) {
+        ExprResult Result = getDerived().TransformExpr(*I);
+        if (Result.isInvalid())
+          return nullptr;
+        *TI = Result.get();
+      }
+    }
+    return new (SemaRef.Context)
+        XlxArrayViewAttr(A->getRange(), SemaRef.Context, A->getAccessMode(),
+                         tempInstArray, tempInstShape, A->shape_size(), A->getSpellingListIndex());
   }
-  case attr::APScalarInterruptInterface:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<APScalarInterruptInterfaceAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XlxBindOp: {
+    const auto *A = cast<XlxBindOpAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstOp;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getOp());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstOp = Result.get();
+    }
+    Expr *tempInstImpl;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getImpl());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstImpl = Result.get();
+    }
+    Expr *tempInstLatency;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getLatency());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLatency = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxBindOpAttr(A->getRange(), SemaRef.Context, tempInstVariable,
+                      tempInstOp, tempInstImpl, tempInstLatency, A->getSpellingListIndex());
   }
-  case attr::FPGAFunctionCtrlInterface:
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    return attr;
+  case attr::XlxBindOpExpr: {
+    const auto *A = cast<XlxBindOpExprAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstOp;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getOp());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstOp = Result.get();
+    }
+    Expr *tempInstImpl;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getImpl());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstImpl = Result.get();
+    }
+    Expr *tempInstLatency;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getLatency());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLatency = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxBindOpExprAttr(A->getRange(), SemaRef.Context, tempInstVariable,
+                          tempInstOp, tempInstImpl, tempInstLatency, A->getSpellingListIndex());
   }
-  case attr::XlxCache: 
-  {
-    const Attr* attr = getDerived().instantiateTemplateAttr(R);
-    Expr* var = dyn_cast<XlxCacheAttr>(attr)->getPort();
-    MarkDeclIsUsed  marker(SemaRef);
-    marker.Visit(var);
-    return attr;
+  case attr::XlxBindStorage: {
+    const auto *A = cast<XlxBindStorageAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstType;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getType());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstType = Result.get();
+    }
+    Expr *tempInstImpl;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getImpl());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstImpl = Result.get();
+    }
+    Expr *tempInstLatency;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getLatency());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLatency = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxBindStorageAttr(A->getRange(), SemaRef.Context, tempInstVariable,
+                           tempInstType, tempInstImpl, tempInstLatency, A->getSpellingListIndex());
   }
-    
+  case attr::XlxCache: {
+    const auto *A = cast<XlxCacheAttr>(R);
+    Expr *tempInstPort;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPort());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPort = Result.get();
+    }
+    Expr *tempInstLines;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getLines());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstLines = Result.get();
+    }
+    Expr *tempInstDepth;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDepth());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDepth = Result.get();
+    }
+    Expr *tempInstL2Lines;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getL2Lines());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstL2Lines = Result.get();
+    }
+    Expr *tempInstPorts;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getPorts());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstPorts = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxCacheAttr(A->getRange(), SemaRef.Context, tempInstPort, tempInstLines,
+                     tempInstDepth, A->getIsDefaultDepth(), tempInstL2Lines,
+                     tempInstPorts, A->getBurst(), A->getWrite(), A->getSpellingListIndex());
+  }
+
+  case attr::XlxCrossDependence: {
+    const auto *A = cast<XlxCrossDependenceAttr>(R);
+    Expr *tempInstCrossVar0;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getCrossVar0());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstCrossVar0 = Result.get();
+    }
+    Expr *tempInstCrossVar1;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getCrossVar1());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstCrossVar1 = Result.get();
+    }
+    Expr *tempInstDistance;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDistance());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDistance = Result.get();
+    }
+    return new (SemaRef.Context) XlxCrossDependenceAttr(A->getRange(), 
+        SemaRef.Context, tempInstCrossVar0, tempInstCrossVar1,
+        A->getXClass(), A->getType(), A->getDirection(), tempInstDistance,
+        A->getCompel(), A->getSpellingListIndex());
+  }
+  case attr::XlxDataPack: {
+    const auto *A = cast<XlxDataPackAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context) XlxDataPackAttr(A->getRange(), 
+        SemaRef.Context, tempInstVariable, A->getBytePadLevel(), A->getSpellingListIndex());
+  }
+  case attr::XlxDependence: {
+    const auto *A = cast<XlxDependenceAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstDistance;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDistance());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDistance = Result.get();
+    }
+    return new (SemaRef.Context) XlxDependenceAttr(A->getRange(), 
+        SemaRef.Context, tempInstVariable, A->getXClass(),
+        A->getType(), A->getDirection(), tempInstDistance, A->getCompel(), A->getSpellingListIndex());
+  }
+  case attr::XlxDisaggr: {
+    const auto *A = cast<XlxDisaggrAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxDisaggrAttr(A->getRange(), SemaRef.Context, tempInstVariable, A->getSpellingListIndex());
+  }
+  case attr::XlxExprBalance: {
+    const auto *A = cast<XlxExprBalanceAttr>(R);
+    return new (SemaRef.Context)
+        XlxExprBalanceAttr(A->getRange(), SemaRef.Context, A->getEnabled(), A->getSpellingListIndex());
+  }
+  case attr::XlxFlattenLoop: {
+    const auto *A = cast<XlxFlattenLoopAttr>(R);
+    return new (SemaRef.Context)
+        XlxFlattenLoopAttr(A->getRange(), SemaRef.Context, A->getEnable(), A->getSpellingListIndex());
+  }
+  case attr::XlxFuncInstantiate: {
+    const auto *A = cast<XlxFuncInstantiateAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxFuncInstantiateAttr(A->getRange(), SemaRef.Context, tempInstVariable, A->getSpellingListIndex());
+  }
+  case attr::XlxInfiniteTask: {
+    const auto *A = cast<XlxInfiniteTaskAttr>(R);
+    Expr *tempInstTaskID;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getTaskID());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstTaskID = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxInfiniteTaskAttr(A->getRange(), SemaRef.Context, tempInstTaskID, A->getSpellingListIndex());
+  }
+  case attr::XlxInline: {
+    const auto *A = cast<XlxInlineAttr>(R);
+    return new (SemaRef.Context)
+        XlxInlineAttr(A->getRange(), SemaRef.Context, A->getOn(), A->getSpellingListIndex());
+  }
+  case attr::XlxLoopTripCount: {
+    const auto *A = cast<XlxLoopTripCountAttr>(R);
+    Expr *tempInstMin;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getMin());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMin = Result.get();
+    }
+    Expr *tempInstMax;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getMax());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstMax = Result.get();
+    }
+    Expr *tempInstAvg;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getAvg());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstAvg = Result.get();
+    }
+    return new (SemaRef.Context) XlxLoopTripCountAttr(A->getRange(), 
+        SemaRef.Context, tempInstMin, tempInstMax, tempInstAvg, A->getSpellingListIndex());
+  }
+  case attr::XlxMAXIAlias: {
+    const auto *A = cast<XlxMAXIAliasAttr>(R);
+    auto *tempInstPorts =
+        new (SemaRef.Context, 16) Expr *[A->ports_size()];
+    {
+      Expr **TI = tempInstPorts;
+      Expr **I = A->ports_begin();
+      Expr **E = A->ports_end();
+      for (; I != E; ++I, ++TI) {
+        ExprResult Result = getDerived().TransformExpr(*I);
+        if (Result.isInvalid())
+          return nullptr;
+        *TI = Result.get();
+      }
+    }
+    auto *tempInstOffsets =
+        new (SemaRef.Context, 16) Expr *[A->offsets_size()];
+    {
+      Expr **TI = tempInstOffsets;
+      Expr **I = A->offsets_begin();
+      Expr **E = A->offsets_end();
+      for (; I != E; ++I, ++TI) {
+        ExprResult Result = getDerived().TransformExpr(*I);
+        if (Result.isInvalid())
+          return nullptr;
+        *TI = Result.get();
+      }
+    }
+    return new (SemaRef.Context)
+        XlxMAXIAliasAttr(A->getRange(), SemaRef.Context, tempInstPorts,
+                         A->ports_size(), tempInstOffsets, A->offsets_size(), A->getSpellingListIndex());
+  }
+  case attr::XlxMergeLoop: {
+    const auto *A = cast<XlxMergeLoopAttr>(R);
+    return new (SemaRef.Context)
+        XlxMergeLoopAttr(A->getRange(), SemaRef.Context, A->getForce(), A->getSpellingListIndex());
+  }
+  case attr::XlxOccurrence: {
+    const auto *A = cast<XlxOccurrenceAttr>(R);
+    Expr *tempInstCycle;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getCycle());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstCycle = Result.get();
+      SemaRef.CheckXlxOccurrenceExprs(tempInstCycle, A->getLocation(), A->getSpelling()); 
+
+    }
+
+    return new (SemaRef.Context)
+        XlxOccurrenceAttr(A->getRange(), SemaRef.Context, tempInstCycle, A->getSpellingListIndex());
+  }
+  case attr::XlxPerformance: {
+    const auto *A = cast<XlxPerformanceAttr>(R);
+    Expr *tempInstTargetTI;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getTargetTI());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstTargetTI = Result.get();
+    }
+    Expr *tempInstTargetTL;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getTargetTL());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstTargetTL = Result.get();
+    }
+    Expr *tempInstAssumeTI;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getAssumeTI());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstAssumeTI = Result.get();
+    }
+    Expr *tempInstAssumeTL;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getAssumeTL());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstAssumeTL = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxPerformanceAttr(A->getRange(), SemaRef.Context, tempInstTargetTI,
+                           tempInstTargetTL, tempInstAssumeTI, tempInstAssumeTL,
+                           A->getUnit(), A->getPerformanceScope(), A->getSpellingListIndex()); 
+  }
+  case attr::XlxPipeline: {
+    const auto *A = cast<XlxPipelineAttr>(R);
+    Expr *tempInstII;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getII());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstII = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxPipelineAttr(A->getRange(), SemaRef.Context, tempInstII,
+                        A->getStyle(), A->getRewind(), A->getSpellingListIndex()); 
+  }
+  case attr::XlxProtocol: {
+    const auto *A = cast<XlxProtocolAttr>(R);
+    return new (SemaRef.Context)
+        XlxProtocolAttr(A->getRange(), SemaRef.Context, A->getProtocolMode(), A->getSpellingListIndex());
+  }
+  case attr::XlxReqdPipeDepth: {
+    const auto *A = cast<XlxReqdPipeDepthAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    Expr *tempInstDepth;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getDepth());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstDepth = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxReqdPipeDepthAttr(A->getRange(), SemaRef.Context, tempInstVariable,
+                             tempInstDepth, A->getType(), A->getSpellingListIndex());
+  }
+  case attr::XlxResetIntrinsic: {
+    const auto *A = cast<XlxResetIntrinsicAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context) XlxResetIntrinsicAttr(
+        A->getRange(), SemaRef.Context, 
+        tempInstVariable, A->getEnabled(), A->getSpellingListIndex());
+  }
+  case attr::XlxRewinding: {
+    const auto *A = cast<XlxRewindingAttr>(R);
+    return A->clone(SemaRef.Context);
+  }
+  case attr::XlxShared: {
+    const auto *A = cast<XlxSharedAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxSharedAttr(A->getRange(), SemaRef.Context, tempInstVariable, A->getSpellingListIndex());
+  }
+  case attr::XlxStable: {
+    const auto *A = cast<XlxStableAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxStableAttr(A->getRange(), SemaRef.Context, tempInstVariable, A->getSpellingListIndex());
+  }
+  case attr::XlxStableContent: {
+    const auto *A = cast<XlxStableContentAttr>(R);
+    Expr *tempInstVariable;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getVariable());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstVariable = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxStableContentAttr(A->getRange(), SemaRef.Context, tempInstVariable, A->getSpellingListIndex());
+  }
+  case attr::XlxTask: {
+    const auto *A = cast<XlxTaskAttr>(R);
+    Expr *tempInstTaskID;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getTaskID());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstTaskID = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxTaskAttr(A->getRange(), SemaRef.Context, tempInstTaskID, A->getSpellingListIndex());
+  }
+  case attr::XlxUnrollHint: {
+    const auto *A = cast<XlxUnrollHintAttr>(R);
+    Expr *tempInstFactor;
+    {
+      ExprResult Result = getDerived().TransformExpr(A->getFactor());
+      if (Result.isInvalid())
+        return nullptr;
+      tempInstFactor = Result.get();
+    }
+    return new (SemaRef.Context)
+        XlxUnrollHintAttr(A->getRange(), SemaRef.Context, tempInstFactor,
+                          A->getSkipExitCheck(), A->getIsDefaultFactor(), A->getSpellingListIndex());
+  }
+  case attr::XlxUnrollRegionHint: {
+    const auto *A = cast<XlxUnrollRegionHintAttr>(R);
+    return new (SemaRef.Context)
+        XlxUnrollRegionHintAttr(A->getRange(), SemaRef.Context,
+                                A->getUnrollHint(), A->getSkipExitCheck(), A->getSpellingListIndex());
+  }
+  case attr::XlxVarReset: {
+    const auto *A = cast<XlxVarResetAttr>(R);
+    return new (SemaRef.Context)
+        XlxVarResetAttr(A->getRange(), SemaRef.Context, A->getEnabled(), A->getSpellingListIndex());
+  }
 
   default:
     return R;
@@ -6940,7 +7958,18 @@ StmtResult TreeTransform<Derived>::TransformAttributedStmt(AttributedStmt *S) {
   for (const auto *I : S->getAttrs()) {
     const Attr *R = getDerived().TransformAttr(I);
     AttrsChanged |= (I != R);
-    if (R) { 
+
+    if (R){
+      Expr *ifCond = getDerived().TransformExpr(I->getHLSIfCond()).get();
+      if (ifCond != I->getHLSIfCond()) {
+        Sema::ConditionResult Cond =
+            getDerived().TransformCondition(ifCond->getExprLoc(), nullptr, ifCond,
+                                            Sema::ConditionKind::Boolean);
+        ifCond = Cond.get().second;
+
+      }
+      const_cast<Attr*>(R)->setHLSIfCond(ifCond);
+
       Attrs.push_back(R);
     }
   }

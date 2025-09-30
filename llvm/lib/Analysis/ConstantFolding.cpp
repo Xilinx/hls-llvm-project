@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -52,6 +52,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/XILINXFPGAFloatInstEval.h"
 #include <cassert>
 #include <cerrno>
 #include <cfenv>
@@ -1040,6 +1041,159 @@ Constant *ConstantFoldInstOperandsImpl(const Value *InstOrCE, unsigned Opcode,
   }
 }
 
+Constant *FoldFloatUnaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 2 && "FloatUnaryInst must have 2 arguments");
+  Constant *Op = Operands[0];
+  Constant *ExpBW = Operands[1];
+
+  if (isa<UndefValue>(Op) || isa<UndefValue>(ExpBW))
+    return UndefValue::get(Op->getType());
+
+  APInt OpVal = cast<ConstantInt>(Op)->getValue();
+  int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
+
+  APInt ResVal;
+  switch (IntrinsicID) {
+  case Intrinsic::fpga_float_sqrt:
+    ResVal = fpga::EvalFloatSqrt(OpVal, ExpBWVal);
+    break;
+  default:
+    llvm_unreachable("Unknown float unary intrinsic");
+  }
+
+  return ConstantInt::get(Op->getContext(), ResVal);
+}
+
+Constant *FoldFloatBinaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 3 && "FloatBinaryInst must have 3 arguments");
+  Constant *LHS = Operands[0];
+  Constant *RHS = Operands[1];
+  Constant *ExpBW = Operands[2];
+
+  if (isa<UndefValue>(LHS) || isa<UndefValue>(RHS) || isa<UndefValue>(ExpBW))
+    return UndefValue::get(LHS->getType());
+
+  APInt LHSVal = cast<ConstantInt>(LHS)->getValue();
+  APInt RHSVal = cast<ConstantInt>(RHS)->getValue();
+  int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
+
+  APInt ResVal;
+  switch (IntrinsicID) {
+  case Intrinsic::fpga_float_add:
+    ResVal = fpga::EvalFloatAdd(LHSVal, RHSVal, ExpBWVal);
+    break;
+  case Intrinsic::fpga_float_sub:
+    ResVal = fpga::EvalFloatSub(LHSVal, RHSVal, ExpBWVal);
+    break;
+  case Intrinsic::fpga_float_mul:
+    ResVal = fpga::EvalFloatMul(LHSVal, RHSVal, ExpBWVal);
+    break;
+  case Intrinsic::fpga_float_div:
+    ResVal = fpga::EvalFloatDiv(LHSVal, RHSVal, ExpBWVal);
+    break;
+  default:
+    llvm_unreachable("Unknown float binary intrinsic");
+  }
+
+  return ConstantInt::get(LHS->getContext(), ResVal);
+}
+
+Constant *FoldFloatTernaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 4 && "FloatTernaryInst must have 4 arguments");
+  Constant *Op0 = Operands[0];
+  Constant *Op1 = Operands[1];
+  Constant *Op2 = Operands[2];
+  Constant *ExpBW = Operands[3];
+
+  if (isa<UndefValue>(Op0) || isa<UndefValue>(Op1) || isa<UndefValue>(Op2) || isa<UndefValue>(ExpBW))
+    return UndefValue::get(Op0->getType());
+
+  APInt Op0Val = cast<ConstantInt>(Op0)->getValue();
+  APInt Op1Val = cast<ConstantInt>(Op1)->getValue();
+  APInt Op2Val = cast<ConstantInt>(Op2)->getValue();
+  int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
+
+  APInt ResVal;
+  switch (IntrinsicID) {
+  case Intrinsic::fpga_float_fma:
+    ResVal = fpga::EvalFloatFMA(Op0Val, Op1Val, Op2Val, ExpBWVal);
+    break;
+  default:
+    llvm_unreachable("Unknown float ternary intrinsic");
+  }
+
+  return ConstantInt::get(Op0->getContext(), ResVal);
+}
+
+Constant *FoldFloatCastInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands, Type *Ty) {
+  assert(Operands.size() == 3 && "FloatCastInst must have 3 arguments");
+  Constant *Op = Operands[0];
+  Constant *ExpBW = Operands[1];
+  Constant *DstExpBW = Operands[2];
+
+  if (isa<UndefValue>(Op) || isa<UndefValue>(ExpBW) || isa<UndefValue>(DstExpBW))
+    return UndefValue::get(Ty);
+
+  APInt OpVal = cast<ConstantInt>(Op)->getValue();
+  int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
+  int DstExpBWVal = cast<ConstantInt>(DstExpBW)->getSExtValue();
+  int DstBW = Ty->getIntegerBitWidth();
+
+  APInt ResVal;
+  switch (IntrinsicID) {
+  case Intrinsic::fpga_float_from_fixed:
+    ResVal = fpga::EvalFloatFromFixed(OpVal, ExpBWVal, DstExpBWVal, DstBW);
+    break;
+  case Intrinsic::fpga_float_to_fixed:
+    ResVal = fpga::EvalFloatToFixed(OpVal, ExpBWVal, DstExpBWVal, DstBW);
+    break;
+  case Intrinsic::fpga_float_to_float:
+    ResVal = fpga::EvalFloatToFloat(OpVal, ExpBWVal, DstExpBWVal, DstBW);
+    break;
+  default:
+    llvm_unreachable("Unknown float cast intrinsic");
+  }
+
+  return ConstantInt::get(Ty->getContext(), ResVal);      
+}
+
+Constant *FoldFloatCompareInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands) {
+  assert(Operands.size() == 3 && "FloatCompareInst must have 3 arguments");
+  Constant *LHS = Operands[0];
+  Constant *RHS = Operands[1];
+  Constant *ExpBW = Operands[2];
+
+  if (isa<UndefValue>(LHS) || isa<UndefValue>(RHS) || isa<UndefValue>(ExpBW))
+    return UndefValue::get(LHS->getType());
+
+  APInt LHSVal = cast<ConstantInt>(LHS)->getValue();
+  APInt RHSVal = cast<ConstantInt>(RHS)->getValue();
+  int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
+
+  bool ResVal;
+  switch (IntrinsicID) {
+  case Intrinsic::fpga_float_compare_eq:
+    ResVal = fpga::EvalFloatCompareEQ(LHSVal, RHSVal, ExpBWVal);
+    break;
+  case Intrinsic::fpga_float_compare_ne:
+    ResVal = fpga::EvalFloatCompareNE(LHSVal, RHSVal, ExpBWVal);
+    break;
+  case Intrinsic::fpga_float_compare_lt:
+    ResVal = fpga::EvalFloatCompareLT(LHSVal, RHSVal, ExpBWVal);
+    break;
+  case Intrinsic::fpga_float_compare_le:
+    ResVal = fpga::EvalFloatCompareLE(LHSVal, RHSVal, ExpBWVal);
+    break;
+  case Intrinsic::fpga_float_compare_uo:
+    ResVal = fpga::EvalFloatCompareUO(LHSVal, RHSVal, ExpBWVal);
+    break;
+  default:
+    llvm_unreachable("Unknown float compare intrinsic");
+  }
+
+  return ConstantInt::get(LHS->getContext(), APInt(1, ResVal));
+}
+
 Constant *FoldSMod(ArrayRef<Constant *> Operands) {
   assert(Operands.size() == 2 && "SMod must have 2 arguments");
   Constant *LHS = Operands[0];
@@ -1164,6 +1318,10 @@ Constant *FoldBitConcat(ArrayRef<Constant *> Operands) {
 Constant *FoldUnpack(ConstantInt *IntObj, Type *RetTy, const DataLayout &DL, AggregateType AggrTy) {
   HLSIRBuilder IB(IntObj->getContext(), DL);
   return cast<Constant>(IB.unpackIntToAggregate(IntObj, RetTy, AggrTy));
+}
+
+Constant *FoldXorReduce(ConstantInt *IntObj, Type *RetTy) {
+  return ConstantInt::get(RetTy, IntObj->getValue().countPopulation() & 1);
 }
 
 ConstantInt *FoldPack(Constant *Obj, Type *Ty, const DataLayout &DL, AggregateType AggrTy) {
@@ -1644,9 +1802,24 @@ bool llvm::canConstantFoldCallTo(ImmutableCallSite CS, const Function *F) {
   case Intrinsic::fpga_pack_bits:
   case Intrinsic::fpga_unpack_none:
   case Intrinsic::fpga_pack_none:
-  case Intrinsic::fpga_mux:
+  case Intrinsic::fpga_mux: // TODO: add sparse_mux support!
   case Intrinsic::fpga_recip:
   case Intrinsic::fpga_rsqrt:
+  case Intrinsic::fpga_float_add:
+  case Intrinsic::fpga_float_sub:
+  case Intrinsic::fpga_float_mul:
+  case Intrinsic::fpga_float_div:
+  case Intrinsic::fpga_float_fma:
+  case Intrinsic::fpga_float_sqrt:
+  case Intrinsic::fpga_float_from_fixed:
+  case Intrinsic::fpga_float_to_fixed:
+  case Intrinsic::fpga_float_to_float:
+  case Intrinsic::fpga_float_compare_eq:
+  case Intrinsic::fpga_float_compare_le:
+  case Intrinsic::fpga_float_compare_lt:
+  case Intrinsic::fpga_float_compare_ne:
+  case Intrinsic::fpga_float_compare_uo:
+  case Intrinsic::fpga_xor_reduce:
     return true;
   default:
     return false;
@@ -2065,6 +2238,8 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
         return FoldUnpack(Op, Ty, DL, AggregateType::Bit);
       case Intrinsic::fpga_unpack_none:
         return FoldUnpack(Op, Ty, DL, AggregateType::NoCompact);
+      case Intrinsic::fpga_xor_reduce:
+        return FoldXorReduce(Op, Ty);
       default:
         return nullptr;
       }
@@ -2124,6 +2299,28 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
 
   if (IntrinsicID == Intrinsic::fpga_mux) {
     return FoldMux(Operands);
+  }
+
+  switch (IntrinsicID) {
+    case Intrinsic::fpga_float_add:
+    case Intrinsic::fpga_float_sub:
+    case Intrinsic::fpga_float_mul:
+    case Intrinsic::fpga_float_div:
+      return FoldFloatBinaryInst(IntrinsicID, Operands);
+    case Intrinsic::fpga_float_fma:
+      return FoldFloatTernaryInst(IntrinsicID, Operands);
+    case Intrinsic::fpga_float_sqrt:
+      return FoldFloatUnaryInst(IntrinsicID, Operands);
+    case Intrinsic::fpga_float_from_fixed:
+    case Intrinsic::fpga_float_to_fixed:
+    case Intrinsic::fpga_float_to_float:
+      return FoldFloatCastInst(IntrinsicID, Operands, Ty);
+    case Intrinsic::fpga_float_compare_eq:
+    case Intrinsic::fpga_float_compare_le:
+    case Intrinsic::fpga_float_compare_lt:
+    case Intrinsic::fpga_float_compare_ne:
+    case Intrinsic::fpga_float_compare_uo:
+      return FoldFloatCompareInst(IntrinsicID, Operands);
   }
 
   if (Operands.size() == 2) {

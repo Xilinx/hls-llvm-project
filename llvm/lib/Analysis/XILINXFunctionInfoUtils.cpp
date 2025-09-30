@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -22,7 +22,9 @@
 
 #include "llvm/Analysis/XILINXFunctionInfoUtils.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/XILINXFPGAIntrinsicInst.h"
 #include "llvm/Support/XILINXSystemInfo.h"
@@ -47,6 +49,22 @@ bool llvm::hasFunctionInstantiate(const Function *F) {
 
 bool llvm::isDataFlow(const Function *F) {
   return F->hasFnAttribute("fpga.dataflow.func");
+}
+
+bool llvm::isDataFlowLoopFunction(Function *F, LoopInfo *LI) {
+  if (!LI) {
+    DominatorTree DT(*F);
+    LoopInfo LocalLI(DT);
+    // top loop size is not 1
+    if (LocalLI.empty() || (++LocalLI.begin()) != LocalLI.end())
+      return false;
+    return isDataFlow(*LocalLI.begin());
+  } else {
+    // top loop size is not 1
+    if (LI->empty() || (++LI->begin()) != LI->end())
+      return false;
+    return isDataFlow(*LI->begin());
+  }
 }
 
 /// \brief Captures function pipeline information.
@@ -171,6 +189,10 @@ bool llvm::hasFunctionLoopMerge(const Function *F) {
 
 bool llvm::hasFunctionOccurrence(const Function *F) {
   return F && F->hasFnAttribute("fpga.occurrence");
+}
+
+bool llvm::hasFunctionPerformance(const Function *F) {
+  return F && F->hasFnAttribute("fpga.function.performance");
 }
 
 Optional<const std::string> llvm::getTopFunctionName(const Function *F) {
@@ -380,3 +402,47 @@ MemDepResult llvm::getDependency(Instruction *QueryInst, Instruction *ScanPos,
 
   return MemDepResult::getUnknown();
 }
+
+Optional<PerformanceTargetMDInfo> llvm::getPerformanceTarget(const Function *F) {
+  if (!F->hasFnAttribute("fpga.function.performance"))
+    return None;
+
+  auto P = F->getFnAttribute("fpga.function.performance");
+  SmallVector<StringRef, 4> PerformanceStrVec;
+  P.getValueAsString().split(PerformanceStrVec, ';');
+  if (PerformanceStrVec.size() != 4)
+    return None;
+  long long TargetTI = 0, TargetTL = 0, AssumeTI = 0, AssumeTL = 0;
+  {
+    auto PP = PerformanceStrVec[0].split('=');
+    if (PP.first != "target_ti" ||
+        getAsSignedInteger(PP.second, 10, TargetTI))
+      return None;
+  }
+  {
+    auto PP = PerformanceStrVec[1].split('=');
+    if (PP.first != "target_tl" ||
+        getAsSignedInteger(PP.second, 10, TargetTL))
+      return None;
+  }
+  {
+    auto PP = PerformanceStrVec[2].split('=');
+    if (PP.first != "assume_ti" ||
+        getAsSignedInteger(PP.second, 10, AssumeTI))
+      return None;
+  }
+  {
+    auto PP = PerformanceStrVec[3].split('=');
+    if (PP.first != "assume_tl" ||
+        getAsSignedInteger(PP.second, 10, AssumeTL))
+      return None;
+  }
+
+  std::string Source = getFuncPragmaSource(const_cast<Function*>(F),
+      "fpga.function.performance");
+  DILocation *DL = getFuncPragmaLoc(const_cast<Function*>(F),
+      "fpga.function.performance");
+  return PerformanceTargetMDInfo(TargetTI, TargetTL, AssumeTI, AssumeTL,
+      Source, DL);
+}
+

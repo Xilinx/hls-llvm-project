@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //===----------------------------------------------------------------------===/
 //
@@ -886,8 +886,8 @@ namespace {
             nullptr,  ifCond, Sema::ConditionKind::ConstexprIf); 
         ifCond = Cond.get().second; 
 
-        retAttr->setHLSIfCond(ifCond); 
       }
+      retAttr->setHLSIfCond(ifCond); 
       retAttr->setPragmaContext(AT->getPragmaContext()); 
       return retAttr; 
     }

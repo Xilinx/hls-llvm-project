@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,13 +18,25 @@
 #include "llvm/Analysis/ValueLatticeUtils.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Analysis/XILINXFunctionInfoUtils.h"
 using namespace llvm;
 
 bool llvm::canTrackArgumentsInterprocedurally(Function *F) {
+  // HLS begin
+  // Don't touch Vivado IP
+  if (HasVivadoIP(F))
+    return false;
+  // HLS end
+
   return F->hasLocalLinkage() && !F->hasAddressTaken();
 }
 
 bool llvm::canTrackReturnsInterprocedurally(Function *F) {
+  // HLS begin
+  // Don't touch Vivado IP
+  if (HasVivadoIP(F))
+    return false;
+  // HLS end
   return F->hasExactDefinition() && !F->hasFnAttribute(Attribute::Naked);
 }
 

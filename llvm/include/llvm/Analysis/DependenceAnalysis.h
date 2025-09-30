@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -268,6 +271,7 @@ template <typename T> class ArrayRef;
     bool LoopIndependent;
     bool Consistent; // Init to true, then refine.
     std::unique_ptr<DVEntry[]> DV;
+    DVEntry DepOnFunction;
     friend class DependenceInfo;
     friend class HLSDepAnalysis;
   };
@@ -288,7 +292,10 @@ template <typename T> class ArrayRef;
     /// without traversing a loop back edge.
     std::unique_ptr<Dependence> depends(Instruction *Src,
                                         Instruction *Dst,
-                                        bool PossiblyLoopIndependent);
+                                        bool PossiblyLoopIndependent,
+                                        unsigned OuterMostLevel = 0,
+                                        bool FunctionLevel = false,
+                                        bool SkipAliasCheck = false);
 
     /// getSplitIteration - Give a dependence that's splittable at some
     /// particular level, return the iteration that should be used to split
@@ -508,9 +515,11 @@ template <typename T> class ArrayRef;
     ///     f - 6
     ///     g - 7 = MaxLevels
     void establishNestingLevels(const Instruction *Src,
-                                const Instruction *Dst);
+                                const Instruction *Dst,
+                                unsigned OuterMostLevel = 0);
 
     unsigned CommonLevels, SrcLevels, MaxLevels;
+    unsigned OuterMostCommonLevel;
 
     /// mapSrcLoop - Given one of the loops containing the source, return
     /// its level index in our numbering scheme.
@@ -590,7 +599,8 @@ template <typename T> class ArrayRef;
     /// marks the Result as inconsistent.
     bool testZIV(const SCEV *Src,
                  const SCEV *Dst,
-                 FullDependence &Result) const;
+                 FullDependence &Result,
+                 bool FunctionLevel) const;
 
     /// testSIV - Tests the SIV subscript pair (Src and Dst) for dependence.
     /// Things of the form [c1 + a1*i] and [c2 + a2*j], where

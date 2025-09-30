@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -519,15 +519,6 @@ int main(int argc, char **argv) {
 //ZhaoKang:
 #if 1
   if (PlatformDBFilePath != "" && PlatformDeviceName != "") { 
-    if (DeviceResourceInfo != "") {
-      platform::SetPlatformDeviceResourceInfo(DeviceResourceInfo);
-    }
-    if (DeviceNameInfo != "") {
-      platform::SetPlatformDeviceNameInfo(DeviceNameInfo);
-    }
-    platform::SetPlatformDbFile(PlatformDBFilePath);
-    platform::PlatformBasic::getInstance()->load(PlatformDeviceName);
-
     platform::coreInstFactoryInit(PlatformDBFilePath, PlatformDeviceName, DeviceResourceInfo);
 
   } else if (PlatformDBFilePath != "" || PlatformDeviceName != "") {

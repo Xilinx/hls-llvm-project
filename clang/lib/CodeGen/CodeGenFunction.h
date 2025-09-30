@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -3468,6 +3468,10 @@ public:
   llvm::Value *EmitBuiltinFPGAFloatTernary(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitBuiltinFPGAFloatConversion(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitBuiltinFPGAFloatCompare(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGAFloatAccumulate(unsigned BuiltinID, const CallExpr *E);
+
+  /// DSP builtins
+  llvm::Value *EmitBuiltinFPGADSP(unsigned BuiltinID, const CallExpr *E);
 
   /// FIFO builtins
   llvm::Value *EmitBuiltinFPGAFifoStatus(unsigned BuiltinID, const CallExpr *E);
@@ -3481,6 +3485,9 @@ public:
   llvm::Value *EmitBuiltinFPGAPipoBlocking(unsigned BuiltinID, const CallExpr *E);
 
   llvm::Value *EmitBuiltinFPGASetStreamOfBlocksDepth(unsigned BuiltinID, const CallExpr*E);
+
+  /// Byte-enable builtins
+  llvm::Value *EmitBuiltinFPGAStore(unsigned BuiltinID, const CallExpr *E);
 
   /// Manual burst builtins
   llvm::Value *EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID, const CallExpr*E);
@@ -3498,6 +3505,9 @@ public:
   /// Direct Input/Output builtins
   llvm::Value *EmitBuiltinFPGADirectIOStatus(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitBuiltinFPGADirectIO(unsigned BuiltinID, const CallExpr *E);
+
+  llvm::Value *EmitBuiltinFPGACountLeadingZero(unsigned BuiltinID, const CallExpr *E);
+  llvm::Value *EmitBuiltinFPGACountTrailingZero(unsigned BuiltinID, const CallExpr *E);
 
   /// Legacy builtins
   RValue EmitBuiltinBitConcat(const CallExpr *E);
@@ -3866,6 +3876,7 @@ public:
   void EmitXCLDependenceIntrinsic(const XCLDependenceAttr *attr) ;
   void EmitXlxCacheIntrinsic(const XlxCacheAttr *cache);
   bool EvaluateHLSIFCond(const Expr* ifCond) ; 
+  int64_t HLSEvaluateClockCycle(Expr *E, bool isSec, double clockPeriod, const char * option_name);
 
   
 

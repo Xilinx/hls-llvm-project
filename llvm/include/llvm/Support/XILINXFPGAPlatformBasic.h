@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -151,6 +151,7 @@ enum OP_TYPE
     OP_FMA  = 585,
     OP_DMA  = 586,
     OP_FMS  = 587,
+    OP_MUXLOGIC = 592,
     OP_MEMORY = 666,
     OP_ALL = 777,
     OP_ADAPTER = 888,
@@ -229,6 +230,7 @@ enum OP_TYPE
     OP_APFLOATFIXED2FLOAT = 1219,
     OP_APFLOATFLOAT2FIXED = 1220,
     OP_APFLOATFLOAT2FLOAT = 1221,
+    OP_APFLOATACC = 1228,
     OP_SPECDT = 2000,
     OP_SPECPORT = 2001,
     OP_SPECINTERFACE = 2006,
@@ -398,6 +400,9 @@ enum IMPL_TYPE
     COMPACTENCODING_REALDEF,
     ONEHOTENCODING_REALDEF,
     REG_SLICE,
+    REGISTER_CE,
+    RAM_S2P_AUTO,
+    RAM_T2P_AUTO,
     //NOIMPL, for resource pragma without impl
     NOIMPL = 200,
     NOIMPL_SHIFTREG,
@@ -636,6 +641,7 @@ public:
     bool supportFMAc() const;
     bool supportFAcc() const;
     bool supportCMul() const;
+    bool supportAPFloat() const;
     bool supportUram () const;
     bool hasSuccLoad() const;
 // enum-string converter
@@ -752,7 +758,6 @@ private:
 
 }; //< class PlatformBasic
 
-void SetPlatformDbFile( std::string path );
 void SetPlatformDeviceResourceInfo( std::string resource_info );
 void SetPlatformDeviceNameInfo ( std::string deviceName );
 std::string GetPlatformDeviceNameInfo ();

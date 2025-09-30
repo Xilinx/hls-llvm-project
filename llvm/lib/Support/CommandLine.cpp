@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -45,10 +46,14 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 #include <map>
+#include <set>
 using namespace llvm;
 using namespace cl;
 
 #define DEBUG_TYPE "commandline"
+
+static opt<std::string>
+    Autocomplete("autocomplete", desc("Autocomplete option"), value_desc("Option prefix"));
 
 //===----------------------------------------------------------------------===//
 // Template instantiations and anchors.
@@ -454,6 +459,41 @@ SubCommand *CommandLineParser::LookupSubCommand(StringRef Name) {
       return S;
   }
   return &*TopLevelSubCommand;
+}
+
+/// LookupOptionsWithPrefix - Search for options in the provided options map
+/// that start with the given argument prefix. It inserts all matching option
+/// names into the provided set of matching option names.
+static void LookupOptionsWithPrefix(StringRef Arg,
+                                    const StringMap<Option *> &OptionsMap,
+                                    std::set<StringRef> &MatchingOptionNames) {
+  if (Arg.empty())
+    return;
+
+  for (const auto &Entry : OptionsMap) {
+    Option *O = Entry.second;
+    SmallVector<StringRef, 16> OptionNames;
+    O->getExtraOptionNames(OptionNames);
+    if (O->hasArgStr())
+      OptionNames.push_back(O->ArgStr);
+
+    for (const auto &Name : OptionNames)
+      if (Name.startswith(Arg))
+        MatchingOptionNames.insert(Name);
+  }
+}
+
+/// HandleAutocompletions - Output a list of possible completions for the
+/// given argument prefix.
+static void HandleAutocompletions(StringRef Arg,
+                                  const StringMap<Option *> &OptionsMap) {
+  std::set<StringRef> MatchingOptionNames;
+  LookupOptionsWithPrefix(Arg, OptionsMap, MatchingOptionNames);
+
+  if (MatchingOptionNames.empty())
+    return;
+
+  llvm::outs() << llvm::join(MatchingOptionNames, "\n") << '\n';
 }
 
 /// LookupNearestOption - Lookup the closest match to the option specified by
@@ -1240,6 +1280,14 @@ bool CommandLineParser::ParseCommandLineOptions(int argc,
       if (!Handler)
         Handler = HandlePrefixedOrGroupedOption(ArgName, Value, ErrorParsing,
                                                 OptionsMap);
+
+      // Try to automatically complete the option with provided prefix.
+      if (Handler == &Autocomplete) {
+        while (!Value.empty() && Value[0] == '-')
+          Value = Value.substr(1);
+        HandleAutocompletions(Value, OptionsMap);
+        exit(0);
+      }
 
       // Otherwise, look for the closest available option to report to the user
       // in the upcoming error.

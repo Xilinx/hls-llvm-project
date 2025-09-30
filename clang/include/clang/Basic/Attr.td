@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2981,7 +2981,8 @@ def XlxStable: Attr{
   let TemplateDependent = 1;
   let Documentation = [Undocumented];
   let Args = [
-              ExprArgument<"Variable">
+              ExprArgument<"Variable">, 
+              DefaultBoolArgument<"off", 0>
 			];
 }
 
@@ -3774,9 +3775,9 @@ def XlxCache: Attr {
               ExprArgument<"Port">,
               ExprArgument<"Lines">,
               ExprArgument<"Depth">,
-              DefaultBoolArgument<"IsDefaultDepth", 0>, 
-              ExprArgument<"Ways">,
-              ExprArgument<"Users">,
+              DefaultBoolArgument<"IsDefaultDepth", 0>,
+              ExprArgument<"Ports">,
+              ExprArgument<"L2Lines">,
               EnumArgument<"Burst", "BurstMode",
                            ["off", "on"/*, "adaptive"*/],
                            ["Off", "On"/*, "Adaptive"*/], 1>,
@@ -3794,14 +3795,15 @@ def CodeGenType : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
-def Unpacked: InheritableAttr {
-  let Spellings = [GCC<"unpacked">];
+def HLSPreserve: InheritableAttr{ 
+  let Spellings = [GCC<"hls_preserve">];
+  let Subjects = SubjectList<[Function]>;
   let LangOpts = [HLSExt];
   let Documentation = [Undocumented];
 }
 
-def HLSPreserve: InheritableAttr{ 
-  let Spellings = [GCC<"hls_preserve">];
+def HLSTopTask: InheritableAttr{ 
+  let Spellings = [GCC<"hls_top_task">];
   let Subjects = SubjectList<[Function]>;
   let LangOpts = [HLSExt];
   let Documentation = [Undocumented];

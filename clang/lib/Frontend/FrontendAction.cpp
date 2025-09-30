@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,6 +34,8 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include "XlxHoistASTConsumer.h"
 #include <system_error>
 using namespace clang;
 
@@ -148,6 +153,16 @@ FrontendAction::CreateWrappedASTConsumer(CompilerInstance &CI,
   std::unique_ptr<ASTConsumer> Consumer = CreateASTConsumer(CI, InFile);
   if (!Consumer)
     return nullptr;
+
+  if (CI.getLangOpts().HLSExt) {
+    // build MultiplexConsumer , do XlxAttribute Hoist immediatly after Parser
+    // produce AST
+    std::vector<std::unique_ptr<ASTConsumer>> Consumers;
+    Consumers.push_back(std::move(llvm::make_unique<XlxAttrHoistConsumer>()));
+    Consumers.push_back(std::move(Consumer)); 
+    Consumer = llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
+  }
+
 
   // If there are no registered plugins we don't need to wrap the consumer
   if (FrontendPluginRegistry::begin() == FrontendPluginRegistry::end())

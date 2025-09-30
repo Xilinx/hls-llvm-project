@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -94,6 +94,7 @@ struct LoopAttributes {
 
   /// \brief Value for llvm.loop.name metadata.
   llvm::StringRef LoopName;
+  std::string performanceSpec;
   
   /// \brief Value for Loop corresponding pragma debug location
   llvm::DebugLoc UnrollPragmaLoc;
@@ -101,12 +102,14 @@ struct LoopAttributes {
   llvm::DebugLoc FlattenPragmaLoc;
   llvm::DebugLoc TripCountPragmaLoc;
   llvm::DebugLoc DataflowPragmaLoc;
+  llvm::DebugLoc PerformancePragmaLoc;
 
   llvm::StringRef UnrollPragmaContext;
   llvm::StringRef PipelinePragmaContext;
   llvm::StringRef FlattenPragmaContext;
   llvm::StringRef TripCountPragmaContext;
   llvm::StringRef DataflowPragmaContext;
+  llvm::StringRef PerformancePragmaContext;
 };
 
 /// \brief Information used when generating a structured loop.
@@ -212,6 +215,11 @@ public:
   /// \brief Set the next pushed loop's name.
   void setLoopName(llvm::StringRef Name) { StagedAttrs.LoopName = Name; }
 
+  /// \brief Set the performance spec string 
+
+  void setPerformanceSpec(std::string spec) { StagedAttrs.performanceSpec = spec; }
+  const std::string &getPerformanceSpec() { return StagedAttrs.performanceSpec; }
+
   /// \brief Set the next pushed loop unroll state.
   void setUnrollState(const LoopAttributes::LVEnableState &State) {
     StagedAttrs.UnrollEnable = State;
@@ -233,6 +241,7 @@ public:
   void setFlattenDebugLoc(const llvm::DebugLoc Loc) { StagedAttrs.FlattenPragmaLoc = Loc; }
   void setTripCountDebugLoc(const llvm::DebugLoc Loc) { StagedAttrs.TripCountPragmaLoc = Loc; }
   void setDataflowDebugLoc(const llvm::DebugLoc Loc) { StagedAttrs.DataflowPragmaLoc = Loc; }
+  void setPerformanceDebugLoc(const llvm::DebugLoc Loc) { StagedAttrs.PerformancePragmaLoc = Loc; }
 
 
   void setUnrollPragmaContext( llvm::StringRef context)  { StagedAttrs.UnrollPragmaContext = context; }
@@ -240,6 +249,7 @@ public:
   void setFlattenPragmaContext( llvm::StringRef context)  { StagedAttrs.FlattenPragmaContext = context; }
   void setTripCountPragmaContext( llvm::StringRef context ) {StagedAttrs.TripCountPragmaContext = context; }; 
   void setDataflowPragmaContext( llvm::StringRef context ) {StagedAttrs.DataflowPragmaContext = context; }; 
+  void setPerformancePragmaContext( llvm::StringRef context)  { StagedAttrs.PerformancePragmaContext = context; }
 
 private:
   /// \brief Returns true if there is LoopInfo on the stack.

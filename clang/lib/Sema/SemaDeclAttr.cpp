@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1424,14 +1425,6 @@ static void handlePackedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     }
 
   } else
-    S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
-}
-
-static void handleUnpackedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (TagDecl *TD = dyn_cast<TagDecl>(D))
-    TD->addAttr(::new (S.Context) UnpackedAttr(Attr.getRange(), S.Context,
-                                        Attr.getAttributeSpellingListIndex()));
-  else
     S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
 }
 
@@ -6774,9 +6767,6 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
   case AttributeList::AT_CodeGenType:
     handleCodeGenTypeAttr(S, D, Attr);
-    break;
-  case AttributeList::AT_Unpacked:
-    handleUnpackedAttr(S, D, Attr);
     break;
   case AttributeList::AT_Mips16:
     handleSimpleAttributeWithExclusions<Mips16Attr, MicroMipsAttr,

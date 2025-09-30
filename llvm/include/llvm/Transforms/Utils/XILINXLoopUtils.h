@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -47,7 +47,7 @@ void addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg,
                       StringRef Source = "", DILocation *DL = nullptr);
 
 /// Add dataflow metadata to Loop \p L.
-void addDataFlow(Loop *L, StringRef Source = "");
+void addDataFlow(Loop *L, bool DisableStartProp = false, StringRef Source = "", DILocation *Loc = nullptr);
 
 /// Add pipeline metadata to Loop \p L.
 void addPipeline(Loop *L, int32_t II = -1, bool IsRewind = false,
@@ -58,6 +58,9 @@ void addPipelineOff(Loop *L, StringRef Source = "");
 
 /// Remove pipeline metadata attached to Loop \p L
 void removePipeline(Loop *L);
+
+/// Remove dataflow metadata attached to Loop \p L
+void removeDataflow(Loop *L);
 
 /// Add unroll full metadata to Loop \p L.
 void addFullyUnroll(Loop *L, StringRef Source = "", DILocation *Loc = nullptr);

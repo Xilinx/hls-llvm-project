@@ -1,3 +1,5 @@
+# (C) Copyright 2016-2022 Xilinx, Inc.
+# (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 add_subdirectory(clang-apply-replacements)
 add_subdirectory(clang-reorder-fields)
 add_subdirectory(modularize)
@@ -16,6 +18,7 @@ add_subdirectory(tool-template)
 
 add_subdirectory(xilinx-legacy-rewriter)
 add_subdirectory(xilinx-dataflow-lawyer)
+add_subdirectory(xilinx-performance-pragma-detector)
 
 # Add the common testsuite after all the tools.
 if(CLANG_INCLUDE_TESTS)

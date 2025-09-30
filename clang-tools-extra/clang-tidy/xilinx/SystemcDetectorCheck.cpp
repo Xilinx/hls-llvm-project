@@ -1,4 +1,5 @@
-// (c) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -35,7 +36,9 @@ namespace xilinx {
 void SystemcDetectorCheck::registerMatchers(MatchFinder *Finder) {
   if (!getLangOpts().CPlusPlus)
     return;
-  if (llvm::sys::fs::exists(Twine(FileName.getValue()))) {
+
+  if (FileName.hasValue() &&
+      llvm::sys::fs::exists(Twine(FileName.getValue()))) {
     isSystemC = true;
     return;
   }
@@ -57,7 +60,7 @@ void SystemcDetectorCheck::check(const MatchFinder::MatchResult &Result) {
 }
 
 void SystemcDetectorCheck::onEndOfTranslationUnit() {
-  if (isSystemC)
+  if (isSystemC && FileName.hasValue())
     std::ofstream o(FileName.getValue());
 
   return;

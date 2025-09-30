@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -396,12 +397,48 @@ static bool findPair(std::unordered_multimap<std::string, std::string>& IMap,
   return false;
 }
 
+// Filter out what inline messages to emit.
+static bool
+canEmitMessage(const Function *Callee, const Function *Caller,
+               std::unordered_multimap<std::string, std::string> &IMap) {
+  if (DISubprogram *CalleeDI = Callee->getSubprogram()) {
+    std::string CalleeFilename =
+                     filename(CalleeDI->getFilename(),
+                              sys::path::Style::posix);
+
+    // Skip inline message if the callee is defined in ap_int/ap_fixed
+    // header files. We don't want to emit too much messages.
+    if (isSystemHLSHeaderFunc(Callee))
+      return false;
+
+    StringRef CalleeName = Callee->getName();
+    StringRef CallerName = Caller->getName();
+    if (CalleeName.empty() || CallerName.empty() || CalleeFilename.empty())
+      return true;
+
+    std::string Loc = std::to_string(CalleeDI->getScopeLine()) +
+                      std::to_string(CalleeDI->getLine());
+    std::string Key = CalleeName.str() + CalleeFilename + Loc;
+    if (findPair(IMap, {Key, CallerName.str()}))
+      return false;
+
+    IMap.insert(std::make_pair(Key, CallerName.str()));
+    return true;
+  }
+
+  if (EmitInlineMsgEvenNoDbgInfo)
+    return true;
+  // If no debug info, then don't dump inline msg
+  return false;
+}
+
 /// Return the cost only if the inliner should attempt to inline at the given
 /// CallSite. If we return the cost, we will emit an optimisation remark later
 /// using that cost, so we won't do so from this function.
 static Optional<InlineCost>
 shouldInline(CallSite CS, function_ref<InlineCost(CallSite CS)> GetInlineCost,
-             OptimizationRemarkEmitter &ORE) {
+             OptimizationRemarkEmitter &ORE,
+             std::unordered_multimap<std::string, std::string> &InlinerMap) {
   using namespace ore;
 
   InlineCost IC = GetInlineCost(CS);
@@ -418,12 +455,14 @@ shouldInline(CallSite CS, function_ref<InlineCost(CallSite CS)> GetInlineCost,
   if (IC.isNever()) {
     DEBUG(dbgs() << "    NOT Inlining: cost=never"
                  << ", Call: " << *CS.getInstruction() << "\n");
-    ORE.emit([&]() {
-      return OptimizationRemarkMissed(DEBUG_TYPE, "NeverInline", Call)
-             << NV("Callee", Callee) << " not inlined into "
-             << NV("Caller", Caller)
-             << " because it should never be inlined (cost=never)";
-    });
+    if (canEmitMessage(Callee, Caller, InlinerMap)) {
+      ORE.emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE, "NeverInline", Call)
+               << NV("Callee", Callee) << " not inlined into "
+               << NV("Caller", Caller)
+               << " because it should never be inlined (cost=never)";
+      });
+    }
     return None;
   }
 
@@ -431,13 +470,15 @@ shouldInline(CallSite CS, function_ref<InlineCost(CallSite CS)> GetInlineCost,
     DEBUG(dbgs() << "    NOT Inlining: cost=" << IC.getCost()
                  << ", thres=" << IC.getThreshold()
                  << ", Call: " << *CS.getInstruction() << "\n");
-    ORE.emit([&]() {
-      return OptimizationRemarkMissed(DEBUG_TYPE, "TooCostly", Call)
-             << NV("Callee", Callee) << " not inlined into "
-             << NV("Caller", Caller) << " because too costly to inline (cost="
-             << NV("Cost", IC.getCost())
-             << ", threshold=" << NV("Threshold", IC.getThreshold()) << ")";
-    });
+    if (canEmitMessage(Callee, Caller, InlinerMap)) {
+      ORE.emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE, "TooCostly", Call)
+               << NV("Callee", Callee) << " not inlined into "
+               << NV("Caller", Caller) << " because too costly to inline (cost="
+               << NV("Cost", IC.getCost())
+               << ", threshold=" << NV("Threshold", IC.getThreshold()) << ")";
+      });
+    }
     return None;
   }
 
@@ -446,13 +487,15 @@ shouldInline(CallSite CS, function_ref<InlineCost(CallSite CS)> GetInlineCost,
     DEBUG(dbgs() << "    NOT Inlining: " << *CS.getInstruction()
                  << " Cost = " << IC.getCost()
                  << ", outer Cost = " << TotalSecondaryCost << '\n');
-    ORE.emit([&]() {
-      return OptimizationRemarkMissed(DEBUG_TYPE, "IncreaseCostInOtherContexts",
-                                      Call)
-             << "Not inlining. Cost of inlining " << NV("Callee", Callee)
-             << " increases the cost of inlining " << NV("Caller", Caller)
-             << " in other contexts";
-    });
+    if (canEmitMessage(Callee, Caller, InlinerMap)) {
+      ORE.emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE, "IncreaseCostInOtherContexts",
+            Call)
+               << "Not inlining. Cost of inlining " << NV("Callee", Callee)
+               << " increases the cost of inlining " << NV("Caller", Caller)
+               << " in other contexts";
+      });
+    }
 
     // IC does not bool() to false, so get an InlineCost that will.
     // This will not be inspected to make an error message.
@@ -492,50 +535,17 @@ bool LegacyInlinerBase::runOnSCC(CallGraphSCC &SCC) {
   return inlineCalls(SCC);
 }
 
-// Filter out what inline messages to emit.
-static bool
-canEmitMessage(const Function *Callee, const Function *Caller,
-               std::unordered_multimap<std::string, std::string> &IMap) {
-  if (DISubprogram *CalleeDI = Callee->getSubprogram()) {
-    std::string CalleeFilename =
-                     filename(CalleeDI->getFilename(),
-                              sys::path::Style::posix);
-
-    // Skip inline message if the callee is defined in ap_int/ap_fixed
-    // header files. We don't want to emit too much messages.
-    if (isSystemHLSHeaderFunc(Callee))
-      return false;
-
-    StringRef CalleeName = Callee->getName();
-    StringRef CallerName = Caller->getName();
-    if (CalleeName.empty() || CallerName.empty() || CalleeFilename.empty())
-      return true;
-
-    std::string Loc = std::to_string(CalleeDI->getScopeLine()) +
-                      std::to_string(CalleeDI->getLine());
-    std::string Key = CalleeName.str() + CalleeFilename + Loc;
-    if (findPair(IMap, {Key, CallerName.str()}))
-      return false;
-
-    IMap.insert(std::make_pair(Key, CallerName.str()));
-    return true;
-  }
-
-  if (EmitInlineMsgEvenNoDbgInfo)
-    return true;
-  // If no debug info, then don't dump inline msg
-  return false;
-}
-
 static bool
 inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
-                std::function<AssumptionCache &(Function &)> GetAssumptionCache,
-                ProfileSummaryInfo *PSI, TargetLibraryInfo &TLI,
-                bool InsertLifetime,
-                function_ref<InlineCost(CallSite CS)> GetInlineCost,
-                function_ref<AAResults &(Function &)> AARGetter,
-                ImportedFunctionsInliningStatistics &ImportedFunctionsStats) {
+               std::function<AssumptionCache &(Function &)> GetAssumptionCache,
+               ProfileSummaryInfo *PSI, TargetLibraryInfo &TLI,
+               bool InsertLifetime,
+               function_ref<InlineCost(CallSite CS)> GetInlineCost,
+               function_ref<AAResults &(Function &)> AARGetter,
+               ImportedFunctionsInliningStatistics &ImportedFunctionsStats) {
   SmallPtrSet<Function *, 8> SCCFunctions;
+  // Record the successful inlining pairs <callee info, caller name>.
+  std::unordered_multimap<std::string, std::string> InlinerMap;
   DEBUG(dbgs() << "Inliner visiting SCC:");
   for (CallGraphNode *Node : SCC) {
     Function *F = Node->getFunction();
@@ -557,7 +567,7 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
 
   for (CallGraphNode *Node : SCC) {
     Function *F = Node->getFunction();
-    if (!F || F->isDeclaration())
+    if (!F || F->isDeclaration() || F->hasFnAttribute(Attribute::OptimizeNone)) 
       continue;
 
     OptimizationRemarkEmitter ORE(F);
@@ -576,13 +586,15 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
           if (Callee->isDeclaration()) {
             using namespace ore;
 
-            ORE.emit([&]() {
-              return OptimizationRemarkMissed(DEBUG_TYPE, "NoDefinition", &I)
-                     << NV("Callee", Callee) << " will not be inlined into "
-                     << NV("Caller", CS.getCaller())
-                     << " because its definition is unavailable"
-                     << setIsVerbose();
-            });
+            if (canEmitMessage(Callee, F, InlinerMap)) {
+              ORE.emit([&]() {
+                return OptimizationRemarkMissed(DEBUG_TYPE, "NoDefinition", &I)
+                       << NV("Callee", Callee) << " will not be inlined into "
+                       << NV("Caller", CS.getCaller())
+                       << " because its definition is unavailable"
+                       << setIsVerbose();
+              });
+            }
             continue;
           }
 
@@ -648,10 +660,7 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
       // just become a regular analysis dependency.
       OptimizationRemarkEmitter ORE(Caller);
 
-      // Record the successful inlining pairs <callee info, caller name>.
-      std::unordered_multimap<std::string, std::string> InlinerMap;
-
-      Optional<InlineCost> OIC = shouldInline(CS, GetInlineCost, ORE);
+      Optional<InlineCost> OIC = shouldInline(CS, GetInlineCost, ORE, InlinerMap);
       // If the policy determines that we should inline this function,
       // delete the call instead.
       if (!OIC)
@@ -678,12 +687,14 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
         if (!InlineCallIfPossible(CS, InlineInfo, InlinedArrayAllocas,
                                   InlineHistoryID, InsertLifetime, AARGetter,
                                   ImportedFunctionsStats)) {
-          ORE.emit([&]() {
-            return OptimizationRemarkMissed(DEBUG_TYPE, "NotInlined", DLoc,
-                                            Block)
-                   << NV("Callee", Callee) << " will not be inlined into "
-                   << NV("Caller", Caller);
-          });
+          if (canEmitMessage(Callee, Caller, InlinerMap)) {
+            ORE.emit([&]() {
+              return OptimizationRemarkMissed(DEBUG_TYPE, "NotInlined", DLoc,
+                  Block)
+                     << NV("Callee", Callee) << " will not be inlined into "
+                     << NV("Caller", Caller);
+            });
+          }
           continue;
         }
         ++NumInlined;
@@ -702,6 +713,18 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
             }
             return R;
           });
+          if (Callee->use_empty() && 
+              Callee->hasFnAttribute("fpga.function.performance")) {
+            ORE.emit([&]() {
+              StringRef RemarkName = "PerformanceRemovedByInline";
+              OptimizationRemarkMissed R(DEBUG_TYPE, RemarkName,
+                  Callee->getSubprogram(), Block);
+              R << "Dropping performance directive for function \'" 
+                << NV("FunctionName", Callee) << "\'"
+                << " due to inline directive";
+              return R;
+            });
+          }
         }
         // If inlining this function gave us any new call sites, throw them
         // onto our worklist to process.  They are useful inline candidates.
@@ -872,6 +895,9 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
   Module &M = *InitialC.begin()->getFunction().getParent();
   ProfileSummaryInfo *PSI = MAM.getCachedResult<ProfileSummaryAnalysis>(M);
 
+  // Record the successful inlining pairs <callee info, caller name>.
+  std::unordered_multimap<std::string, std::string> InlinerMap;
+  
   // We use a single common worklist for calls across the entire SCC. We
   // process these in-order and append new calls introduced during inlining to
   // the end.
@@ -1005,7 +1031,7 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
         continue;
       }
 
-      Optional<InlineCost> OIC = shouldInline(CS, GetInlineCost, ORE);
+      Optional<InlineCost> OIC = shouldInline(CS, GetInlineCost, ORE, InlinerMap);
       // Check whether we want to inline this callsite.
       if (!OIC)
         continue;
@@ -1024,29 +1050,33 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
       using namespace ore;
 
       if (!InlineFunction(CS, IFI)) {
-        ORE.emit([&]() {
-          return OptimizationRemarkMissed(DEBUG_TYPE, "NotInlined", DLoc, Block)
-                 << NV("Callee", &Callee) << " will not be inlined into "
-                 << NV("Caller", &F);
-        });
+        if (canEmitMessage(&Callee, &F, InlinerMap)) {
+          ORE.emit([&]() {
+            return OptimizationRemarkMissed(DEBUG_TYPE, "NotInlined", DLoc, Block)
+                   << NV("Callee", &Callee) << " will not be inlined into "
+                   << NV("Caller", &F);
+          });
+        }
         continue;
       }
       DidInline = true;
       InlinedCallees.insert(&Callee);
 
-      ORE.emit([&]() {
-        bool AlwaysInline = OIC->isAlways();
-        StringRef RemarkName = AlwaysInline ? "AlwaysInline" : "Inlined";
-        OptimizationRemark R(DEBUG_TYPE, RemarkName, DLoc, Block);
-        R << "Inlining function \'" << NV("Callee", &Callee) << "\' into \'";
-        R << NV("Caller", &F) << "\'";
-        if (!AlwaysInline) {
-          R << " with cost=" << NV("Cost", OIC->getCost());
-          R << " (threshold=" << NV("Threshold", OIC->getThreshold());
-          R << ")";
-        }
-        return R;
-      });
+      if (canEmitMessage(&Callee, &F, InlinerMap)) {
+        ORE.emit([&]() {
+          bool AlwaysInline = OIC->isAlways();
+          StringRef RemarkName = AlwaysInline ? "AlwaysInline" : "Inlined";
+          OptimizationRemark R(DEBUG_TYPE, RemarkName, DLoc, Block);
+          R << "Inlining function \'" << NV("Callee", &Callee) << "\' into \'";
+          R << NV("Caller", &F) << "\'";
+          if (!AlwaysInline) {
+            R << " with cost=" << NV("Cost", OIC->getCost());
+            R << " (threshold=" << NV("Threshold", OIC->getThreshold());
+            R << ")";
+          }
+          return R;
+        });
+      }
 
       // Add any new callsites to defined functions to the worklist.
       if (!IFI.InlinedCallSites.empty()) {

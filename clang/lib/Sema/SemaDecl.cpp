@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -12503,7 +12504,8 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
 
   // Check the validity of our function parameters
   CheckParmsForFunctionDef(FD->parameters(),
-                           /*CheckParameterNames=*/true);
+                           /*CheckParameterNames=*/true,
+                           /*IsTop*/ FD->hasAttr<SDxKernelAttr>());
 
   // Add non-parameter declarations already in the function to the current
   // scope.

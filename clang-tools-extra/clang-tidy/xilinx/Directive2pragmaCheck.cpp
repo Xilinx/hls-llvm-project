@@ -1,5 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -602,6 +602,8 @@ void Directive2pragmaCheck::check(const MatchFinder::MatchResult &Result) {
   if (MatchedFunction) {
     for (unsigned i = 0; i < DirectiveList.size(); i++) {
       auto it = &DirectiveList[i];
+      if (it->FunctionName.empty()) 
+        continue;
 
       if (isSameFunction(MatchedFunction, it->FunctionName) &&
           it->Label.empty()) {
@@ -625,6 +627,8 @@ void Directive2pragmaCheck::check(const MatchFinder::MatchResult &Result) {
 
     for (unsigned i = 0; i < DirectiveList.size(); i++) {
       auto it = &DirectiveList[i];
+      if (it->FunctionName.empty()) 
+        continue;
 
       if (!it->Label.empty() && !it->Label.compare(MatchedLabel->getName()) &&
           isSameFunction(FD, it->FunctionName)) {
@@ -645,6 +649,9 @@ void Directive2pragmaCheck::check(const MatchFinder::MatchResult &Result) {
   if (VariableDecl) {
     for (unsigned i = 0; i < DirectiveList.size(); i++) {
       auto it = &DirectiveList[i];
+      if (it->FunctionName.empty()) 
+        continue;
+
       if (!PragmaInfo[it]->VarInfo)
         continue;
       for (auto Opt : it->PragmaItem.OptionList) {
@@ -720,6 +727,9 @@ void Directive2pragmaCheck::check(const MatchFinder::MatchResult &Result) {
   if (MemberDecl) {
     for (unsigned i = 0; i < DirectiveList.size(); i++) {
       auto it = &DirectiveList[i];
+      if (it->FunctionName.empty()) 
+        continue;
+
       if (!PragmaInfo[it]->VarInfo)
         continue;
       for (auto Opt : it->PragmaItem.OptionList) {

@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -2956,14 +2959,28 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   return true;
 }
 
+// CustomCombine can return:
+// - None: if it wants to defer to the default logic.
+// - Some(nullptr): if no change was made and no default logic either.
+// - Some(NewI): if NewI is the new instruction to replace the old one.
+// - Some(I): if I is the old instruction and it was modified in place.
 Instruction *InstCombiner::combine(Instruction &I,
                                    CustomCombineCallback CustomCombine) {
   if (CustomCombine) {
-    if (auto MaybeNewI = CustomCombine(I, Builder, DL)) {
-      auto NewI = *MaybeNewI;
-      if (NewI)
-        return replaceInstUsesWith(I, NewI);
-      return nullptr;
+    if (auto MaybeNewV = CustomCombine(I, Builder, DL)) {
+      auto *NewV = *MaybeNewV;
+      if (!NewV || NewV == &I)
+        return cast_or_null<Instruction>(NewV);
+
+      // FIXME: InstCombiner cannot handle Instruction replaced
+      //        by a Value in general. (issues with PHINode, issue
+      //        if the Instruction was created using the IRBuilder,
+      //        etc...)
+      //        But the "replaceInstUsesWith" and "eraseInstFromFunction"
+      //        are reliable, so we always use them instead of returning
+      //        the new Value/Instruction.
+      replaceInstUsesWith(I, NewV);
+      return eraseInstFromFunction(I);
     }
   }
 

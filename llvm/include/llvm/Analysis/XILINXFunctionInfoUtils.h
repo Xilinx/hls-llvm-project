@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -42,6 +42,7 @@ bool hasFunctionInstantiate(const Function *F);
 
 /// Returns true if Function \p F is a dataflow function.
 bool isDataFlow(const Function *F);
+bool isDataFlowLoopFunction(Function *F, LoopInfo *LI = nullptr);
 
 /// Returns true if Function \p F is a pipeline function.
 bool isPipeline(const Function *F);
@@ -89,6 +90,9 @@ bool hasFunctionLoopMerge(const Function *F);
 /// Returns true if Function \p F contains occurrence pragma
 bool hasFunctionOccurrence(const Function *F); 
 
+/// Returns true if Function \p F contains performance pragma
+bool hasFunctionPerformance(const Function *F); 
+
 /// Returns Function \p Top 's name if it's a top function.
 Optional<const std::string> getTopFunctionName(const Function *Top);
 
@@ -124,6 +128,11 @@ inline DebugLoc getPipelinePragmaLoc(Function* F)
   return getFuncPragmaLoc(F, "fpga.static.pipeline");
 }
 
+inline DebugLoc getPerformancePragmaLoc(Function* F)
+{
+  return getFuncPragmaLoc(F, "fpga.function.performance");
+}
+
 inline DebugLoc getExprBalancePragmaLoc(Function* F) 
 {
   return getFuncPragmaLoc(F, "fpga.exprbalance.func");
@@ -153,6 +162,8 @@ MemDepResult getDependency(Instruction *QueryInst, Instruction *ScanPos,
                            MemoryDependenceResults *MDR, AliasAnalysis *AA,
                            TargetLibraryInfo *TLI);
 
+/// Get performance target from HLS performance pragma.
+Optional<PerformanceTargetMDInfo> getPerformanceTarget(const Function *F);
 } // end namespace llvm
 
 #endif // LLVM_ANALYSIS_XILINXFUNCTIONINFOUTILS_H

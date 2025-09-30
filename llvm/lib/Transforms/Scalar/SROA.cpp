@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -4041,6 +4042,47 @@ AllocaInst *SROA::rewritePartition(AllocaInst &AI, AllocaSlices &AS,
   return NewAI;
 }
 
+/// \brief  this function is responsible for determining if any of the partitions 
+/// in the AS object are array types and returning true if at least one partition 
+/// is an array type, and false otherwise.
+static bool checkArrayTyPartition(AllocaInst &AI, AllocaSlices &AS,
+                                  LLVMContext *C) {
+
+  for (auto &P : AS.partitions()) {
+    Type *SliceTy = nullptr;
+    const DataLayout &DL = AI.getModule()->getDataLayout();
+    if (Type *CommonUseTy = findCommonType(P.begin(), P.end(), P.endOffset()))
+      if (DL.getTypeAllocSize(CommonUseTy) >= P.size())
+        SliceTy = CommonUseTy;
+    if (!SliceTy)
+      if (Type *TypePartitionTy = getTypePartition(DL, AI.getAllocatedType(),
+            P.beginOffset(), P.size()))
+        SliceTy = TypePartitionTy;
+    if ((!SliceTy || (SliceTy->isArrayTy() &&
+            SliceTy->getArrayElementType()->isIntegerTy())) &&
+        DL.isLegalInteger(P.size() * 8))
+      SliceTy = Type::getIntNTy(*C, P.size() * 8);
+    if (!SliceTy)
+      SliceTy = ArrayType::get(Type::getInt8Ty(*C), P.size());
+    assert(DL.getTypeAllocSize(SliceTy) >= P.size());
+
+    bool IsIntegerPromotable = isIntegerWideningViable(P, SliceTy, DL);
+
+    VectorType *VecTy =
+      IsIntegerPromotable ? nullptr : isVectorPromotionViable(P, DL);
+    if (VecTy)
+      SliceTy = VecTy;
+
+    DEBUG(dbgs() << "Check slice type " << *SliceTy << "\n");
+
+    if (SliceTy->isArrayTy()) {
+      DEBUG(dbgs() << "Quit because new SLICE is array type " << *SliceTy << "\n");
+      return true;
+    }
+  }
+  return false;
+}
+
 /// \brief Walks the slices of an alloca and form partitions based on them,
 /// rewriting each of their uses.
 bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
@@ -4253,6 +4295,9 @@ bool SROA::runOnAlloca(AllocaInst &AI) {
   AllocaSlices AS(DL, AI);
   DEBUG(AS.print(dbgs()));
   if (AS.isEscaped())
+    return Changed;
+
+  if (checkArrayTyPartition(AI, AS, C))
     return Changed;
 
   // Delete all the dead users of this alloca before splitting and rewriting it.

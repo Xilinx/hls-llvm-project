@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -26,8 +26,10 @@
 
 #if XILINX_HLS_FE_STANDALONE
 #include "llvm/Support/XILINXFPGAPlatformBasic.h"
+#include "llvm/Support/XilinxPlat/SqliteSelector.h"
 #else
 #include "XILINXFPGAPlatformBasic.h"
+#include "SqliteSelector.h"
 #endif
 
 #include <iostream>
@@ -35,8 +37,6 @@
 #include <map>
 #include <limits>
 #include <cassert>
-
-#include <sqlite3.h>
 
 
 // WARNING: GRPSIZE must > IMPL_MAX
@@ -625,11 +625,17 @@ std::pair<PlatformBasic::MEMORY_TYPE, PlatformBasic::MEMORY_IMPL> PlatformBasic:
         case PlatformBasic::RAM_2P_URAM:
             memoryPair = std::make_pair(MEMORY_RAM_2P, MEMORY_IMPL_URAM);
             break;
+        case PlatformBasic::RAM_T2P_AUTO:
+            memoryPair = std::make_pair(MEMORY_RAM_T2P, MEMORY_IMPL_AUTO);
+            break;
         case PlatformBasic::RAM_T2P_BRAM:
             memoryPair = std::make_pair(MEMORY_RAM_T2P, MEMORY_IMPL_BRAM);
             break;
         case PlatformBasic::RAM_T2P_URAM:
             memoryPair = std::make_pair(MEMORY_RAM_T2P, MEMORY_IMPL_URAM);
+            break;
+        case PlatformBasic::RAM_S2P_AUTO:
+            memoryPair = std::make_pair(MEMORY_RAM_S2P, MEMORY_IMPL_AUTO);
             break;
         case PlatformBasic::RAM_S2P_LUTRAM:
             memoryPair = std::make_pair(MEMORY_RAM_S2P, MEMORY_IMPL_LUTRAM);
@@ -877,11 +883,6 @@ PlatformBasic::~PlatformBasic()
     mCoreNameMapInCompleteRepository.clear();
 }
 
-static std::string default_db_file  = "";
-void SetPlatformDbFile( std::string db_file) 
-{
-    default_db_file = db_file;
-}
 static std::string g_device_resource_info  = "";
 void SetPlatformDeviceResourceInfo( std::string resource_info) 
 {
@@ -1464,171 +1465,7 @@ bool PlatformBasic::isMemoryOp(OP_TYPE op)
            op == OP_NBREAD || 
            op == OP_NBWRITE;
 }
-namespace // for sqlite reading
-{
-// load platform from database
-int loadOrSaveDb(sqlite3 *pInMemory, const char *zFilename, int isSave){
-  int rc;                   /* Function return code */
-  sqlite3 *pFile;           /* Database connection opened on zFilename */
-  sqlite3_backup *pBackup;  /* Backup object used to copy data */
-  sqlite3 *pTo;             /* Database to copy to (pFile or pInMemory) */
-  sqlite3 *pFrom;           /* Database to copy from (pFile or pInMemory) */
 
-  /* Open the database file identified by zFilename. Exit early if this fails
-  ** for any reason. */
-  rc = sqlite3_open(zFilename, &pFile);
-  if( rc==SQLITE_OK ){
-
-    /* If this is a 'load' operation (isSave==0), then data is copied
-    ** from the database file just opened to database pInMemory. 
-    ** Otherwise, if this is a 'save' operation (isSave==1), then data
-    ** is copied from pInMemory to pFile.  Set the variables pFrom and
-    ** pTo accordingly. */
-    pFrom = (isSave ? pInMemory : pFile);
-    pTo   = (isSave ? pFile     : pInMemory);
-
-    /* Set up the backup procedure to copy from the "main" database of 
-    ** connection pFile to the main database of connection pInMemory.
-    ** If something goes wrong, pBackup will be set to NULL and an error
-    ** code and message left in connection pTo.
-    **
-    ** If the backup object is successfully created, call backup_step()
-    ** to copy data from pFile to pInMemory. Then call backup_finish()
-    ** to release resources associated with the pBackup object.  If an
-    ** error occurred, then an error code and message will be left in
-    ** connection pTo. If no error occurred, then the error code belonging
-    ** to pTo is set to SQLITE_OK.
-    */
-    pBackup = sqlite3_backup_init(pTo, "main", pFrom, "main");
-    if( pBackup ){
-      (void)sqlite3_backup_step(pBackup, -1);
-      (void)sqlite3_backup_finish(pBackup);
-    }
-    rc = sqlite3_errcode(pTo);
-  }
-
-  /* Close the database connection opened on database file zFilename
-  ** and return the result of this function. */
-  (void)sqlite3_close(pFile);
-  return rc;
-}
-
-struct CoreBasicDef
-{
-    std::string type;
-    std::string name;
-    std::string op;
-    std::string impl;
-    int maxLat;
-    int minLat;
-    bool isPublic;
-};
-
-
-class Selector
-{
-public:
-    static Selector& getInstance() { static Selector s; return s; }
-private:
-    sqlite3* mDb;
-
-// Selector
-Selector()
-{
-    //std::string db_file = HPAParamMgr::getParamMgr()->getValueIfExistAsString("hls.external_core_database", default_db_file);
-    //if(db_file.empty())
-    //{
-    //    db_file = default_db_file;
-    //}
-    // TODO
-    std::string db_file(default_db_file);
-    int rc = sqlite3_open(":memory:", &mDb);
-    // if(rc), message out and exit.
-    assert(rc == SQLITE_OK);
-    rc = loadOrSaveDb(mDb, db_file.c_str(), 0);
-    assert(rc == SQLITE_OK);
-    if(rc != SQLITE_OK)
-    {
-        // TODO
-        //ComMsgMgr::SendMsg(ComMsgMgr::MSGTYPE_ERROR, "@200-1608@");
-        //throw xpcl::MessageReporter::Exception("");
-    }
-}
-
-~Selector() { sqlite3_close(mDb); }
-    
-std::string safe_get_string (sqlite3_stmt* ppStmt, int col)
-{
-    const unsigned char* result = sqlite3_column_text(ppStmt, col);
-    std::string value;
-    if(result)
-    {   
-        value = reinterpret_cast<const char*>(result);
-    }
-    return value;
-};
-
-public:
-std::vector<CoreBasicDef*> selectCoreBasics(std::string cmd)
-{
-    std::vector<CoreBasicDef*> coreBasicDefs;
-    sqlite3_stmt* ppStmt;
-    const char* pzTail;
-    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
-    if(rc != SQLITE_OK) return coreBasicDefs;
-
-    while(sqlite3_step(ppStmt) == SQLITE_ROW)
-    {
-        auto def = new CoreBasicDef();
-        def->name = safe_get_string(ppStmt, 0);
-        def->type = safe_get_string(ppStmt, 1);
-        def->op = safe_get_string(ppStmt, 2);
-        def->impl = safe_get_string(ppStmt, 3);
-        int maxLatency = sqlite3_column_int(ppStmt, 4);
-        // -2 means max value of int in this column
-        def->maxLat = maxLatency == -2 ? std::numeric_limits<int>::max() : maxLatency;
-        def->minLat = sqlite3_column_int(ppStmt, 5);
-        def->isPublic = sqlite3_column_int(ppStmt, 6);
-
-        coreBasicDefs.push_back(def);
-    }
-    sqlite3_finalize(ppStmt);
-    return coreBasicDefs;
-}
-
-std::map<int, std::string> selectEncode(std::string cmd)
-{
-    std::map<int, std::string> encodeMap;
-    sqlite3_stmt* ppStmt;
-    const char* pzTail;
-    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
-    assert(rc == SQLITE_OK);
-
-    while(sqlite3_step(ppStmt) == SQLITE_ROW)
-    {
-       encodeMap[sqlite3_column_int(ppStmt, 0)] = safe_get_string(ppStmt, 1);
-    };
-    sqlite3_finalize(ppStmt);
-    return encodeMap;
-}
-
-std::map<std::string, std::string> selectAliasCores(std::string cmd)
-{
-    std::map<std::string, std::string> aliasMap;
-    sqlite3_stmt* ppStmt;
-    const char* pzTail;
-    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
-    assert(rc == SQLITE_OK);
-    while(sqlite3_step(ppStmt) == SQLITE_ROW)
-    {
-       aliasMap[safe_get_string(ppStmt, 0)] = safe_get_string(ppStmt, 1);
-    };
-    sqlite3_finalize(ppStmt);
-    return aliasMap;
-}
-};//< class Selector
-
-} //< namespace
 void PlatformBasic::checkEnumEncode()
 {
     assert(OP_ADAPTER == getOpFromName("adapter"));
@@ -2016,7 +1853,7 @@ bool createStrEnumConverter(std::string type,
     std::string cmd = "select CODE,STRING from platform_basic_assit where TYPE = '"
                       + type +
                       "' ";
-    auto& selector = Selector::getInstance();
+    auto& selector = Selector::getSelector();
     std::map<int, std::string> codeMap = selector.selectEncode(cmd);
     for(auto pair : codeMap)
     {
@@ -2084,7 +1921,7 @@ bool PlatformBasic::loadCoreBasicInCompleteRepository()
 {
     mCoreNameMapInCompleteRepository.clear();
 
-    auto& selector = Selector::getInstance();
+    auto& selector = Selector::getSelector();
     std::string cmd = "select CORE_NAME,TYPE,OP,IMPL,MAX_LATENCY,MIN_LATENCY,IS_PUBLIC from COMPLETE_CoreDef ";
     std::vector<CoreBasicDef*> defs = selector.selectCoreBasics(cmd);
 
@@ -2148,7 +1985,7 @@ bool PlatformBasic::loadCoreBasic(const std::string& libraryName)
     mCoreBasicMap.clear();
     mCoreNameMap.clear();
 
-    auto& selector = Selector::getInstance();
+    auto& selector = Selector::getSelector();
     std::string cmd = "select CORE_NAME,TYPE,OP,IMPL,MAX_LATENCY,MIN_LATENCY,IS_PUBLIC from " +
                       libraryName + "_CoreDef ";
     std::vector<CoreBasicDef*> defs = selector.selectCoreBasics(cmd);
@@ -2210,7 +2047,7 @@ bool PlatformBasic::loadCoreBasic(const std::string& libraryName)
 
 bool PlatformBasic::loadAlias()
 {
-    auto& selector = Selector::getInstance();
+    auto& selector = Selector::getSelector();
     std::string cmd = "select CORE_NAME,BASE from platform_basic_deprecated where TYPE == 'alias' ";
     std::map<std::string, std::string> aliasMap = selector.selectAliasCores(cmd);
     for(auto& pair : aliasMap)
@@ -2241,6 +2078,22 @@ bool PlatformBasic::supportFAcc() const
 bool PlatformBasic::supportCMul() const
 {
     return verifyOpIsSupported(OP_CMUL);
+}
+
+bool PlatformBasic::supportAPFloat() const
+{
+    return verifyOpIsSupported(OP_APFLOATADD) && 
+            verifyOpIsSupported(OP_APFLOATSUB) && 
+            verifyOpIsSupported(OP_APFLOATMUL) && 
+            verifyOpIsSupported(OP_APFLOATDIV) && 
+            verifyOpIsSupported(OP_APFLOATCMP) && 
+            verifyOpIsSupported(OP_APFLOATFMA) && 
+            verifyOpIsSupported(OP_APFLOATSQR) && 
+            verifyOpIsSupported(OP_APFLOATFIXED2FLOAT) && 
+            verifyOpIsSupported(OP_APFLOATFLOAT2FIXED) && 
+            verifyOpIsSupported(OP_APFLOATFLOAT2FLOAT) && 
+            verifyOpIsSupported(OP_APFLOATACC);
+           
 }
 
 bool PlatformBasic::verifyOpIsSupported (OP_TYPE op) const

@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -186,6 +187,15 @@ void LLVMContext::setOptRemarkFile(ToolOutputFile* F) {
 
 void LLVMContext::setDiagnosticsOutputFile(std::unique_ptr<yaml::Output> F) {
   pImpl->DiagnosticsOutputFile = std::move(F);
+}
+
+static std::unique_ptr<yaml::Output> SavedOutputFile;
+void LLVMContext::saveAndClearDiagnosticsOutputFile() {
+  SavedOutputFile = std::move(pImpl->DiagnosticsOutputFile);
+}
+
+void LLVMContext::restoreDiagnosticsOutputFile() {
+  pImpl->DiagnosticsOutputFile = std::move(SavedOutputFile);
 }
 
 DiagnosticHandler::DiagnosticHandlerTy

@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -4846,6 +4846,10 @@ const SCEV *ScalarEvolution::createSimpleAffineAddRec(PHINode *PN,
       if (auto *PHISCEV = createTwoIterAffineAddRec(PN, BEValueC, StartValueC))
         return PHISCEV;
 
+  if (isa<SelectInst>(BEValueV))
+    if (auto *S = createURemAddRec(PN, BEValueV, StartValueV))
+      return S;
+
   auto BO = MatchBinaryOp(BEValueV, DT);
   if (!BO)
     return nullptr;
@@ -5185,6 +5189,8 @@ const SCEV *ScalarEvolution::createNodeFromSelectLikePHI(PHINode *PN) {
 }
 
 const SCEV *ScalarEvolution::createNodeForPHI(PHINode *PN) {
+  DEBUG(dbgs() << "SCEV: createNodeForPHI(" << *PN << ")\n");
+
   if (const SCEV *S = createAddRecFromPHI(PN))
     return S;
 
@@ -7869,6 +7875,125 @@ const SCEV *ScalarEvolution::createTwoIterAffineAddRec(PHINode *PN,
   const SCEV *StartExpr = getConstant(Start);
   const SCEV *IncrExpr = getConstant(BE - Start);
   return getAddRecExpr(StartExpr, IncrExpr, L, Flags);
+}
+
+/// A helper function for createAddRecFromPHI to handle loop which
+/// implements a modulus operation on the induction variable.
+///
+/// It is common for loop-strenght reduction to rewrite urem of the
+/// induction variable as a recurrent phi node with a select:
+///
+///     loop:
+///       %i = phi i64 [ 0, %entry ], [ %i.mod.3, %loop ]
+///       %i.eq.3 = icmp eq i64 %i, 3
+///       %i.next = add i64 %i, 1
+///       %i.mod.3 = select i1 %i.eq.3, i64 0, i64 %i.next
+///
+/// The above example is equivalent to `{0, +, 1}<%loop> % 4`.
+///
+/// Note: URem has a rather expensive representation as SCEV.
+const SCEV *ScalarEvolution::createURemAddRec(PHINode *PN, Value *BE,
+                                              Value *Start) {
+  const Loop *L = LI.getLoopFor(PN->getParent());
+  assert(L && L->getHeader() == PN->getParent());
+  assert(BE && Start);
+
+  auto *BEI = dyn_cast<SelectInst>(BE);
+  if (!BEI)
+    return nullptr;
+
+  bool CondReset; // The condition that resets the recurrence.
+  Value *NextValue; // The value to use for the next iteration if not reset.
+  if (BEI->getTrueValue() == Start) {
+    CondReset = true;
+    NextValue = BEI->getFalseValue();
+  } else if (BEI->getFalseValue() == Start) {
+    CondReset = false;
+    NextValue = BEI->getTrueValue();
+  } else {
+    return nullptr;
+  }
+
+  using namespace PatternMatch;
+  // Check we start and reset at 0
+  // TODO: Support arbitrary loop-invariant start/reset.
+  if (!match(Start, m_Zero()))
+    return nullptr;
+
+  // Check we increment by one at each iteration.
+  // TODO: Support arbitrary loop-invariant increment.
+  Value *Incr;
+  if (!match(NextValue, m_Add(m_Specific(PN), m_Value(Incr))) ||
+      !match(Incr, m_One()))
+    return nullptr;
+
+  // Check the condition is an upper-bound comparison with phi-node.
+  // TODO: Support arbitrary affine function of phi-node.
+  auto *CondI = dyn_cast<ICmpInst>(BEI->getCondition());
+  if (!CondI)
+    return nullptr;
+
+  auto Pred = CondI->getPredicate();
+  if (CondReset == false)
+    Pred = ICmpInst::getInversePredicate(Pred);
+
+  // From there on, the predicate is a "reset" predicate:
+  //   - true if the recurrence is reset
+  //   - false if the recurrence is incremented
+  
+  auto *LHS = CondI->getOperand(0);
+  auto *RHS = CondI->getOperand(1);
+  if (RHS == PN || RHS == NextValue) {
+    std::swap(LHS, RHS);
+    Pred = ICmpInst::getSwappedPredicate(Pred);
+  }
+  if (LHS != PN && LHS != NextValue)
+    return nullptr;
+
+  // From there on, the predicate has the Phi-node as LHS
+  // or its incremented value.
+
+  // Remember if we compare before or after the increment.
+  bool PreIncr = LHS == PN;
+
+  // Check the predicate is false until the upper-bound.
+  if (Pred != ICmpInst::ICMP_EQ &&
+      Pred != ICmpInst::ICMP_SGE &&
+      Pred != ICmpInst::ICMP_UGE &&
+      Pred != ICmpInst::ICMP_SGT &&
+      Pred != ICmpInst::ICMP_UGT)
+    return nullptr;
+  
+  // Check the predicate is true when the recurrence is reset.
+  bool IterOnceMore = ICmpInst::isFalseWhenEqual(Pred);
+
+  // Check the upper-bound is a constant.
+  // TODO: Support arbitrary loop-invariant upper-bound.
+  auto *UpperBound = dyn_cast<ConstantInt>(RHS);
+  if (!UpperBound)
+    return nullptr;
+
+  // Compute the modulo value.
+  // FIXME: Assumes the above add is 1.
+  auto Mod = UpperBound->getValue();
+  if (PreIncr)
+    Mod = Mod + 1;
+  if (IterOnceMore)
+    Mod = Mod + 1;
+
+  // Check the modulo value is greater than 1.
+  // FIXME: This avoid various overflow situations
+  if (Mod.isNegative() || Mod.isNullValue() || Mod.isOneValue())
+    return nullptr;
+
+  // Check the upper-bound is a power of two.
+  // TODO: Support arbitrary constant. (we do this because URemSCEV are expensive)
+  if (!Mod.isPowerOf2())
+    return nullptr;
+
+  auto *AddRec = getAddRecExpr(getSCEV(Start), getSCEV(Incr), L, SCEV::FlagAnyWrap);
+  auto *URem = getURemExpr(AddRec, getConstant(Mod));
+  return URem;
 }
 
 /// getConstantEvolutionLoopExitValue - If we know that the specified Phi is
@@ -12102,7 +12227,8 @@ public:
 
     // If Operand is not negative, use zext instead
     auto *Zero = SE.getZero(Operand->getType());
-    if (SE.isLoopEntryGuardedByCond(L, ICmpInst::ICMP_SGE, Operand, Zero))
+    if (HLS && SE.isAvailableAtLoopEntry(Operand, L) &&
+        SE.isLoopEntryGuardedByCond(L, ICmpInst::ICMP_SGE, Operand, Zero))
       return SE.getZeroExtendExpr(Operand, Expr->getType());
 
     return SE.getSignExtendExpr(Operand, Expr->getType());

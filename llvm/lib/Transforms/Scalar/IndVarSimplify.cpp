@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -49,6 +49,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/XILINXLoopInfoUtils.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/ConstantRange.h"
@@ -91,6 +92,8 @@
 #include <utility>
 
 using namespace llvm;
+
+extern cl::opt<bool> HLS;
 
 #define DEBUG_TYPE "indvars"
 
@@ -608,6 +611,11 @@ void IndVarSimplify::rewriteLoopExitValues(Loop *L, SCEVExpander &Rewriter) {
         if (!SE->isLoopInvariant(ExitValue, L) ||
             !isSafeToExpand(ExitValue, *SE))
           continue;
+        // Don't generate additional PHI on dataflow loop
+        if (HLS)
+          if (isa<SCEVAddRecExpr>(ExitValue) &&
+              isDataFlow(cast<SCEVAddRecExpr>(ExitValue)->getLoop()))
+            continue;
 
         // Computing the value outside of the loop brings no benefit if :
         //  - it is definitely used inside the loop in a way which can not be

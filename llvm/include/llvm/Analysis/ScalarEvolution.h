@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1504,6 +1504,11 @@ private:
   /// one backedge taken count. (as those simplify into non recurrent PHI)
   const SCEV *createTwoIterAffineAddRec(PHINode *PN, ConstantInt *BECst,
                                         ConstantInt *StartCst);
+
+  /// A helper function for createSimpleAffineAddRec to handle loop which
+  /// implements a modulus operation on the induction variable.
+  const SCEV *createURemAddRec(PHINode *PN, Value *BEValueV,
+                               Value *StartValueV);
 
   /// A helper function for createAddRecFromPHI to handle simple cases.
   const SCEV *createSimpleAffineAddRec(PHINode *PN, Value *BEValueV,

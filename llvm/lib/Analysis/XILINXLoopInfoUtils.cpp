@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -30,6 +30,12 @@ using namespace llvm;
 bool llvm::isForLoop(const Loop *L) {
   const BasicBlock *Latch = L->getLoopLatch();
   return Latch && !L->isLoopExiting(Latch) && L->isLoopExiting(L->getHeader());
+}
+
+bool llvm::isInfiniteLoop(const Loop *L) {
+  SmallVector<BasicBlock *, 1> ExitBBs;
+  L->getExitBlocks(ExitBBs);
+  return ExitBBs.empty();
 }
 
 bool llvm::isRotatedLoop(const Loop *L) {
@@ -241,6 +247,13 @@ bool llvm::isDataFlow(const Loop *L) {
   return hasLoopMetadata(L, "llvm.loop.dataflow.enable");
 }
 
+bool llvm::hasDataflowDisableStartPropa(const Loop *L) {
+  auto *MD = getLoopMetadata(L, "llvm.loop.dataflow.enable");
+  if (!MD)
+    return false;
+  return mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
+}
+
 bool llvm::isParallel(const Loop *L) {
   return hasLoopMetadata(L, "reflow.parallel.loop");
 }
@@ -386,6 +399,12 @@ bool llvm::hasLoopTripCount(const Loop *L) {
   return false;
 }
 
+bool llvm::hasLoopPerformance(const Loop *L) {
+  if (!L)
+    return false;
+  MDNode *MD = getLoopMetadata(L, "fpga.loop.performance");
+  return MD != nullptr;
+}
 
 bool llvm::hasUnrollEnableMetadata(const Loop *L) {
   return hasLoopMetadata(L, "llvm.loop.unroll.count") ||
@@ -555,6 +574,10 @@ DebugLoc llvm::getLoopPipelinePragmaLoc( const Loop *L ) {
   return getLoopPragmaLoc( "llvm.loop.pipeline.enable" , L );
 }
 
+DebugLoc llvm::getLoopPerformancePragmaLoc( const Loop *L ) { 
+  return getLoopPragmaLoc( "fpga.loop.performance" , L );
+}
+
 DebugLoc llvm::getLoopUnrollPragmaLoc( const Loop *L ) { 
   DebugLoc loc ; 
   if ( loc = getLoopPragmaLoc( "llvm.loop.unroll.full", L ) ) { 
@@ -650,4 +673,130 @@ Optional<int> llvm::getFlattenCheckerEncode(Loop *L) {
     return mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
 
   return None;
+}
+
+Optional<PerformanceTargetMDInfo> llvm::getPerformanceTarget(const Loop *L) {
+  if (MDNode *MD = getLoopMetadata(L, "fpga.loop.performance")) {
+    assert(MD->getNumOperands() >= 4 && "invalid loop performance pragma");
+    auto P = cast<MDString>(MD->getOperand(1))->getString();
+    SmallVector<StringRef, 4> PerformanceStrVec;
+    P.split(PerformanceStrVec, ';');
+    if (PerformanceStrVec.size() != 4)
+      return None;
+    long long TargetTI = 0, TargetTL = 0, AssumeTI = 0, AssumeTL = 0;
+    {
+      auto PP = PerformanceStrVec[0].split('=');
+      if (PP.first != "target_ti" ||
+          getAsSignedInteger(PP.second, 10, TargetTI))
+        return None;
+    }
+    {
+      auto PP = PerformanceStrVec[1].split('=');
+      if (PP.first != "target_tl" ||
+          getAsSignedInteger(PP.second, 10, TargetTL))
+        return None;
+    }
+    {
+      auto PP = PerformanceStrVec[2].split('=');
+      if (PP.first != "assume_ti" ||
+          getAsSignedInteger(PP.second, 10, AssumeTI))
+        return None;
+    }
+    {
+      auto PP = PerformanceStrVec[3].split('=');
+      if (PP.first != "assume_tl" ||
+          getAsSignedInteger(PP.second, 10, AssumeTL))
+        return None;
+    }
+    std::string Source = "";
+    if (MD->getNumOperands() >= 4 && isa<MDString>(MD->getOperand(2)))
+      Source = cast<MDString>(MD->getOperand(2))->getString();
+    DILocation *DL = 
+      dyn_cast<DILocation>(MD->getOperand(MD->getNumOperands() - 1));
+    return PerformanceTargetMDInfo(TargetTI, TargetTL, AssumeTI, AssumeTL,
+        Source, DL);
+  }
+  return None;
+}
+
+bool llvm::IsDataflowPragmaFromUser(Loop *L) {
+  auto *LID = L->getLoopID();
+  if (!LID)
+    return false;
+  auto *MD = GetUnrollMetadata(LID, "llvm.loop.dataflow.enable");
+  if (!MD)
+    return false;
+  return getPragmaSourceFromMDNode(MD) == "user";
+}
+
+PHINode *llvm::getDataflowLoopInductionVariable(Loop *L, ScalarEvolution &SE,
+                                                bool Strict) {
+  if (!L->isLoopSimplifyForm())
+    return nullptr;
+
+  BasicBlock *Header = L->getHeader();
+  assert(Header && "Expected a valid loop header");
+  auto *ExitingBB = L->getExitingBlock();
+  if (!ExitingBB || ExitingBB != Header) // only support for-loop
+    return nullptr;
+
+  auto getCmpInst = [](BasicBlock *BB) -> ICmpInst * {
+    if (BranchInst *BI = dyn_cast_or_null<BranchInst>(BB->getTerminator()))
+      if (BI->isConditional())
+        return dyn_cast<ICmpInst>(BI->getCondition());
+
+    return nullptr;
+  };
+  auto *CmpInst = getCmpInst(ExitingBB);
+  if (!CmpInst)
+    return nullptr;
+
+  auto stripCast = [](Value *V) -> Value * {
+    while (CastInst *Cast = dyn_cast<CastInst>(V)) {
+      V = Cast->getOperand(0);
+    }
+    return V;
+  };
+
+  auto *LatchCmpOp0 = stripCast(CmpInst->getOperand(0));
+  auto *LatchCmpOp1 = stripCast(CmpInst->getOperand(1));
+
+  for (PHINode &IndVar : Header->phis()) {
+    if (!Strict && (&IndVar == LatchCmpOp0 || &IndVar == LatchCmpOp1))
+      return &IndVar;
+
+    InductionDescriptor IndDesc;
+    if (!InductionDescriptor::isInductionPHI(&IndVar, L, &SE, IndDesc))
+      continue;
+
+    if (Strict) {
+      // check lower-bound
+      auto *StartV = IndDesc.getStartValue();
+      if (!StartV || !isa<ConstantInt>(StartV))
+        continue;
+      // check step
+      auto *StepV = IndDesc.getStep();
+      if (!StepV || !isa<SCEVConstant>(StepV) ||
+          cast<SCEVConstant>(StepV)->getValue()->getSExtValue() < 0)
+        continue;
+    }
+
+    Instruction *StepInst = IndDesc.getInductionBinOp();
+
+    // case 1:
+    // IndVar = phi[{InitialValue, preheader}, {StepInst, latch}]
+    // StepInst = IndVar + step
+    // cmp = StepInst < FinalValue
+    if (StepInst == LatchCmpOp0 || StepInst == LatchCmpOp1)
+      return &IndVar;
+
+    // case 2:
+    // IndVar = phi[{InitialValue, preheader}, {StepInst, latch}]
+    // StepInst = IndVar + step
+    // cmp = IndVar < FinalValue
+    if (&IndVar == LatchCmpOp0 || &IndVar == LatchCmpOp1)
+      return &IndVar;
+  }
+
+  return nullptr;
 }

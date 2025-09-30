@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -88,4 +91,20 @@ bool DiagnosticHandler::isPassedOptRemarkEnabled(StringRef PassName) const {
 bool DiagnosticHandler::isAnyRemarkEnabled() const {
   return (PassRemarksPassedOptLoc.Pattern || PassRemarksMissedOptLoc.Pattern ||
           PassRemarksAnalysisOptLoc.Pattern);
+}
+
+static std::shared_ptr<Regex> SavedRemarksPassedOptPattern;
+static std::shared_ptr<Regex> SavedRemarksMissedOptPattern;
+static std::shared_ptr<Regex> SavedRemarksAnalysisOptPattern;
+
+void DiagnosticHandler::disableRemarksTemporarily() {
+  SavedRemarksPassedOptPattern = std::move(PassRemarksPassedOptLoc.Pattern);
+  SavedRemarksMissedOptPattern = std::move(PassRemarksMissedOptLoc.Pattern);
+  SavedRemarksAnalysisOptPattern = std::move(PassRemarksAnalysisOptLoc.Pattern);
+}
+
+void DiagnosticHandler::recoverRemarks() {
+  PassRemarksPassedOptLoc.Pattern = std::move(SavedRemarksPassedOptPattern);
+  PassRemarksMissedOptLoc.Pattern = std::move(SavedRemarksMissedOptPattern);
+  PassRemarksAnalysisOptLoc.Pattern = std::move(SavedRemarksAnalysisOptPattern);
 }

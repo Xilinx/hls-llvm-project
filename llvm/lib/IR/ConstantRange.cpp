@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1016,15 +1016,23 @@ ConstantRange::binaryAnd(const ConstantRange &Other) const {
 
 ConstantRange
 ConstantRange::binaryOr(const ConstantRange &Other) const {
+  unsigned BitWidth = getBitWidth();
   if (isEmptySet() || Other.isEmptySet())
-    return ConstantRange(getBitWidth(), /*isFullSet=*/false);
+    return ConstantRange(BitWidth, /*isFullSet=*/false);
 
   // TODO: replace this with something less conservative
 
-  APInt umax = APIntOps::umax(getUnsignedMin(), Other.getUnsignedMin());
-  if (umax.isNullValue())
-    return ConstantRange(getBitWidth(), /*isFullSet=*/true);
-  return ConstantRange(std::move(umax), APInt::getNullValue(getBitWidth()));
+  APInt maxup = APIntOps::umax(getUnsignedMax(), Other.getUnsignedMax());
+  if (maxup.isMinValue())
+    return ConstantRange(maxup);
+  APInt minup = APIntOps::umin(getUnsignedMax(), Other.getUnsignedMax());
+  APInt mask = APInt::getNullValue(BitWidth);
+  if (!minup.isMinValue())
+    mask = APInt::getMaxValue(minup.getActiveBits()).zextOrSelf(BitWidth);
+  APInt min = APIntOps::umax(getUnsignedMin(), Other.getUnsignedMin());
+  APInt max = maxup | mask;
+  return (min == max + 1) ? ConstantRange(BitWidth, /*isFullSet=*/true)
+                          : ConstantRange(min, max + 1);
 }
 
 ConstantRange

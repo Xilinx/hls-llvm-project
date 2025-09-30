@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -253,20 +253,23 @@ FullDependence::FullDependence(Instruction *Source, Instruction *Destination,
 
 // getDirection - Returns the direction associated with a particular level.
 unsigned FullDependence::getDirection(unsigned Level) const {
-  assert(0 < Level && Level <= Levels && "Level out of range");
-  return DV[Level - 1].Direction;
+  assert(Level <= Levels && "Level out of range");
+  return Level == 0 ? DepOnFunction.Direction : DV[Level - 1].Direction;
 }
 
 void FullDependence::setDirection(unsigned Level, unsigned Dir) {
-  assert(0 < Level && Level <= Levels && "Level out of range");
-  DV[Level - 1].Direction = Dir;
+  assert(Level <= Levels && "Level out of range");
+  if (Level > 0)
+    DV[Level - 1].Direction = Dir;
+  else
+    DepOnFunction.Direction = Dir;
 }
 
 
 // Returns the distance (or NULL) associated with a particular level.
 const SCEV *FullDependence::getDistance(unsigned Level) const {
-  assert(0 < Level && Level <= Levels && "Level out of range");
-  return DV[Level - 1].Distance;
+  assert(Level <= Levels && "Level out of range");
+  return Level == 0 ? DepOnFunction.Distance : DV[Level - 1].Distance;
 }
 
 
@@ -736,7 +739,8 @@ Value *getPointerOperand(Instruction *I) {
 //     f - 6
 //     g - 7 = MaxLevels
 void DependenceInfo::establishNestingLevels(const Instruction *Src,
-                                            const Instruction *Dst) {
+                                            const Instruction *Dst,
+                                            unsigned OuterMostLevel) {
   const BasicBlock *SrcBlock = Src->getParent();
   const BasicBlock *DstBlock = Dst->getParent();
   unsigned SrcLevel = LI->getLoopDepth(SrcBlock);
@@ -760,6 +764,8 @@ void DependenceInfo::establishNestingLevels(const Instruction *Src,
   }
   CommonLevels = SrcLevel;
   MaxLevels -= CommonLevels;
+  assert(OuterMostLevel <= CommonLevels);
+  OuterMostCommonLevel = OuterMostLevel;
 }
 
 
@@ -884,8 +890,18 @@ void DependenceInfo::removeMatchingExtensions(Subscript *Pair) {
 bool DependenceInfo::checkSrcSubscript(const SCEV *Src, const Loop *LoopNest,
                                        SmallBitVector &Loops) {
   const SCEVAddRecExpr *AddRec = dyn_cast<SCEVAddRecExpr>(Src);
-  if (!AddRec)
-    return isLoopInvariant(Src, LoopNest);
+  if (OuterMostCommonLevel > 0) {
+    const Loop *OuterMostLoop = LoopNest;
+    while(OuterMostLoop->getLoopDepth() > OuterMostCommonLevel)
+      OuterMostLoop = OuterMostLoop->getParentLoop();
+    if (!AddRec)
+      return SE->isLoopInvariant(Src, OuterMostLoop);
+    if (AddRec->getLoop()->getLoopDepth() < OuterMostCommonLevel)
+      return true;
+  } else {
+    if (!AddRec)
+      return isLoopInvariant(Src, LoopNest);
+  }
   const SCEV *Start = AddRec->getStart();
   const SCEV *Step = AddRec->getStepRecurrence(*SE);
   const SCEV *UB = SE->getBackedgeTakenCount(AddRec->getLoop());
@@ -909,8 +925,18 @@ bool DependenceInfo::checkSrcSubscript(const SCEV *Src, const Loop *LoopNest,
 bool DependenceInfo::checkDstSubscript(const SCEV *Dst, const Loop *LoopNest,
                                        SmallBitVector &Loops) {
   const SCEVAddRecExpr *AddRec = dyn_cast<SCEVAddRecExpr>(Dst);
-  if (!AddRec)
-    return isLoopInvariant(Dst, LoopNest);
+  if (OuterMostCommonLevel > 0) {
+    const Loop *OuterMostLoop = LoopNest;
+    while(OuterMostLoop->getLoopDepth() > OuterMostCommonLevel)
+      OuterMostLoop = OuterMostLoop->getParentLoop();
+    if (!AddRec)
+      return SE->isLoopInvariant(Dst, OuterMostLoop);
+    if (AddRec->getLoop()->getLoopDepth() < OuterMostCommonLevel)
+      return true;
+  } else {
+    if (!AddRec)
+      return isLoopInvariant(Dst, LoopNest);
+  }
   const SCEV *Start = AddRec->getStart();
   const SCEV *Step = AddRec->getStepRecurrence(*SE);
   const SCEV *UB = SE->getBackedgeTakenCount(AddRec->getLoop());
@@ -1049,7 +1075,8 @@ const SCEVConstant *DependenceInfo::collectConstantUpperBound(const Loop *L,
 //
 // Return true if dependence disproved.
 bool DependenceInfo::testZIV(const SCEV *Src, const SCEV *Dst,
-                             FullDependence &Result) const {
+                             FullDependence &Result,
+                             bool FunctionLevel) const {
   DEBUG(dbgs() << "    src = " << *Src << "\n");
   DEBUG(dbgs() << "    dst = " << *Dst << "\n");
   ++ZIVapplications;
@@ -1060,7 +1087,13 @@ bool DependenceInfo::testZIV(const SCEV *Src, const SCEV *Dst,
   if (isKnownPredicate(CmpInst::ICMP_NE, Src, Dst)) {
     DEBUG(dbgs() << "    provably independent\n");
     ++ZIVindependence;
-    return true; // provably independent
+    if (!FunctionLevel || 
+        (isa<SCEVConstant>(Src) && isa<SCEVConstant>(Dst)))
+      return true; // provably independent
+
+    // Don't have dependence within signle function call 
+    Result.DepOnFunction.Direction &= ~Dependence::DVEntry::EQ;
+    return false;
   }
   DEBUG(dbgs() << "    possibly dependent\n");
   Result.Consistent = false;
@@ -2116,7 +2149,9 @@ bool DependenceInfo::testSIV(const SCEV *Src, const SCEV *Dst, unsigned &Level,
   DEBUG(dbgs() << "    dst = " << *Dst << "\n");
   const SCEVAddRecExpr *SrcAddRec = dyn_cast<SCEVAddRecExpr>(Src);
   const SCEVAddRecExpr *DstAddRec = dyn_cast<SCEVAddRecExpr>(Dst);
-  if (SrcAddRec && DstAddRec) {
+  if (SrcAddRec && DstAddRec && 
+      SrcAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel &&
+      DstAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel) {
     const SCEV *SrcConst = SrcAddRec->getStart();
     const SCEV *DstConst = DstAddRec->getStart();
     const SCEV *SrcCoeff = SrcAddRec->getStepRecurrence(*SE);
@@ -2141,7 +2176,8 @@ bool DependenceInfo::testSIV(const SCEV *Src, const SCEV *Dst, unsigned &Level,
       gcdMIVtest(Src, Dst, Result) ||
       symbolicRDIVtest(SrcCoeff, DstCoeff, SrcConst, DstConst, CurLoop, CurLoop);
   }
-  if (SrcAddRec) {
+  if (SrcAddRec && 
+      SrcAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel) {
     const SCEV *SrcConst = SrcAddRec->getStart();
     const SCEV *SrcCoeff = SrcAddRec->getStepRecurrence(*SE);
     const SCEV *DstConst = Dst;
@@ -2151,7 +2187,8 @@ bool DependenceInfo::testSIV(const SCEV *Src, const SCEV *Dst, unsigned &Level,
                               Level, Result, NewConstraint) ||
       gcdMIVtest(Src, Dst, Result);
   }
-  if (DstAddRec) {
+  if (DstAddRec &&
+      DstAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel) {
     const SCEV *DstConst = DstAddRec->getStart();
     const SCEV *DstCoeff = DstAddRec->getStepRecurrence(*SE);
     const SCEV *SrcConst = Src;
@@ -2195,7 +2232,8 @@ bool DependenceInfo::testRDIV(const SCEV *Src, const SCEV *Dst,
   DEBUG(dbgs() << "    dst = " << *Dst << "\n");
   const SCEVAddRecExpr *SrcAddRec = dyn_cast<SCEVAddRecExpr>(Src);
   const SCEVAddRecExpr *DstAddRec = dyn_cast<SCEVAddRecExpr>(Dst);
-  if (SrcAddRec && DstAddRec) {
+  if (SrcAddRec && SrcAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel &&
+      DstAddRec && DstAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel) {
     SrcConst = SrcAddRec->getStart();
     SrcCoeff = SrcAddRec->getStepRecurrence(*SE);
     SrcLoop = SrcAddRec->getLoop();
@@ -2203,7 +2241,7 @@ bool DependenceInfo::testRDIV(const SCEV *Src, const SCEV *Dst,
     DstCoeff = DstAddRec->getStepRecurrence(*SE);
     DstLoop = DstAddRec->getLoop();
   }
-  else if (SrcAddRec) {
+  else if (SrcAddRec && SrcAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel) {
     if (const SCEVAddRecExpr *tmpAddRec =
         dyn_cast<SCEVAddRecExpr>(SrcAddRec->getStart())) {
       SrcConst = tmpAddRec->getStart();
@@ -2216,7 +2254,7 @@ bool DependenceInfo::testRDIV(const SCEV *Src, const SCEV *Dst,
     else
       llvm_unreachable("RDIV reached by surprising SCEVs");
   }
-  else if (DstAddRec) {
+  else if (DstAddRec && DstAddRec->getLoop()->getLoopDepth() >= OuterMostCommonLevel) {
     if (const SCEVAddRecExpr *tmpAddRec =
         dyn_cast<SCEVAddRecExpr>(DstAddRec->getStart())) {
       DstConst = tmpAddRec->getStart();
@@ -3329,7 +3367,10 @@ static void dumpSmallBitVector(SmallBitVector &BV) {
 // up to date with respect to this routine.
 std::unique_ptr<Dependence>
 DependenceInfo::depends(Instruction *Src, Instruction *Dst,
-                        bool PossiblyLoopIndependent) {
+                        bool PossiblyLoopIndependent,
+                        unsigned OuterMostLevel,
+                        bool FunctionLevel,
+                        bool SkipAliasCheck) {
   if (Src == Dst)
     PossiblyLoopIndependent = false;
 
@@ -3346,25 +3387,26 @@ DependenceInfo::depends(Instruction *Src, Instruction *Dst,
 
   Value *SrcPtr = getPointerOperand(Src);
   Value *DstPtr = getPointerOperand(Dst);
-
-  switch (underlyingObjectsAlias(AA, F->getParent()->getDataLayout(),
-                                 MemoryLocation::get(Dst),
-                                 MemoryLocation::get(Src))) {
-  case MayAlias:
-  case PartialAlias:
-    // cannot analyse objects if we don't understand their aliasing.
-    DEBUG(dbgs() << "can't analyze may or partial alias\n");
-    return make_unique<Dependence>(Src, Dst);
-  case NoAlias:
-    // If the objects noalias, they are distinct, accesses are independent.
-    DEBUG(dbgs() << "no alias\n");
-    return nullptr;
-  case MustAlias:
-    break; // The underlying objects alias; test accesses for dependence.
+  if (!SkipAliasCheck) {
+    switch (underlyingObjectsAlias(AA, F->getParent()->getDataLayout(),
+          MemoryLocation::get(Dst),
+          MemoryLocation::get(Src))) {
+      case MayAlias:
+      case PartialAlias:
+        // cannot analyse objects if we don't understand their aliasing.
+        DEBUG(dbgs() << "can't analyze may or partial alias\n");
+        return make_unique<Dependence>(Src, Dst);
+      case NoAlias:
+        // If the objects noalias, they are distinct, accesses are independent.
+        DEBUG(dbgs() << "no alias\n");
+        return nullptr;
+      case MustAlias:
+        break; // The underlying objects alias; test accesses for dependence.
+    }
   }
 
   // establish loop nesting levels
-  establishNestingLevels(Src, Dst);
+  establishNestingLevels(Src, Dst, OuterMostLevel);
   DEBUG(dbgs() << "    common nesting levels = " << CommonLevels << "\n");
   DEBUG(dbgs() << "    maximum nesting levels = " << MaxLevels << "\n");
 
@@ -3554,8 +3596,10 @@ DependenceInfo::depends(Instruction *Src, Instruction *Dst,
     switch (Pair[SI].Classification) {
     case Subscript::ZIV:
       DEBUG(dbgs() << ", ZIV\n");
-      if (testZIV(Pair[SI].Src, Pair[SI].Dst, Result))
+      if (testZIV(Pair[SI].Src, Pair[SI].Dst, Result, FunctionLevel))
         return nullptr;
+      else if ((Result.getDirection(0) & Dependence::DVEntry::EQ) == 0)
+        return make_unique<FullDependence>(std::move(Result));
       break;
     case Subscript::SIV: {
       DEBUG(dbgs() << ", SIV\n");
@@ -3645,8 +3689,10 @@ DependenceInfo::depends(Instruction *Src, Instruction *Dst,
               switch (Pair[SJ].Classification) {
               case Subscript::ZIV:
                 DEBUG(dbgs() << "ZIV\n");
-                if (testZIV(Pair[SJ].Src, Pair[SJ].Dst, Result))
+                if (testZIV(Pair[SJ].Src, Pair[SJ].Dst, Result, FunctionLevel))
                   return nullptr;
+                else if ((Result.getDirection(0) & Dependence::DVEntry::EQ) == 0)
+                  return make_unique<FullDependence>(std::move(Result));
                 Mivs.reset(SJ);
                 break;
               case Subscript::SIV:

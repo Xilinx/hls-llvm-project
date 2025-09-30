@@ -4,8 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// (C) Copyright 2016-2022 Xilinx, Inc. 
-// All Rights Reserved.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,6 +21,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <limits>
 
 namespace llvm {
@@ -107,11 +109,16 @@ class AssumptionCache;
     /// returns false.
     Function *extractCodeRegion();
 
+    /// Verify that assumption cache isn't stale after a region is extracted.
+    /// Returns false when verifier finds errors. AssumptionCache is passed as
+    /// parameter to make this function stateless.
+    static bool verifyAssumptionCache(const Function& F, AssumptionCache *AC);
+
     /// \brief Test whether this code extractor is eligible.
     ///
     /// Based on the blocks used when constructing the code extractor,
     /// determine whether it is eligible for extraction.
-    bool isEligible() const { return !Blocks.empty(); }
+    bool isEligible() const; 
 
     /// \brief Compute the set of input values and output values for the code.
     ///
@@ -152,8 +159,15 @@ class AssumptionCache;
     BasicBlock *findOrCreateBlockForHoisting(BasicBlock *CommonExitBlock);
 
   private:
-    void severSplitPHINodes(BasicBlock *&Header);
+    void severSplitPHINodesOfEntry(BasicBlock *&Header);
+    void severSplitPHINodesOfExits(const SmallPtrSetImpl<BasicBlock *> &Exits);
     void splitReturnBlocks();
+    bool sinkGEPIntoLifeScope();
+
+    /// Find the set of predicates that used inside the outlined region.
+    ///
+    /// Localize these predicates can help for un-rotation and predicate analysis 
+    void localizePredicates(std::vector<Instruction *> &LocalizedInst);
 
     Function *constructFunction(const ValueSet &inputs,
                                 const ValueSet &outputs,

@@ -1,7 +1,7 @@
 //==--- DiagnosticHLSKinds.td -----HLS related diagnostics ----------------===//
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -279,9 +279,8 @@ def warn_xlx_attribute_ignore_because_invalid_option: Warning<
   InGroup<InvalidXlxPragmas>;
 def err_xlx_attribute_ignore_because_invalid_option: Error<
   "%0 pragma is ignored, because %1 ">;
-def warn_xlx_attribute_argument_outof_range: Warning<
-  "%0 requires integer const between %1 and %2 inclusive">, 
-  InGroup<InvalidXlxPragmas>;
+def err_xlx_argument_out_of_range: Error<
+  "%0 requires integer const between %1 and %2 inclusive">;
 
 def warn_xlx_dependence_missing_dependent_option: Warning<
   "Assuming false dependence as a \"true/false\" selection was not specified">,
@@ -343,13 +342,13 @@ def warn_xcl_loop_attr_wrong_target : Warning<
 def warn_xcl_dataflow_attr_wrong_target : Warning<
   "Only for-loops and functions support the dataflow">,InGroup<IgnoredDataflowAttr>;
 def warn_ignore_xcl_dataflow_on_invalid_loop_initial_stmt : Warning<
-  "Since the loop counter is not declared in loop header and/or initialized to '0', the compiler may not successfully process the dataflow loop">,
+  "Since the loop counter is not declared in loop header and/or initialized to constant value, the compiler may not successfully process the dataflow loop">,
   InGroup<IgnoredDataflowAttr>;
 def warn_ignore_xcl_dataflow_on_multiple_loop_induction_variable : Warning<
   "Due to multiple loop counters, the compiler may not successfully process the dataflow loop">,
   InGroup<IgnoredDataflowAttr>;
 def warn_ignore_xcl_dataflow_on_invalid_loop_iteration_stmt : Warning<
-  "As the loop counter is not increased by 1, the compiler may not successfully process the dataflow loop">,
+  "As the loop counter is not increased by constant value, the compiler may not successfully process the dataflow loop">,
   InGroup<IgnoredDataflowAttr>;
 def warn_ignore_xcl_dataflow_on_invalid_loop_condition_stmt : Warning<
   "Ignore 'dataflow' on loop: Unsupported for-loop condition statement for dataflow">,

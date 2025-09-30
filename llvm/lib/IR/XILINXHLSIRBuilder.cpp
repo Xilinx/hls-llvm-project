@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -1406,16 +1406,13 @@ Value *HLSIRBuilder::CreateFPGADirectStoreInst(Value *V, Value *Ptr,
   return CI;
 }
 
-Value *HLSIRBuilder::CreateSeqBeginEnd(Intrinsic::ID ID, Value *WordAddr,
-                                       Value *Size) {
+Value *HLSIRBuilder::CreateSeqBegin(Intrinsic::ID ID, Value *WordAddr,
+                                    Value *Size) {
   auto *PtrTy = WordAddr->getType();
   auto *SizeTy = Size->getType();
   auto *SeqFn = Intrinsic::getDeclaration(getModule(), ID, {PtrTy, SizeTy});
-  if (ID == Intrinsic::fpga_seq_load_begin ||
-      ID == Intrinsic::fpga_seq_store_begin)
-    return CreateCall(SeqFn, {WordAddr, Size},
-                      Twine(WordAddr->getName(), "seq"));
-  return CreateCall(SeqFn, {WordAddr, Size});
+  return CreateCall(SeqFn, {WordAddr, Size},
+                    Twine(WordAddr->getName(), "seq"));
 }
 
 Value *HLSIRBuilder::CreateSeqLoadInst(Type *DataTy, Value *Token, Value *Idx) {
@@ -1431,6 +1428,12 @@ Value *HLSIRBuilder::CreateSeqStoreInst(Value *Data, Value *Token, Value *Idx,
       getModule(), Intrinsic::fpga_seq_store,
       {Data->getType(), Token->getType(), Idx->getType(), BE->getType()});
   return CreateCall(S, {Data, Token, Idx, BE});
+}
+
+Value *HLSIRBuilder::CreateSeqEnd(Intrinsic::ID ID, Value *WordAddr) {
+  auto *PtrTy = WordAddr->getType();
+  auto *SeqFn = Intrinsic::getDeclaration(getModule(), ID, {PtrTy});
+  return CreateCall(SeqFn, {WordAddr});
 }
 
 CallInst *HLSIRBuilder::CreateReadPipeBlock(Value *Pipe) {
@@ -2391,6 +2394,18 @@ Value *HLSIRBuilder::CreateApNonePragmaInst(Value *V, int32_t HasRegister,
       nullptr, M, BitSize));
 }
 
+Value *HLSIRBuilder::CreateApAckPragmaInst(Value *V, int32_t HasRegister,
+                                           StringRef SignalName,
+                                           int64_t BitSize, bool IsDirectIO) {
+  auto *M = getModule();
+  auto &Ctx = M->getContext();
+  return Insert(PragmaInst::Create<ApAckInst>(
+      {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
+       ConstantDataArray::getString(Ctx, SignalName, false),
+       ConstantInt::get(Type::getInt1Ty(Ctx), IsDirectIO)},
+      nullptr, M, BitSize));
+}
+
 Value *HLSIRBuilder::CreateApHsPragmaInst(Value *V, int32_t HasRegister,
                                           StringRef SignalName,
                                           int64_t Interrupt,
@@ -2398,6 +2413,20 @@ Value *HLSIRBuilder::CreateApHsPragmaInst(Value *V, int32_t HasRegister,
   auto *M = getModule();
   auto &Ctx = M->getContext();
   return Insert(PragmaInst::Create<ApHsInst>(
+      {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
+       ConstantDataArray::getString(Ctx, SignalName, false),
+       ConstantInt::getSigned(Type::getInt64Ty(Ctx), Interrupt),
+       ConstantInt::get(Type::getInt1Ty(Ctx), IsDirectIO)},
+      nullptr, M, BitSize));
+}
+
+Value *HLSIRBuilder::CreateApVldPragmaInst(Value *V, int32_t HasRegister,
+                                           StringRef SignalName,
+                                           int64_t Interrupt,
+                                           int64_t BitSize, bool IsDirectIO) {
+  auto *M = getModule();
+  auto &Ctx = M->getContext();
+  return Insert(PragmaInst::Create<ApVldInst>(
       {V, ConstantInt::get(Type::getInt32Ty(Ctx), HasRegister),
        ConstantDataArray::getString(Ctx, SignalName, false),
        ConstantInt::getSigned(Type::getInt64Ty(Ctx), Interrupt),

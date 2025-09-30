@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -41,6 +41,9 @@ class ReflowDiagnostic;
 
 /// Returns true if \p L is a for loop.
 bool isForLoop(const Loop *L);
+
+/// Returns true if \p L is a infinite loop.
+bool isInfiniteLoop(const Loop *L);
 
 /// Returns true if \p L is a rotated loop.
 bool isRotatedLoop(const Loop *L);
@@ -93,6 +96,10 @@ Optional<LoopTripCountMDInfo> getLoopTripCount(const Loop *L);
 
 /// Returns true if Loop \p L is a dataflow loop.
 bool isDataFlow(const Loop *L);
+
+/// Returns true if Loop \p L is a dataflow loop and start-propagation is
+/// disabled
+bool hasDataflowDisableStartPropa(const Loop *L);
 
 /// Returns true if Loop \p L is a parallel loop.
 bool isParallel(const Loop *L);
@@ -164,6 +171,9 @@ bool mayFullyUnroll(const Loop *L, const SCEV *LTC);
 /// Returns true if the loop \p L may be partially unrolled
 bool hasLoopPartialUnroll(const Loop *L);
 
+/// Returns true if the loop \p L may contain performance pragma
+bool hasLoopPerformance(const Loop *L);
+
 /// Returns true if the loop \p L may contain trip count pragma
 bool hasLoopTripCount(const Loop *L);
  
@@ -183,6 +193,7 @@ DebugLoc getLoopTripCountPragmaLoc( const Loop* L);
 DebugLoc getLoopPipelinePragmaLoc( const Loop *L );
 DebugLoc getLoopUnrollPragmaLoc( const Loop *L );
 DebugLoc getLoopDataflowPragmaLoc( const Loop *L );
+DebugLoc getLoopPerformancePragmaLoc( const Loop *L );
 
 MDNode *GetUnrollMetadata(MDNode *LoopID, StringRef Name);
 
@@ -207,9 +218,41 @@ void ReflowCalculateTripCountAndMultiple(Loop *L, ScalarEvolution *SE,
 ReflowUnrollOption populateUnrollOption(Loop *L, bool WithoutCheck,
                                         unsigned Count, unsigned TripCount,
                                         unsigned TripMultiple,
-                                        ScalarEvolution *SE);
+                                        ScalarEvolution *SE, LoopInfo *LI);
 
 Optional<int> getFlattenCheckerEncode(Loop *L);
+
+/// \brief Captures performance target information with HLS performance pragma.
+class PerformanceTargetMDInfo {
+  uint64_t TargetTI; // target of TI
+  uint64_t TargetTL; // target of TL
+  uint64_t AssumeTI; // assumption of TI
+  uint64_t AssumeTL; // assumption of TL
+  std::string Source;
+  DILocation *DL;
+public:
+  PerformanceTargetMDInfo(uint64_t TargetTI, uint64_t TargetTL, uint64_t AssumeTI,
+                      uint64_t AssumeTL,
+                      StringRef Source, DILocation *DL)
+      : TargetTI(TargetTI), TargetTL(TargetTL), AssumeTI(AssumeTI),
+      AssumeTL(AssumeTL),  Source(Source), DL(DL) {}
+
+  uint64_t getTargetTI() const { return TargetTI; }
+  uint64_t getTargetTL() const { return TargetTL; }
+  uint64_t getAssumeTI() const { return AssumeTI; }
+  uint64_t getAssumeTL() const { return AssumeTL; }
+  StringRef getSource() const { return Source; }
+  DILocation *getDILocation() const { return DL; }
+};
+
+/// Get performance target from HLS performance  pragma.
+Optional<PerformanceTargetMDInfo> getPerformanceTarget(const Loop *L);
+
+bool IsDataflowPragmaFromUser(Loop *L);
+
+PHINode *getDataflowLoopInductionVariable(Loop *L, ScalarEvolution &SE,
+                                          bool Strict = false);
+
 } // end namespace llvm
 
 #endif // LLVM_ANALYSIS_XILINXLOOPINFOUTILS_H

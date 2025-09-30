@@ -4,8 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// (C) Copyright 2016-2022 Xilinx, Inc. 
-// All Rights Reserved.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -61,6 +62,9 @@ StringRef clang::make_canonical(SmallVectorImpl<char> &CanonicalNameBuf)
     CanonicalName = StringRef(CanonicalNameBuf.data()); 
 #else
   llvm::sys::fs::make_absolute(CanonicalNameBuf);
+  llvm::SmallString<128> realPath;
+  llvm::sys::fs::real_path(CanonicalNameBuf, realPath);
+  CanonicalNameBuf = realPath;
   llvm::sys::path::native(CanonicalNameBuf);
   // We've run into needing to remove '..' here in the wild though, so
   // remove it.

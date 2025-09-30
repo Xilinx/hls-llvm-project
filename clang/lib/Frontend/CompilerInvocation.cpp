@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -600,18 +600,15 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   if (Arg *ALib = Args.getLastArg(options::OPT_hls_platform_name)) { 
     if (Arg *APath = Args.getLastArg(options::OPT_hls_platform_db_name)) {
       std::string resourceInfo;
+      std::string deviceNameInfo;
       if (Arg *ADevice = Args.getLastArg(options::OPT_device_resource_info)) {
-        platform::SetPlatformDeviceResourceInfo(ADevice->getValue());
         resourceInfo = ADevice->getValue();
       }
       if (Arg *ADeviceName = Args.getLastArg(options::OPT_device_name_info)) {
-        platform::SetPlatformDeviceNameInfo(ADeviceName->getValue());
+        deviceNameInfo = ADeviceName->getValue();
       }
-      //load sqlite3db 
-      platform::SetPlatformDbFile(APath->getValue());
-      platform::PlatformBasic::getInstance()->load(ALib->getValue());
-
-      platform::coreInstFactoryInit(APath->getValue(), ALib->getValue(), resourceInfo);
+      
+      platform::coreInstFactoryInit(APath->getValue(), ALib->getValue(), resourceInfo, deviceNameInfo);
     }
   }
 #endif

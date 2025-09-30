@@ -1,4 +1,5 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -38,4 +39,25 @@ void llvm::addPipeline(Function *F, int32_t II, PipelineStyle Style) {
 
 void llvm::addPipelineOff(Function *F) {
   addPipeline(F, /* No pipeline */ 0);
+}
+
+void llvm::addFuncPragmaInfo(Function *F, StringRef PragmaName, MDTuple *MD) {
+  Metadata *M = F->getMetadata("fpga.function.pragma");
+  SmallVector<Metadata*, 4> newOperands;
+  newOperands.push_back(MD);
+  if (M) {
+    assert(isa<MDTuple>(M) && "unexpected Metadata type from clang codegen");
+    for (auto &Op : cast<MDTuple>(M)->operands()) {
+
+      MDTuple *OnePragma = cast<MDTuple>(Op.get());
+      Metadata *Name = OnePragma->getOperand(0).get();
+      assert(isa<MDString>(Name) && "unexpected MDType");
+      if (cast<MDString>(Name)->getString().equals(PragmaName)) {
+        continue;
+      }
+      newOperands.push_back(OnePragma);
+    }
+  }
+  F->setMetadata("fpga.function.pragma", 
+      MDTuple::get(F->getContext(), ArrayRef<Metadata*>(newOperands)));
 }

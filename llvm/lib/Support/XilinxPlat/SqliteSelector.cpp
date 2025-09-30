@@ -1,12 +1,18 @@
-
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
+// 67d7842dbbe25473c3c32b93c0da8047785f30d78e8a024de1b57352245f9689
 #include <cstring>
 #include <cassert>
 #include <sqlite3.h>
+#include <limits>
 #if XILINX_HLS_FE_STANDALONE
 #include "llvm/Support/XilinxPlat/SqliteSelector.h"
+#include "llvm/Support/XilinxPlat/TargetPlatform.h"
 #else
 #include "SqliteSelector.h"
-#endif 
+#include "TargetPlatform.h" 
+#endif
+
 
 namespace platform
 {
@@ -22,7 +28,8 @@ int loadOrSaveDb(sqlite3 *pInMemory, const char *zFilename, int isSave){
   /* Open the database file identified by zFilename. Exit early if this fails
   ** for any reason. */
   rc = sqlite3_open(zFilename, &pFile);
-  if( rc==SQLITE_OK ){
+  if( rc==SQLITE_OK ) {
+    sqlite3_busy_timeout(pFile, 10000);
 
     /* If this is a 'load' operation (isSave==0), then data is copied
     ** from the database file just opened to database pInMemory. 
@@ -58,16 +65,26 @@ int loadOrSaveDb(sqlite3 *pInMemory, const char *zFilename, int isSave){
   return rc;
 }
 
-bool Selector::init(const std::string& dbPath) {
+int Selector::init(const std::string& dbPath) {
     int rc = sqlite3_open(":memory:", &mDb);
     // if(rc), message out and exit.
     assert(rc == SQLITE_OK);
     rc = loadOrSaveDb(mDb, dbPath.c_str(), 0);
-    assert(rc == SQLITE_OK);
-    return rc == SQLITE_OK;
+    return rc;
 }
 
 Selector::~Selector() { sqlite3_close(mDb); }
+
+std::string Selector::safe_get_string (sqlite3_stmt* ppStmt, int col)
+{
+    const unsigned char* result = sqlite3_column_text(ppStmt, col);
+    std::string value;
+    if(result)
+    {   
+        value = reinterpret_cast<const char*>(result);
+    }
+    return value;
+}
 
 std::vector<CoreDef*> Selector::selectCoreDefs(const char* cmd)
 {
@@ -77,16 +94,6 @@ std::vector<CoreDef*> Selector::selectCoreDefs(const char* cmd)
     int rc = sqlite3_prepare_v2(mDb, cmd, -1, &ppStmt, &pzTail);
     assert(rc == SQLITE_OK);
 
-    auto safe_get_string = [](sqlite3_stmt* ppStmt, int col)
-    {
-        const unsigned char* result = sqlite3_column_text(ppStmt, col);
-        std::string value;
-        if(result)
-        {   
-            value = reinterpret_cast<const char*>(result);
-        }
-        return value;
-    };
     while(sqlite3_step(ppStmt) == SQLITE_ROW)
     {
         auto core = new CoreDef();
@@ -126,34 +133,50 @@ std::vector<CoreDef*> Selector::selectCoreDefs(const char* cmd)
     return definitions;
 }
 
-int Selector::selectInt(const char* cmd)
+DataOr<int> Selector::selectInt(const char* cmd)
 {
     sqlite3_stmt *ppStmt;
     const char *pzTail;
     int rc = sqlite3_prepare_v2(mDb, cmd, -1, &ppStmt, &pzTail);
     // if(rc), message out and exit.
     assert(rc == SQLITE_OK);
-    sqlite3_step(ppStmt);
+    rc = sqlite3_step(ppStmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(ppStmt);
+        return {false, {}};  // return false if no row is found
+    }
     assert(sqlite3_column_count(ppStmt) == 1);
+    if (sqlite3_column_type(ppStmt, 0) == SQLITE_NULL) {
+        sqlite3_finalize(ppStmt);
+        return {false, {}};  // return false if the value is NULL
+    }
     int value = sqlite3_column_int(ppStmt, 0);
     sqlite3_finalize(ppStmt);
 
-    return value;
+    return {true, value};
 }
 
-double Selector::selectDouble(const char* cmd)
+DataOr<double> Selector::selectDouble(const char* cmd)
 {
     sqlite3_stmt *ppStmt;
     const char *pzTail;
     int rc = sqlite3_prepare_v2(mDb, cmd, -1, &ppStmt, &pzTail);
     // if(rc), message out and exit.
     assert(rc == SQLITE_OK);
-    sqlite3_step(ppStmt);
+    rc = sqlite3_step(ppStmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(ppStmt);
+        return {false, {}};  // return false if no row is found
+    }
     assert(sqlite3_column_count(ppStmt) == 1);
+    if (sqlite3_column_type(ppStmt, 0) == SQLITE_NULL) {
+        sqlite3_finalize(ppStmt);
+        return {false, {}};  // return false if the value is NULL
+    }
     double value = sqlite3_column_double(ppStmt, 0);
     sqlite3_finalize(ppStmt);
 
-    return value;
+    return {true, value};
 }
 
 std::string Selector::selectString(const char* cmd)
@@ -189,7 +212,7 @@ std::vector<double> Selector::selectDoubleList(const char* cmd)
     std::vector<double> values;
     for(int i = 0; i < delayNum; ++i)
     {
-        double value = sqlite3_column_double(ppStmt, i);
+        double value = GetTargetPlatform()->getCoreInstFactory()->getDelayFactor() * sqlite3_column_double(ppStmt, i);
         values.push_back(value);
     }
     sqlite3_finalize(ppStmt);
@@ -210,7 +233,7 @@ std::vector<double> Selector::selecDSPDelayList(const char* cmd)
     std::vector<double> values;
     for(int i = 0; i < delayNum; ++i)
     {
-        double value = sqlite3_column_double(ppStmt, i);
+        double value = GetTargetPlatform()->getCoreInstFactory()->getDelayFactor() * sqlite3_column_double(ppStmt, i);
         if(value > 0)
         {
             values.push_back(value);
@@ -276,7 +299,7 @@ DelayMap Selector::selectDelayMap(const char* cmd)
         std::vector<double> second;
         for(int i = 1; i <= delayNum; ++i)
         {
-            double value = sqlite3_column_double(ppStmt, i);
+            double value = GetTargetPlatform()->getCoreInstFactory()->getDelayFactor() * sqlite3_column_double(ppStmt, i);
             if(value > 0)
             {
                 second.push_back(value);
@@ -318,17 +341,6 @@ std::map<std::string, std::string> Selector::selectStr2StrMap(const char* cmd) {
     assert(rc == SQLITE_OK);
     assert(sqlite3_column_count(ppStmt) == 2);
     std::map<std::string, std::string> values;
-
-    auto safe_get_string = [](sqlite3_stmt* ppStmt, int col)
-    {
-        const unsigned char* result = sqlite3_column_text(ppStmt, col);
-        std::string value;
-        if(result)
-        {   
-            value = reinterpret_cast<const char*>(result);
-        }
-        return value;
-    };
 
     while(sqlite3_step(ppStmt) == SQLITE_ROW)
     {
@@ -382,6 +394,25 @@ std::pair<int, int> Selector::selectIntPair(const char* cmd)
     return values; 
 }
 
+std::pair<std::string, std::string> Selector::selectStrPair(const char* cmd)
+{
+    sqlite3_stmt *ppStmt;
+    const char *pzTail;
+    int rc = sqlite3_prepare_v2(mDb, cmd, -1, &ppStmt, &pzTail);
+    // if(rc), message out and exit.
+    assert(rc == SQLITE_OK);
+    assert(sqlite3_column_count(ppStmt) == 2);
+    std::pair<std::string, std::string> values("", "");
+    while(sqlite3_step(ppStmt) == SQLITE_ROW)
+    {
+        std::string first = safe_get_string(ppStmt, 0);
+        std::string second = safe_get_string(ppStmt, 1);
+        values = std::make_pair(first, second);
+    }
+    sqlite3_finalize(ppStmt);
+    return values; 
+}
+
 bool Selector::isExistTable(const char* tableName) {
     bool ret = false;
     std::string cmd = "SELECT name FROM sqlite_master WHERE type='table' AND name='";
@@ -407,15 +438,6 @@ std::map<std::string, double> Selector::selectStr2DoubleMap(const char* cmd) {
     assert(sqlite3_column_count(ppStmt) == 2);
     std::map<std::string, double> values;
 
-    auto safe_get_string = [](sqlite3_stmt* ppStmt, int col){
-        const unsigned char* result = sqlite3_column_text(ppStmt, col);
-        std::string value;
-        if(result) {   
-            value = reinterpret_cast<const char*>(result);
-        }
-        return value;
-    };
-
     while(sqlite3_step(ppStmt) == SQLITE_ROW) {
         auto first = safe_get_string (ppStmt, 0);
         auto second = sqlite3_column_double(ppStmt, 1);
@@ -424,6 +446,115 @@ std::map<std::string, double> Selector::selectStr2DoubleMap(const char* cmd) {
     sqlite3_finalize(ppStmt);
 
     return values; 
+}
+
+
+std::vector<CoreBasicDef*> Selector::selectCoreBasics(std::string cmd)
+{
+    std::vector<CoreBasicDef*> coreBasicDefs;
+    sqlite3_stmt* ppStmt;
+    const char* pzTail;
+    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
+    if(rc != SQLITE_OK) return coreBasicDefs;
+
+    while(sqlite3_step(ppStmt) == SQLITE_ROW)
+    {
+        auto def = new CoreBasicDef();
+        def->name = safe_get_string(ppStmt, 0);
+        def->type = safe_get_string(ppStmt, 1);
+        def->op = safe_get_string(ppStmt, 2);
+        def->impl = safe_get_string(ppStmt, 3);
+        int maxLatency = sqlite3_column_int(ppStmt, 4);
+        // -2 means max value of int in this column
+        def->maxLat = maxLatency == -2 ? std::numeric_limits<int>::max() : maxLatency;
+        def->minLat = sqlite3_column_int(ppStmt, 5);
+        def->isPublic = sqlite3_column_int(ppStmt, 6);
+
+        coreBasicDefs.push_back(def);
+    }
+    sqlite3_finalize(ppStmt);
+    return coreBasicDefs;
+}
+
+std::map<int, std::string> Selector::selectEncode(std::string cmd)
+{
+    std::map<int, std::string> encodeMap;
+    sqlite3_stmt* ppStmt;
+    const char* pzTail;
+    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
+    assert(rc == SQLITE_OK);
+
+    while(sqlite3_step(ppStmt) == SQLITE_ROW)
+    {
+       encodeMap[sqlite3_column_int(ppStmt, 0)] = safe_get_string(ppStmt, 1);
+    };
+    sqlite3_finalize(ppStmt);
+    return encodeMap;
+}
+
+std::map<std::string, std::string> Selector::selectAliasCores(std::string cmd)
+{
+    std::map<std::string, std::string> aliasMap;
+    sqlite3_stmt* ppStmt;
+    const char* pzTail;
+    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
+    assert(rc == SQLITE_OK);
+    while(sqlite3_step(ppStmt) == SQLITE_ROW)
+    {
+       aliasMap[safe_get_string(ppStmt, 0)] = safe_get_string(ppStmt, 1);
+    };
+    sqlite3_finalize(ppStmt);
+    return aliasMap;
+}
+
+std::vector<Core1DParam> Selector::selectCore1DParams(std::string cmd) {
+    std::vector<Core1DParam> core1DParams;
+    sqlite3_stmt* ppStmt;
+    const char* pzTail;
+    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
+    assert(rc == SQLITE_OK);
+
+    while(sqlite3_step(ppStmt) == SQLITE_ROW)
+    {
+        Core1DParam param;
+        param.name = safe_get_string(ppStmt, 0);
+        param.latency = sqlite3_column_int(ppStmt, 1);
+        param.kind = safe_get_string(ppStmt, 2);
+        param.xx = sqlite3_column_double(ppStmt, 3);
+        param.log = sqlite3_column_double(ppStmt, 4);
+        param.x = sqlite3_column_double(ppStmt, 5);
+        param.intercept = sqlite3_column_double(ppStmt, 6);
+        core1DParams.push_back(param);
+    }
+    sqlite3_finalize(ppStmt);
+    return core1DParams;
+}
+
+std::vector<Core2DParam> Selector::selectCore2DParams(std::string cmd) {
+    std::vector<Core2DParam> core2DParams;
+    sqlite3_stmt* ppStmt;
+    const char* pzTail;
+    int rc = sqlite3_prepare_v2(mDb, cmd.c_str(), -1, &ppStmt, &pzTail);
+    assert(rc == SQLITE_OK);
+
+    while(sqlite3_step(ppStmt) == SQLITE_ROW)
+    {
+        Core2DParam param;
+        param.name = safe_get_string(ppStmt, 0);
+        param.latency = sqlite3_column_int(ppStmt, 1);
+        param.kind = safe_get_string(ppStmt, 2);
+        param.x0x0 = sqlite3_column_double(ppStmt, 3);
+        param.logx0 = sqlite3_column_double(ppStmt, 4);
+        param.x0 = sqlite3_column_double(ppStmt, 5);
+        param.x1x1 = sqlite3_column_double(ppStmt, 6);
+        param.logx1 = sqlite3_column_double(ppStmt, 7);
+        param.x1 = sqlite3_column_double(ppStmt, 8);
+        param.x0x1 = sqlite3_column_double(ppStmt, 9);
+        param.intercept = sqlite3_column_double(ppStmt, 10);
+        core2DParams.push_back(param);
+    }
+    sqlite3_finalize(ppStmt);
+    return core2DParams;
 }
 
 }  // end of namaspace platform 

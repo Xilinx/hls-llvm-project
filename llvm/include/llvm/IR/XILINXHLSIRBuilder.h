@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -270,9 +270,10 @@ public:
                                    const std::string &HandShake = "",
                                    unsigned Align = 0);
 
-  Value *CreateSeqBeginEnd(Intrinsic::ID ID, Value *WordAddr, Value *Size);
+  Value *CreateSeqBegin(Intrinsic::ID ID, Value *WordAddr, Value *Size);
   Value *CreateSeqLoadInst(Type *DataTy, Value *Token, Value *Idx);
   Value *CreateSeqStoreInst(Value *Data, Value *Token, Value *Idx, Value *BE);
+  Value *CreateSeqEnd(Intrinsic::ID ID, Value *WordAddr);
   CallInst *CreateWritePipeBlock(Value *Data, Value *Pipe);
   CallInst *CreateReadPipeBlock(Value *Pipe);
 
@@ -373,10 +374,17 @@ public:
   Value *CreateApNonePragmaInst(Value *V, int32_t HasRegister,
                                 StringRef SignalName, int64_t BitSize = -1,
                                 bool IsDirectIO = false);
+  Value *CreateApAckPragmaInst(Value *V, int32_t HasRegister,
+                               StringRef SignalName, int64_t BitSize = -1,
+                               bool IsDirectIO = false);
   Value *CreateApHsPragmaInst(Value *V, int32_t HasRegister,
                               StringRef SignalName,
                               int64_t Interrupt = -1,
                               int64_t BitSize = -1, bool IsDirectIO = false);
+  Value *CreateApVldPragmaInst(Value *V, int32_t HasRegister,
+                               StringRef SignalName,
+                               int64_t Interrupt = -1,
+                               int64_t BitSize = -1, bool IsDirectIO = false);
   Value *CreateApAutoPragmaInst(Value *V, int32_t HasRegister,
                                 StringRef SignalName, int64_t BitSize = -1,
                                 bool IsDirectIO = false);

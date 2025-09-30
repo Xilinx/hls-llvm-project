@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1066,6 +1066,157 @@ static bool SemaBuiltinFloatCompare(Sema &S, CallExpr *Call) {
   return false;
 }
 
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinFloatAccumulate(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 9))
+    return true;
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *Acc = Call->getArg(1);
+  QualType AccTy = Acc->getType();
+  if (!AccTy->isPointerType() || AccTy.isConstQualified()) {
+    return S.Diag(Acc->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << AccTy << Acc->getSourceRange();
+  }
+
+  const auto *Val = Call->getArg(2);
+  QualType ValTy = Val->getType();
+  if (!ValTy->isPointerType()) {
+    return S.Diag(Val->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << ValTy << Val->getSourceRange();
+  }
+
+  const auto *Last = Call->getArg(3);
+  QualType LastTy = Last->getType();
+  if (!LastTy->isBooleanType()) {
+    return S.Diag(Last->getLocStart(), diag::err_builtin_expected_type)
+           << "bool" << LastTy << Last->getSourceRange();
+  }
+
+  const auto *Width = Call->getArg(4);
+  QualType WidthTy = Width->getType();
+  if (!WidthTy->isIntegerType()) {
+    return S.Diag(Width->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << WidthTy << Width->getSourceRange();
+  }
+
+  const auto *Exp = Call->getArg(5);
+  QualType ExpTy = Exp->getType();
+  if (!ExpTy->isIntegerType()) {
+    return S.Diag(Exp->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << ExpTy << Exp->getSourceRange();
+  }
+
+  const auto *AccWidth = Call->getArg(6);
+  QualType AccWidthTy = AccWidth->getType();
+  if (!AccWidthTy->isIntegerType()) {
+    return S.Diag(AccWidth->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << AccWidthTy << AccWidth->getSourceRange();
+  }
+
+  const auto *AccInt = Call->getArg(7);
+  QualType AccIntTy = AccInt->getType();
+  if (!AccIntTy->isIntegerType()) {
+    return S.Diag(AccInt->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << AccIntTy << AccInt->getSourceRange();
+  }
+
+  const auto *PreInt = Call->getArg(8);
+  QualType PreIntTy = PreInt->getType();
+  if (!PreIntTy->isIntegerType()) {
+    return S.Diag(PreInt->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << PreIntTy << PreInt->getSourceRange();
+  }
+
+#if 0
+  if (RetTy->getPointeeOrArrayElementType() !=
+      ValTy->getPointeeOrArrayElementType()) {
+    return S.Diag(Val->getLocStart(), diag::err_builtin_expected_type)
+           << RetTy << ValTy << Val->getSourceRange();
+  }
+#endif
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
+
+// \return True if a semantic error has been found, false otherwise.
+static bool SemaBuiltinDSP(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 9))
+    return true;
+
+  const auto *Ret = Call->getArg(0);
+  QualType RetTy = Ret->getType();
+  if (!RetTy->isPointerType() || RetTy.isConstQualified()) {
+    return S.Diag(Ret->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << RetTy << Ret->getSourceRange();
+  }
+
+  const auto *FuncIdx = Call->getArg(1);
+  QualType FuncIdxTy = FuncIdx->getType();
+  if (!FuncIdxTy->isIntegerType()) {
+    return S.Diag(FuncIdx->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << FuncIdxTy << FuncIdx->getSourceRange();
+  }
+
+  const auto *Flags = Call->getArg(2);
+  QualType FlagsTy = Flags->getType();
+  if (!FlagsTy->isIntegerType()) {
+    return S.Diag(Flags->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << FlagsTy << Flags->getSourceRange();
+  }
+
+  const auto *D = Call->getArg(3);
+  QualType DTy = D->getType();
+  if (!DTy->isPointerType()) {
+    return S.Diag(D->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << DTy << D->getSourceRange();
+  }
+
+  const auto *A = Call->getArg(4);
+  QualType ATy = A->getType();
+  if (!ATy->isPointerType()) {
+    return S.Diag(A->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << ATy << A->getSourceRange();
+  }
+
+  const auto *B = Call->getArg(5);
+  QualType BTy = B->getType();
+  if (!BTy->isPointerType()) {
+    return S.Diag(B->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << BTy << B->getSourceRange();
+  }
+
+  const auto *C = Call->getArg(6);
+  QualType CTy = C->getType();
+  if (!CTy->isPointerType()) {
+    return S.Diag(C->getLocStart(), diag::err_builtin_expected_type)
+           << "pointer" << CTy << C->getSourceRange();
+  }
+
+  const auto *Init = Call->getArg(7);
+  QualType InitTy = Init->getType();
+  if (!InitTy->isBooleanType()) {
+    return S.Diag(Init->getLocStart(), diag::err_builtin_expected_type)
+           << "bool" << InitTy << Init->getSourceRange();
+  }
+
+  const auto *State = Call->getArg(8);
+  QualType StateTy = State->getType();
+  if (!StateTy->isPointerType() || StateTy.isConstQualified()) {
+    return S.Diag(State->getLocStart(), diag::err_builtin_expected_type)
+           << "non-const pointer" << StateTy << State->getSourceRange();
+  }
+
+  Call->setType(S.Context.VoidTy);
+  return false;
+}
 
 // \return True if a semantic error has been found, false otherwise.
 static bool SemaBuiltinFIFOStatus(Sema &S, CallExpr *Call) {
@@ -1398,6 +1549,34 @@ static bool SemaBuiltinDirectIO(Sema &S, CallExpr *Call) {
   return false;
 }
 
+static bool SemaBuiltinFPGACountLeadingZero(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 1))
+    return true;
+
+  const auto *Integer = Call->getArg(0);
+  QualType IntegerTy = Integer->getType();
+  if (!IntegerTy->isIntegerType()) {
+    return S.Diag(Integer->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << IntegerTy << Integer->getSourceRange();
+  }
+
+  return false;
+}
+
+static bool SemaBuiltinFPGACountTrailingZero(Sema &S, CallExpr *Call) {
+  if (checkArgCount(S, Call, 1))
+    return true;
+
+  const auto *Integer = Call->getArg(0);
+  QualType IntegerTy = Integer->getType();
+  if (!IntegerTy->isIntegerType()) {
+    return S.Diag(Integer->getLocStart(), diag::err_builtin_expected_type)
+           << "integer" << IntegerTy << Integer->getSourceRange();
+  }
+
+  return false;
+}
+
 static bool SemaBuiltinHLSFunctionNameMatch(Sema &S, CallExpr* Call) 
 {
   const Expr * Arg = Call->getArg(0); 
@@ -1439,6 +1618,13 @@ bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   case FPGA::BI__fpga_float_compare_ne:
   case FPGA::BI__fpga_float_compare_uo:
     return SemaBuiltinFloatCompare(*this, Call);
+  case FPGA::BI__fpga_float_accumulate:
+    return SemaBuiltinFloatAccumulate(*this, Call);
+  case FPGA::BI__fpga_dsp48e1:
+  case FPGA::BI__fpga_dsp48e2:
+  case FPGA::BI__fpga_dsp58:
+  case FPGA::BI__fpga_dsp58_cplx:
+    return SemaBuiltinDSP(*this, Call);
   case FPGA::BI__fpga_set_stream_of_blocks_depth:
     return SemaBuiltinSetStreamDepth(*this, Call);
   case FPGA::BI__fpga_fifo_not_empty:
@@ -1485,6 +1671,10 @@ bool Sema::CheckFPGABuiltinFunctionCall(unsigned BuiltinID, CallExpr *Call) {
   case FPGA::BI__fpga_direct_load:
   case FPGA::BI__fpga_direct_store:
     return SemaBuiltinDirectIO(*this, Call);
+  case FPGA::BI__fpga_ctlz:
+    return SemaBuiltinFPGACountLeadingZero(*this, Call);
+  case FPGA::BI__fpga_cttz:
+    return SemaBuiltinFPGACountTrailingZero(*this, Call);
   default:
     break;
   }
@@ -11672,7 +11862,7 @@ static void diagnoseArrayStarInParamType(Sema &S, QualType PType,
 /// declaration itself, e.g., that the types of each of the function
 /// parameters are complete.
 bool Sema::CheckParmsForFunctionDef(ArrayRef<ParmVarDecl *> Parameters,
-                                    bool CheckParameterNames) {
+                                    bool CheckParameterNames, bool IsTop) {
   bool HasInvalidParm = false;
   for (ParmVarDecl *Param : Parameters) {
     // C99 6.7.5.3p4: the parameters in a parameter type list in a
@@ -11734,6 +11924,33 @@ bool Sema::CheckParmsForFunctionDef(ArrayRef<ParmVarDecl *> Parameters,
       if (!Param->getType().isConstQualified())
         Diag(Param->getLocation(), diag::err_attribute_pointers_only)
             << Attr->getSpelling() << 1;
+
+    /// for top parameter, even it's pointer type or reference type, we still
+    /// instantiate the template to get complete type
+    if (!Param->isInvalidDecl() && IsTop) {
+      QualType CanT = this->getASTContext().getCanonicalParamType(Param->getType());
+
+      auto StripOffPointer = [](QualType T) -> QualType {
+        while (true) {
+          if (const auto *PointerTy = dyn_cast<PointerType>(T)) {
+            T = PointerTy->getPointeeType();
+            continue;
+          } else if (const auto *ReferenceTy = dyn_cast<ReferenceType>(T)) {
+            T = ReferenceTy->getPointeeType();
+            continue;
+          }
+
+          break;
+        }
+
+        return T;
+      };
+
+      CanT = StripOffPointer(CanT);
+      /// Do the template instantiation
+      if (CanT->isIncompleteType())
+        (void)isCompleteType(Param->getLocation(), CanT);
+    }
   }
 
   return HasInvalidParm;

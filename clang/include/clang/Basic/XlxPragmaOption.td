@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -406,7 +406,7 @@ def XlxPerformancePragma : HLSPragma {
     let Objects = [Loop, Region]; 
     let Options = [
                    OptDoubleConstExprOption<"target_ti", "0.0", "Specify the value of transaction interval that is targeted for the scope.">,
-                   OptDoubleConstExprOption<"target_tl", "0.0", "Specify the value of transaction latency that is targeted for the scope.">,
+                   OptDoubleConstExprOption<"target_tl", "0.0", "Specify the value of transaction latency that is targeted for the scope.", Hidden>,
                    OptDoubleConstExprOption<"assume_ti", "0.0", "", Hidden>,
                    OptDoubleConstExprOption<"assume_tl", "0.0", "", Hidden>,
                    OptEnumExprOption<"unit", ["cycle", "sec"], "">, 
@@ -482,7 +482,11 @@ def XlxStablePragma : HLSPragma {
     let Name = "stable";
     let Desc = "Indicates that a variable input or output of a dataflow region can be ignored when generating the synchronizations at entry and exit of the dataflow region."; 
     let Objects = [Parameter, Array, Function] ; 
-    let Options = [ReqVariableExprOption<"variable", "">];
+    let Options = [
+                    ReqVariableExprOption<"variable", "">,
+                    PresentOption<"off", 1, "If present, hls won't infer 'stable'  current variable during synthesis"> 
+
+                  ];
 }
 
 // #pragma HLS stable_content variable=<variable>
@@ -706,8 +710,8 @@ def XlxCachePragma : HLSPragma {
     ReqVariableExprOption<"port", "Specify the interface for which cache is used.">,
     OptIntDefaultConstExprOption<"lines", 1, "Number of cache lines">,
     OptIntDefaultConstExprOption<"depth", 0, "Line size in words">,
-//  OptIntDefaultConstExprOption<"ways", 1, "cache ways", Hidden>,
-//  OptIntDefaultConstExprOption<"users", 1, "Number of port users", Hidden>,
+    OptIntDefaultConstExprOption<"ports", 1, "Number of ports">,
+    OptIntDefaultConstExprOption<"l2_lines", 0, "level 2 cache lines">,
 //  OptEnumExprOption<"burst", ["off", "on"/*, "adaptive"*/], "HLS burst mode", Hidden>,
     OptEnumExprOption<"write_mode", ["write_back", "write_through"], "Write mode", Hidden>
   ];

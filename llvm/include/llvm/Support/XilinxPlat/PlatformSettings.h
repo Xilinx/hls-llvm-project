@@ -1,3 +1,5 @@
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 #ifndef _PLATFORM_PlatformSettings_H
 #define _PLATFORM_PlatformSettings_H
 
@@ -42,12 +44,16 @@ public:
 
     void setSrlFifoDefaultRawLatency(int lat) { mSrlFifoDefaultRawLatency = lat; }
     int getSrlFifoDefaultRawLatency() { return mSrlFifoDefaultRawLatency; }
+
+    void setUseMinDelayLatency(bool use) { mUseMinDelaylatency = use; }
+    bool getUseMinDelayLatency() { return mUseMinDelaylatency; }
 private:
     GetBlackBoxInfoFromJson_t mGetIntervalFromJson = nullptr;
     SendInvalidLatencyMsgFunction mSendInvalidLatencyMsgFunc = nullptr; 
     RawLatencyChangedMsgFunction mRawLatencyChangedMsgFunc = nullptr;
     int mRamFifoDefaultRawLatency = 2;
     int mSrlFifoDefaultRawLatency = 1;
+    bool mUseMinDelaylatency = false;
 };
 
 }

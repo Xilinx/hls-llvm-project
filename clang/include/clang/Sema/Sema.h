@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -2964,7 +2965,7 @@ public:
 
   /// Helpers for dealing with blocks and functions.
   bool CheckParmsForFunctionDef(ArrayRef<ParmVarDecl *> Parameters,
-                                bool CheckParameterNames);
+                                bool CheckParameterNames, bool IsTop = false);
   void CheckCXXDefaultArguments(FunctionDecl *FD);
   void CheckExtraCXXDefaultArguments(Declarator &D);
   Scope *getNonFieldDeclScope(Scope *S);
@@ -3330,7 +3331,7 @@ public:
 
   bool instantiateXlxDeclAttr(Attr *NewAttr, Decl *NewD);
 
-  ASTConsumer* BuildXlxHoistConsumer( ASTConsumer &Consumer );
+  void HoistXlxScope( Decl *D );
 
   // XILINX Attribute expression checks
   bool CheckXCLLatencyExprs(Expr *MinExpr, Expr *MaxExpr, SourceLocation Loc,

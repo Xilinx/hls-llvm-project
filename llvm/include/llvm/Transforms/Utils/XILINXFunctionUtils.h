@@ -1,4 +1,5 @@
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -40,6 +41,9 @@ void addPipeline(Function *F, int32_t II = -1,
 
 /// Add pipeline off(force not to pipeline) attribute to Function \p F.
 void addPipelineOff(Function *F);
+
+/// Add function pragma to Function \p F.
+void addFuncPragmaInfo(Function *F, StringRef pragma, MDTuple *MD);
 
 } // end namespace llvm
 

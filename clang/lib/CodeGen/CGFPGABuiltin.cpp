@@ -1,5 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -65,6 +65,13 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
   case FPGA::BI__fpga_float_compare_ne:
   case FPGA::BI__fpga_float_compare_uo:
     return EmitBuiltinFPGAFloatCompare(BuiltinID, E);
+  case FPGA::BI__fpga_float_accumulate:
+    return EmitBuiltinFPGAFloatAccumulate(BuiltinID, E);
+  case FPGA::BI__fpga_dsp48e1:
+  case FPGA::BI__fpga_dsp48e2:
+  case FPGA::BI__fpga_dsp58:
+  case FPGA::BI__fpga_dsp58_cplx:
+    return EmitBuiltinFPGADSP(BuiltinID, E);
   case FPGA::BI__fpga_fifo_not_empty:
   case FPGA::BI__fpga_fifo_not_full:
     return EmitBuiltinFPGAFifoStatus(BuiltinID, E);
@@ -87,6 +94,8 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
     return EmitBuiltinFPGAPipoBlocking(BuiltinID, E);
   case FPGA::BI__fpga_set_stream_of_blocks_depth:
     return EmitBuiltinFPGASetStreamOfBlocksDepth(BuiltinID, E);
+  case FPGA::BI__fpga_maxi_store:
+    return EmitBuiltinFPGAStore(BuiltinID, E);
   case FPGA::BI__fpga_maxi_read_req:
   case FPGA::BI__fpga_maxi_read:
   case FPGA::BI__fpga_maxi_write_req:
@@ -113,6 +122,10 @@ Value *CodeGenFunction::EmitFPGABuiltinExpr(unsigned BuiltinID,
   case FPGA::BI__fpga_direct_load:
   case FPGA::BI__fpga_direct_store:
     return EmitBuiltinFPGADirectIO(BuiltinID, E);
+  case FPGA::BI__fpga_ctlz:
+    return EmitBuiltinFPGACountLeadingZero(BuiltinID, E);
+  case FPGA::BI__fpga_cttz:
+    return EmitBuiltinFPGACountTrailingZero(BuiltinID, E);
   }
   return nullptr;
 }
@@ -147,6 +160,8 @@ static Intrinsic::ID getFloatingPointIntrID(unsigned BuiltinID) {
     return Intrinsic::fpga_float_compare_ne;
   case FPGA::BI__fpga_float_compare_uo:
     return Intrinsic::fpga_float_compare_uo;
+  case FPGA::BI__fpga_float_accumulate:
+    return Intrinsic::fpga_float_accumulate;
   default:
     llvm_unreachable("Unsupported intrinsics?");
   }
@@ -407,6 +422,141 @@ Value *CodeGenFunction::EmitBuiltinFPGAFloatCompare(unsigned BuiltinID,
   return Builder.CreateCall(F, {Lhs, Rhs, Exp});
 }
 
+Value *CodeGenFunction::EmitBuiltinFPGAFloatAccumulate(unsigned BuiltinID,
+                                                       const CallExpr *E) {
+  assert((BuiltinID == FPGA::BI__fpga_float_accumulate) &&
+         "Not a FloatingPoint Accumulate built-in?");
+
+  auto *RetAst = E->getArg(0);
+  auto RetAddr = EmitPointerWithAlignment(RetAst);
+
+  auto *AccAst = E->getArg(1);
+  auto AccAddr = EmitPointerWithAlignment(AccAst);
+
+  auto *ValAst = E->getArg(2);
+  auto ValAddr = EmitPointerWithAlignment(ValAst);
+
+  auto *LastAst = E->getArg(3);
+  auto *Last = EmitScalarExpr(LastAst);
+
+  auto *WidthAst = E->getArg(4);
+  auto *Width = cast<ConstantInt>(EmitScalarExpr(WidthAst));
+
+  auto *ExpAst = E->getArg(5);
+  auto *Exp = cast<ConstantInt>(EmitScalarExpr(ExpAst));
+
+  auto *AccWidthAst = E->getArg(6);
+  auto *AccWidth = cast<ConstantInt>(EmitScalarExpr(AccWidthAst));
+
+  auto *AccIntAst = E->getArg(7);
+  auto *AccInt = cast<ConstantInt>(EmitScalarExpr(AccIntAst));
+
+  auto *PreIntAst = E->getArg(8);
+  auto *PreInt = cast<ConstantInt>(EmitScalarExpr(PreIntAst));
+
+  auto *Ty = Builder.getIntNTy(Width->getZExtValue());
+  auto *AccTy = Builder.getIntNTy(AccWidth->getZExtValue());
+  auto *F = Intrinsic::getDeclaration(&CGM.getModule(),
+                                      getFloatingPointIntrID(BuiltinID),
+                                      {Ty, AccTy->getPointerTo()});
+
+  auto RetAddrCast = Builder.CreateElementBitCast(RetAddr, Ty);
+  auto AccAddrCast = Builder.CreateElementBitCast(AccAddr, AccTy);
+  auto ValAddrCast = Builder.CreateElementBitCast(ValAddr, Ty);
+  auto *Val = Builder.CreateLoad(ValAddrCast);
+  auto *Ret = Builder.CreateCall(F, {AccAddrCast.getPointer(), Val, Last,
+                                     Exp, AccInt, PreInt});
+  return Builder.CreateStore(Ret, RetAddrCast);
+}
+
+static unsigned getDSPVariant(unsigned BI) {
+  switch (BI) {
+  case FPGA::BI__fpga_dsp48e1:
+    return 0;
+  case FPGA::BI__fpga_dsp48e2:
+    return 1;
+  case FPGA::BI__fpga_dsp58:
+    return 2;
+  case FPGA::BI__fpga_dsp58_cplx:
+    return 3;
+  default:
+    llvm_unreachable("Unsupported intrinsics?");
+  }
+}
+
+unsigned DSPBitwidths[][4] = {
+  // A, B, C, D
+  {25, 18, 48, 25}, // DSP48E1
+  {27, 18, 48, 27}, // DSP48E2
+  {27, 24, 58, 27},  // DSP58
+  {36, 36, 116, 116}  // DSP58_cplx
+};
+
+Value *CodeGenFunction::EmitBuiltinFPGADSP(unsigned BuiltinID,
+                                           const CallExpr *E) {
+  assert((BuiltinID == FPGA::BI__fpga_dsp48e1 ||
+          BuiltinID == FPGA::BI__fpga_dsp48e2 ||
+          BuiltinID == FPGA::BI__fpga_dsp58 ||
+          BuiltinID == FPGA::BI__fpga_dsp58_cplx) &&
+         "Not a DSP built-in?");
+
+  auto *RetAst = E->getArg(0);
+  auto RetAddr = EmitPointerWithAlignment(RetAst);
+
+  auto *FuncIdxAst = E->getArg(1);
+  auto *FuncIdx = EmitScalarExpr(FuncIdxAst);
+
+  auto *FlagsAst = E->getArg(2);
+  auto *Flags = EmitScalarExpr(FlagsAst);
+
+  auto *DAst = E->getArg(3);
+  auto DAddr = EmitPointerWithAlignment(DAst);
+
+  auto *AAst = E->getArg(4);
+  auto AAddr = EmitPointerWithAlignment(AAst);
+
+  auto *BAst = E->getArg(5);
+  auto BAddr = EmitPointerWithAlignment(BAst);
+
+  auto *CAst = E->getArg(6);
+  auto CAddr = EmitPointerWithAlignment(CAst);
+
+  auto *InitAst = E->getArg(7);
+  auto *Init = EmitScalarExpr(InitAst);
+
+  auto *StateAst = E->getArg(8);
+  auto State = EmitPointerWithAlignment(StateAst);
+
+  unsigned Variant = getDSPVariant(BuiltinID);
+
+  auto *ATy = Builder.getIntNTy(DSPBitwidths[Variant][0]);
+  auto *BTy = Builder.getIntNTy(DSPBitwidths[Variant][1]);
+  auto *CTy = Builder.getIntNTy(DSPBitwidths[Variant][2]);
+  auto *DTy = Builder.getIntNTy(DSPBitwidths[Variant][3]);
+  auto *StateTy = CTy->getPointerTo();
+
+  auto *F = Intrinsic::getDeclaration(&CGM.getModule(), Intrinsic::fpga_dsp,
+                                      {ATy, BTy, CTy, DTy, StateTy});
+
+  auto *RetTy = F->getReturnType();
+
+  auto RetAddrCast = Builder.CreateElementBitCast(RetAddr, RetTy);
+  auto DAddrCast = Builder.CreateElementBitCast(DAddr, DTy);
+  auto AAddrCast = Builder.CreateElementBitCast(AAddr, ATy);
+  auto BAddrCast = Builder.CreateElementBitCast(BAddr, BTy);
+  auto CAddrCast = Builder.CreateElementBitCast(CAddr, CTy);
+  auto StateAddrCast = Builder.CreateElementBitCast(State, CTy);
+
+  auto *D = Builder.CreateLoad(DAddrCast);
+  auto *A = Builder.CreateLoad(AAddrCast);
+  auto *B = Builder.CreateLoad(BAddrCast);
+  auto *C = Builder.CreateLoad(CAddrCast);
+
+  auto *Ret = Builder.CreateCall(F, {FuncIdx, Flags, D, A, B, C, Init,
+                                     StateAddrCast.getPointer()});
+  return Builder.CreateStore(Ret, RetAddrCast);
+}
+
 static Intrinsic::ID getDirectIOIntrID(unsigned BI) {
   switch (BI) {
   case FPGA::BI__fpga_direct_valid:
@@ -495,6 +645,42 @@ Value *CodeGenFunction::EmitBuiltinFPGAAddInfiniteTask(unsigned BuiltinID, const
       &CGM.getModule(), Intrinsic::fpga_add_infinite_task, {Builder.getInt32Ty()->getPointerTo(), Builder.getInt32Ty()->getPointerTo()});
 
   return Builder.CreateCall(F, {region, task});
+}
+
+Value *CodeGenFunction::EmitBuiltinFPGAStore(unsigned BuiltinID,
+                                             const CallExpr *E) {
+  Intrinsic::ID ID = Intrinsic::not_intrinsic;
+  switch (BuiltinID) {
+  case FPGA::BI__fpga_maxi_store:
+    ID = Intrinsic::fpga_maxi_store;
+    break;
+  default:
+    llvm_unreachable("Bad Builtin");
+  }
+
+  // Address
+  auto *PtrAst = E->getArg(0);
+  auto *Ptr = EmitScalarExpr(PtrAst);
+  // Value
+  auto *ValPtrAst = E->getArg(1);
+  auto ValPtr = EmitPointerWithAlignment(ValPtrAst);
+  auto *Val = Builder.CreateLoad(ValPtr);
+  // Byte-enable mask
+  auto *BEPtrAst = E->getArg(2);
+  int BEWidth = CGM.getDataLayout().getTypeStoreSize(Val->getType());
+  auto *BETy = Builder.getIntNTy(BEWidth);
+  auto BEPtr = EmitPointerWithAlignment(BEPtrAst);
+  auto BEPtrCast = Builder.CreateElementBitCast(BEPtr, BETy);
+  auto *BE = Builder.CreateLoad(BEPtrCast);
+  // Volatile (check if ValPtrAst is a pointer to volatile)
+  bool isVolatile = PtrAst->getType()->getPointeeType().isVolatileQualified();
+  auto Volatile = Builder.getInt1(isVolatile);
+
+  // Call the intrinsic
+  auto *F = Intrinsic::getDeclaration(&CGM.getModule(), ID,
+                                      {Val->getType(), Ptr->getType(),
+                                       BE->getType()});
+  return Builder.CreateCall(F, {Val, Ptr, BE, Volatile});
 }
 
 Value *CodeGenFunction::EmitBuiltinFPGAMAXIBurst(unsigned BuiltinID,
@@ -1579,35 +1765,69 @@ Value* CodeGenFunction::EmitBuiltinFPGAIP(const CallExpr* E) {
   return call;
 }
 
-Value* CodeGenFunction::EmitBuiltinFPGAFence(const CallExpr* E) { 
+Value *CodeGenFunction::EmitBuiltinFPGAFence(const CallExpr *E) {
   std::vector<llvm::Value *> args;
   unsigned ArgNum = E->getNumArgs();
+  if (ArgNum < 1) {
+    CGM.Error(E->getExprLoc(), "Argument number mismatch: __fpga_fence must "
+                               "have at least one argument");
+  }
 
-  for (unsigned i = 0; i < ArgNum; i++) {
+  auto DelayExpr = E->getArg(0);
+  if (!DelayExpr->getType()->isIntegerType() ||
+      !DelayExpr->isEvaluatable(getContext())) {
+    CGM.Error(
+        DelayExpr->getExprLoc(),
+        "Argument type mismatch: __fpga_fence requires the first argument "
+        "to be integer constant expr");
+  }
+
+  for (unsigned i = 1; i < ArgNum; i++) {
     const Expr *Arg = E->getArg(i);
-    llvm::Value *Ptr = Arg->getType()->isPointerType() ? 
-                           EmitScalarExpr(Arg) :
-                           EmitLValue(Arg).getPointer();
+    llvm::Value *Ptr = Arg->getType()->isPointerType()
+                           ? EmitScalarExpr(Arg)
+                           : EmitLValue(Arg).getPointer();
     args.push_back(Ptr);
   }
+  auto Delay = EmitScalarExpr(DelayExpr);
 
   std::vector<llvm::Value *> FArgs(args);
   FArgs.push_back(Builder.getInt32(-1));
   FArgs.insert(FArgs.end(), args.begin(), args.end());
+  FArgs.push_back(Delay);
 
-  auto *fence = llvm::Intrinsic::getDeclaration(
-        CurFn->getParent(), Intrinsic::fpga_fence);
-  
+  auto *fence = llvm::Intrinsic::getDeclaration(CurFn->getParent(),
+                                                Intrinsic::fpga_fence);
+
   auto *call = Builder.CreateCall(fence, FArgs);
+  for (unsigned i = 1; i < ArgNum; i++) {
+    if (E->getArg(i)->getType()->isPointerType()) {
+      call->addParamAttr(
+          i - 1,
+          llvm::Attribute::get(getLLVMContext(), "fpga.decayed.dim.hint", "0"));
+      call->addParamAttr(
+          i + ArgNum - 1,
+          llvm::Attribute::get(getLLVMContext(), "fpga.decayed.dim.hint", "0"));
+    }
+  }
   return call;
 }
 
 Value*CodeGenFunction::EmitBuiltinFPGAFenceWithGroup(const CallExpr* E) {
   std::vector<llvm::Value *> args;
   unsigned ArgNum = E->getNumArgs();
-  if (ArgNum != 2) 
+  if (ArgNum != 3)
     CGM.Error(E->getExprLoc(),
-              "Argument number mismatch: __fpga_fence_with_gourp must have exact two arguments");
+              "Argument number mismatch: __fpga_fence_with_group must have "
+              "exactly three arguments");
+
+  auto DelayExpr = E->getArg(2);
+  if (!DelayExpr->getType()->isIntegerType() ||
+      !DelayExpr->isEvaluatable(getContext())) {
+    CGM.Error(DelayExpr->getExprLoc(),
+              "Argument type mismatch: __fpga_fence_with_group requires the "
+              "last argument to be integer constant expr");
+  }
 
   for (unsigned i = 0; i < ArgNum; i++) {
     const Expr *Arg = E->getArg(i);
@@ -1637,6 +1857,51 @@ Value*CodeGenFunction::EmitBuiltinFPGAFenceGroup(const CallExpr* E) {
         CurFn->getParent(), Intrinsic::fpga_fence_group);
 
   auto *call = Builder.CreateCall(fence_g, args);
+  for (unsigned i = 0; i < ArgNum; i++) {
+    if (E->getArg(i)->getType()->isPointerType()) {
+      call->addParamAttr(i, 
+                         llvm::Attribute::get(
+                             getLLVMContext(), "fpga.decayed.dim.hint", "0"));
+    }
+  }
   return call;
+}
+
+Value *CodeGenFunction::EmitBuiltinFPGACountLeadingZero(unsigned BuiltinID,
+                                                        const CallExpr *E) {
+  const Expr *SRC = E->getArg(0);
+  if (auto ICE = dyn_cast<ImplicitCastExpr>(SRC)) {
+    QualType T = ICE->getType();
+    if (isa<BuiltinType>(T) && cast<BuiltinType>(T)->getKind() == BuiltinType::Int) {
+      SRC = ICE->getSubExpr();
+    }
+  }
+  auto *Num = EmitScalarExpr(SRC);
+
+  auto *F = Intrinsic::getDeclaration(
+      &CGM.getModule(), Intrinsic::ctlz, {Num->getType()});
+
+  auto *Call = Builder.CreateCall(F, {Num, Builder.getFalse()});
+  LLVMContext &Context = CGM.getLLVMContext();
+  return Builder.CreateIntCast(Call, llvm::Type::getInt32Ty(Context), false);
+}
+
+Value *CodeGenFunction::EmitBuiltinFPGACountTrailingZero(unsigned BuiltinID,
+                                                         const CallExpr *E) {
+  const Expr *SRC = E->getArg(0);
+  if (auto ICE = dyn_cast<ImplicitCastExpr>(SRC)) {
+    QualType T = ICE->getType();
+    if (isa<BuiltinType>(T) && cast<BuiltinType>(T)->getKind() == BuiltinType::Int) {
+      SRC = ICE->getSubExpr();
+    }
+  }
+  auto *Num = EmitScalarExpr(SRC);
+
+  auto *F = Intrinsic::getDeclaration(
+      &CGM.getModule(), Intrinsic::cttz, {Num->getType()});
+
+  auto *Call = Builder.CreateCall(F, {Num, Builder.getFalse()});
+  LLVMContext &Context = CGM.getLLVMContext();
+  return Builder.CreateIntCast(Call, llvm::Type::getInt32Ty(Context), false);
 }
 

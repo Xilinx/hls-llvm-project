@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -280,6 +281,11 @@ public:
   /// but only emitted via the diagnostic handler.  Even if an output file is
   /// set, the handler is invoked for each diagnostic message.
   void setDiagnosticsOutputFile(std::unique_ptr<yaml::Output> F);
+
+  void saveAndClearDiagnosticsOutputFile();
+
+  void restoreDiagnosticsOutputFile();
+
 
   /// \brief Get the prefix that should be printed in front of a diagnostic of
   ///        the given \p Severity

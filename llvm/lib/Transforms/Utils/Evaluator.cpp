@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -23,6 +23,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constant.h"
@@ -45,6 +46,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <iterator>
+#include <queue>
 
 #define DEBUG_TYPE "evaluator"
 
@@ -191,13 +193,13 @@ static Constant *ConvertTo(Constant *C, Type *TargetTy) {
   return ConstantExpr::getBitCast(C, TargetTy);
 }
 
-static Constant *getGEPFromBitCastForStruct(Constant *P, const DataLayout &DL,
+static Constant *getGEPFromBitCastForStruct(Constant *P, Type *&NewTy,
+                                            Type *TargetTy,
+                                            const DataLayout &DL,
                                             const TargetLibraryInfo *TLI) {
-  Type *TargetTy = P->getType()->getPointerElementType();
   if (auto *CE = dyn_cast<ConstantExpr>(P)) {
     if (CE->getOpcode() == Instruction::BitCast) {
       P = CE->getOperand(0);
-      Type *NewTy = cast<PointerType>(P->getType())->getElementType();
 
       bool BuildGEP = false;
       while (!canLosslesslyBitCast(TargetTy, NewTy, DL)) {
@@ -235,7 +237,7 @@ Constant *Evaluator::ComputeLoadResult(Constant *P) {
       if (!CE->getOperand(0)->getType()->isPointerTy())
         return nullptr;
       Type *SrcTy = CE->getOperand(0)->getType()->getPointerElementType();
-      if (Constant *GEP = getGEPFromBitCastForStruct(P, DL, TLI)) {
+      if (Constant *GEP = getGEPFromBitCastForStruct(P, SrcTy, TargetTy, DL, TLI)) {
         P = GEP;
       } else { 
         if (SrcTy->isSingleValueType() && TargetTy->isSingleValueType()) {
@@ -287,7 +289,7 @@ Constant *Evaluator::ComputeLoadResult(Constant *P) {
   LLVMContext &Context = P->getContext();
 
   // Get value from previous store
-  if (isAllocTmp || !AssumeGlobalUnchanged) {
+  if (isAllocTmp || !AssumeGlobalUnchanged || WrittenGV.count(basePtr)) {
     // If we are loading a structure, try to load each fileds and combine them
     // into the structure value.
     if (StructType *STTy = dyn_cast<StructType>(ElemTy)) {
@@ -389,6 +391,18 @@ bool Evaluator::saveMutatedMemory(Constant *Ptr, Constant *Val) {
   if (PointeeTy->isSingleValueType()) {
     invalidateSavedSuperMemory(Ptr);
     MutatedMemory[Ptr] = Val;
+    GlobalVariable *basePtr = nullptr;
+    if (auto *CE = dyn_cast<ConstantExpr>(Ptr)) {
+      if ((CE->getOpcode() == Instruction::GetElementPtr ||
+           CE->getOpcode() == Instruction::BitCast))
+        basePtr = dyn_cast<GlobalVariable>(CE->getOperand(0));
+    } else {
+      basePtr = dyn_cast<GlobalVariable>(Ptr);
+    }
+
+    if (basePtr)
+      WrittenGV.insert(basePtr);
+
     return true;
   }
    
@@ -424,6 +438,49 @@ bool Evaluator::saveMutatedMemory(Constant *Ptr, Constant *Val) {
   return false; 
 }
 
+static bool alwaysAccessesSameSize(Value *Ptr, uint64_t AccessSize,
+                                   const DataLayout &DL) {
+  SmallVector<Value *, 2> UOs;
+  GetUnderlyingObjects(Ptr, UOs, DL);
+
+  if (UOs.size() != 1)
+    return false;
+
+  Value *UO = UOs.back();
+  std::queue<Value *> WorkList;
+  WorkList.push(UO);
+  while (!WorkList.empty()) {
+    Value *V = WorkList.front();
+    WorkList.pop();
+    for (User *U : V->users()) {
+      if (isa<GEPOperator>(U)) {
+        WorkList.push(U);
+        continue;
+      }
+
+      if (isa<BitCastOperator>(U)) {
+        WorkList.push(U);
+        continue;
+      }
+
+      if (auto LI = dyn_cast<LoadInst>(U)) {
+        if (AccessSize != DL.getTypeSizeInBits(LI->getType()))
+          return false;
+        continue;
+      }
+
+      if (auto SI = dyn_cast<StoreInst>(U)) {
+        if (AccessSize != DL.getTypeSizeInBits(SI->getOperand(0)->getType()))
+          return false;
+        continue;
+      }
+
+      return false;
+    }
+  }
+
+  return true;
+}
 
 /// Evaluate all instructions in block BB, returning true if successful, false
 /// if we can't evaluate it.  NewBB returns the next BB that control flows into,
@@ -473,27 +530,38 @@ bool Evaluator::EvaluateBlock(BasicBlock::iterator CurInst,
 
           Type *NewTy = cast<PointerType>(Ptr->getType())->getElementType();
 
-          // In order to push the bitcast onto the stored value, a bitcast
-          // from NewTy to Val's type must be legal.  If it's not, we can try
-          // introspecting NewTy to find a legal conversion.
-          while (!canLosslesslyBitCast(Val->getType(), NewTy, DL)) {
-            // If NewTy is a struct, we can convert the pointer to the struct
-            // into a pointer to its first member.
-            // FIXME: This could be extended to support arrays as well.
-            if (StructType *STy = dyn_cast<StructType>(NewTy)) {
-              NewTy = STy->getTypeAtIndex(0U);
+          if (Constant *GEP =
+              getGEPFromBitCastForStruct(CE, NewTy, Val->getType(), DL, TLI)) {
+            Ptr = GEP;
+          } else {
+            if (!Val->getType()->isSingleValueType() ||
+                !NewTy->isSingleValueType()) {
+              DEBUG(dbgs() << "Failed to bitcast constant ptr, can not "
+                    "evaluate.\n");
+              return false;
+            }
 
-              IntegerType *IdxTy = IntegerType::get(NewTy->getContext(), 32);
-              Constant *IdxZero = ConstantInt::get(IdxTy, 0, false);
-              Constant * const IdxList[] = {IdxZero, IdxZero};
+            // Check all accesses are to the same size to ensure no illegal
+            // rewritten store evaluated.
+            if (!alwaysAccessesSameSize(
+                Ptr, DL.getTypeSizeInBits(Val->getType()), DL)) {
+              DEBUG(dbgs() << "Failed to bitcast constant ptr, can not "
+                    "evaluate.\n");
+              return false;
+            }
 
-              Ptr = ConstantExpr::getInBoundsGetElementPtr(nullptr, Ptr, IdxList);
-              if (auto *FoldedPtr = ConstantFoldConstant(Ptr, DL, TLI))
-                Ptr = FoldedPtr;
-
-            // If we can't improve the situation by introspecting NewTy,
-            // we have to give up.
-            } else {
+            NewTy = cast<PointerType>(Ptr->getType())->getElementType();
+            uint64_t SrcSize = DL.getTypeSizeInBits(Val->getType());
+            uint64_t TargetSize = DL.getTypeSizeInBits(NewTy);
+            if (SrcSize < TargetSize) {
+              auto &Ctx = Val->getType()->getContext();
+              if (!Val->getType()->isIntegerTy()) {
+                Val = ConstantExpr::getBitCast(
+                      Val, IntegerType::get(Ctx, SrcSize));
+              }
+              Val = ConstantExpr::getZExt(
+                    Val, IntegerType::get(Ctx, TargetSize));
+            } else if (SrcSize != TargetSize) {
               DEBUG(dbgs() << "Failed to bitcast constant ptr, can not "
                     "evaluate.\n");
               return false;

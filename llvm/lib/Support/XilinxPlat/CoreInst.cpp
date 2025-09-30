@@ -1,4 +1,6 @@
-
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
+// 67d7842dbbe25473c3c32b93c0da8047785f30d78e8a024de1b57352245f9689
 
 #include <cassert>
 #include <iomanip>
@@ -30,6 +32,9 @@ namespace platform
 class ChipInfo;
 
 double CoreCost::getDelay(OperType oper) {
+    // Check DelayBudget > 0..
+    CoreInst * thisCoreInst = static_cast<CoreInst*>(this);
+    assert(thisCoreInst->getDelayBudget() > 0);
     return mCoreCostDelayList[1];
 }
 
@@ -42,6 +47,9 @@ double CoreCost::getLastStageDelay(OperType oper) {
 }
 
 unsigned CoreCost::getPipeLatency (OperType oper) {
+    // Check DelayBudget > 0
+    CoreInst * thisCoreInst = static_cast<CoreInst*>(this);
+    assert(thisCoreInst->getDelayBudget() > 0);
     return mCoreCostPipeLatency;
 }
 
@@ -74,8 +82,8 @@ std::vector<double> QueryCoreCost::getCoreCostDelayList(CoreInst *core, OperType
     {
         FuncUnitInst* fu = static_cast<FuncUnitInst*>(core);        
         std::vector<unsigned> inputOperands = fu->getInputBWList();
-        for (unsigned operands : inputOperands) {
-            if (operands > 64) {
+        for (unsigned operand : inputOperands) {
+            if (operand > 64 || operand < 2) {
                 std::vector<double> artificialDelayList = { 1000000.0, 1000000.0, 1000000.0 };
                 return artificialDelayList; 
            }
@@ -105,8 +113,8 @@ unsigned QueryCoreCost::getCoreCostPipeLatency(CoreInst *core, OperType oper) {
     {
         FuncUnitInst* fu = static_cast<FuncUnitInst*>(core);
         std::vector<unsigned> inputOperands = fu->getInputBWList();
-        for (unsigned operands : inputOperands) {
-            if (operands > 64) {
+        for (unsigned operand : inputOperands) {
+            if (operand > 64 || operand < 2) {
                 return 1000000;
             }
         }
@@ -383,6 +391,75 @@ unsigned CoreInst::string2ResourceTp(std::string res_name) const
     return mCore->string2ResourceTp(res_name);
 }
 
+CoreInst::PrimitiveType CoreInst::str2primitiveType(std::string name) {
+    static const std::map<std::string, CoreInst::PrimitiveType> name2type = {
+        // LUT6
+        {"LUT1", CoreInst::LUT6},
+        {"LUT2", CoreInst::LUT6},
+        {"LUT3", CoreInst::LUT6},
+        {"LUT4", CoreInst::LUT6},
+        {"LUT5", CoreInst::LUT6},
+        {"LUT6", CoreInst::LUT6},
+        // FDRE
+        {"FDRE", CoreInst::FDRE},
+        {"FDSE", CoreInst::FDRE},
+        // LUT6CY
+        {"LUTCY1", CoreInst::LUT6CY},
+        {"LUTCY2", CoreInst::LUT6CY},
+        {"LUTCY3", CoreInst::LUT6CY},
+        {"LUTCY4", CoreInst::LUT6CY},
+        {"LUTCY5", CoreInst::LUT6CY},
+        {"LUTCY6", CoreInst::LUT6CY},
+        // LOOKAHEAD8
+        {"LOOKAHEAD8", CoreInst::LOOKAHEAD8},
+        // RAMB36E5_INT
+        {"RAMB18E5_INT", CoreInst::RAMB36E5_INT},
+        {"RAMB36E5_INT", CoreInst::RAMB36E5_INT},
+        {"RAMS32", CoreInst::RAMB36E5_INT},
+        {"RAMS64E5", CoreInst::RAMB36E5_INT},
+        // URAM288E5
+        {"URAM288E5", CoreInst::URAM288E5},
+        // RAMD32
+        {"RAMD32", CoreInst::RAMD32},
+        {"RAMD64E5", CoreInst::RAMD32},
+        // DSP58
+        {"DSP58", CoreInst::DSP58},
+        {"DSP_ALUREG", CoreInst::DSP58},
+        {"DSP_A_B_DATA58", CoreInst::DSP58},
+        {"DSP_C_DATA58", CoreInst::DSP58},
+        {"DSP_FPA_CREG", CoreInst::DSP58},
+        {"DSP_FPA_OPM_REG", CoreInst::DSP58},
+        {"DSP_FP_INREG", CoreInst::DSP58},
+        {"DSP_FP_OUTPUT", CoreInst::DSP58},
+        {"DSP_OUTPUT58", CoreInst::DSP58},
+        {"DSP_PREADD_DATA58", CoreInst::DSP58},
+        // SRLC32E
+        {"SRLC32E", CoreInst::SRLC32E},
+        {"SRL16E", CoreInst::SRLC32E},
+        
+    };
+
+    assert(name2type.count(name) > 0 && "All primitive string should have its mapped type");
+    return name2type.at(name);
+}
+
+std::string CoreInst::primitiveType2str(CoreInst::PrimitiveType type) {
+    static const std::map<CoreInst::PrimitiveType, std::string> type2name = {
+        {CoreInst::LUT6, "LUT6"},
+        {CoreInst::FDRE, "FDRE"},
+        {CoreInst::LUT6CY, "LUT6CY"},
+        {CoreInst::LOOKAHEAD8, "LOOKAHEAD8"},
+        {CoreInst::RAMB36E5_INT, "RAMB36E5_INT"},
+        {CoreInst::RAMD32, "RAMD32"},
+        {CoreInst::DSP58, "DSP58"},
+        {CoreInst::SRLC32E, "SRLC32E"},
+        {CoreInst::URAM288E5, "URAM288E5"}
+    };
+    assert(type != CoreInst::UNKNOWN_PRIMITIVE && "Unknown primitive type");
+    assert(type2name.count(type) > 0 && "All primitive type should have its mapped string");
+    return type2name.at(type);
+}
+
 #if 0
 void CoreInst::print(std::ostream& out) 
 {
@@ -435,10 +512,13 @@ void CoreInst::print(std::ostream& out)
 
 #endif
 
-std::string CoreInst::print(int user_lat) 
+std::string CoreInst::print(int user_lat, OperType oper) 
 {
-    int latency = getPipeLatency();
-    double delay = getDelay();
+    if (this->isGeneric()) {
+        return "Generic Core";
+    }
+    int latency = getPipeLatency(oper);
+    double delay = getDelay(oper);
 
     string tmp = "Core " + std::to_string(mCore->getId()) + " '" + mCore->getName() + "'";
 
@@ -1017,6 +1097,9 @@ std::vector<unsigned> IPBlockInst::getPipeLatencyList(OperType Pty)
 double IPBlockInst::getDelay(OperType oper) {
     std::vector<double> delayList = QuerierFactory::queryDelayList(this, oper);
     assert(delayList.size() == 3);
+
+    // Check DelayBudget > 0
+    assert(this->getDelayBudget() > 0);
     return delayList[1];
 }
 
@@ -1037,6 +1120,7 @@ unsigned IPBlockInst::getPipeLatency(OperType oper) {
     if (!mCore->hasLatencyFunction()) {
         return  mCore->getFixedPipeLatency();
     }
+    assert(this->getDelayBudget() > 0);
     unsigned latency;
     int userLat = getConfigedLatency();
     // DSP58 is an exception since it has a special post-processing in queryLatency()
@@ -1118,6 +1202,8 @@ unsigned IPBlockInst::getOutputPortStage(unsigned portId) {
 AdapterInst::AdapterInst(pf_internal::Adapter* adapter, PlatformBasic::OP_TYPE op, PlatformBasic::IMPL_TYPE impl) :
     CoreInst(adapter, op, impl),
     mBitWidth(-1),
+    mTargetAXILitePortID(0),
+    mTargetMAXIChanID(0),
     mIORegslice(false)
 {}
 
@@ -1170,22 +1256,32 @@ const StorageInstList& AdapterInst::getInnerMemInstList() const
 
 bool AdapterInst::isMultiChannelMAXI() const
 {
-    const CPortList& ports = getAdapterPorts();
-    return (ports.size() > 1);
+    auto& chanCfg = getMAXIChanParaMap();
+    unsigned chanNum = 0;
+
+    for(auto& cfg : chanCfg)
+    {
+        if (cfg.first == AdapterInst::MAXIParaType::Global || cfg.first == AdapterInst::MAXIParaType::L2Cache) continue;
+        chanNum ++;
+    }
+    return (chanNum > 1);
 }
 
 bool AdapterInst::enableReadOnlyCache() const
 {
-    const auto& paraMap = getMAXIParaMap();
-    if (paraMap.count(CacheType) == 1)
+    auto& chanCfg = getMAXIChanParaMap();
+    for(auto& cfg : chanCfg)
     {
-        return (paraMap.at(CacheType) == ReadOnlyCache);
+        if (cfg.first == AdapterInst::MAXIParaType::Global || cfg.first == AdapterInst::MAXIParaType::L2Cache) continue;
+        return (cfg.second.at(AdapterInst::MAXIParaKey::CacheType) == AdapterInst::CacheType::ReadOnlyCache);
     }
     return false;
 }
 
 double AdapterInst::getDelay(OperType oper) {
     std::vector<double> adapterDelayList = QuerierFactory::queryDelayList(this,oper);
+
+    assert(this->getDelayBudget() > 0);
     return adapterDelayList[1];
 }
 
@@ -1203,6 +1299,7 @@ unsigned AdapterInst::getPipeLatency(OperType oper) {
     if (!mCore->hasLatencyFunction()) {
         return  mCore->getFixedPipeLatency();
     }
+    assert(this->getDelayBudget() > 0);
     unsigned latency;
     int userLat = getConfigedLatency();
     // DSP58 is an exception since it has a special post-processing in queryLatency()
@@ -1231,7 +1328,7 @@ double AdapterInst::getResourceUsageByName(std::string name) {
     }
 }
 
-CoreInstFactory::CoreInstFactory() : mCoreId(0)
+CoreInstFactory::CoreInstFactory() : mCoreId(0), mDelayFactor(1.0)
 { 
     mCfgLib = ConfigedLib::getPointer(); 
     mCfgLib->mFac = this;
@@ -1601,7 +1698,7 @@ bool CoreInstFactory::requestFuncUnitInstList(
     std::cout << "outputBW " << outputBW << "\n";
     std::cout << "preferredLatency " << preferredLatency << "\n";
     std::cout << "preferredImpl " << preferredImpl << "\n";
-#endif 
+#endif
 
     assert((op > 0) && "Must be specified op");
     assert(list.size() == 0 && "List size must be 0");
@@ -1873,7 +1970,10 @@ bool CoreInstFactory::requestAdapterInst(
     CPortList ports,
     StorageInstList bundledMemories,
     bool enableIORegslice,
-    std::map<unsigned, std::map<unsigned, unsigned> > maxiChanParaMap
+    std::map<unsigned, std::map<unsigned, unsigned> > maxiChanParaMap,
+    unsigned targetMaxiChanID,
+    std::map<uint64_t, std::map<unsigned, unsigned> > axilitePortsMap,
+    uint64_t targetAXILitePortID
 ) {
     assert(impl == PlatformBasic::REG_SLICE || impl == PlatformBasic::S_AXILITE || impl == PlatformBasic::M_AXI);
     auto core = getCoreInst(op, impl);
@@ -1885,16 +1985,95 @@ bool CoreInstFactory::requestAdapterInst(
     // config 
     axi->configDelayBudget(delayBudget);
     axi->configBitWidth(bitWidth);
-    axi->setMAXIParaMap(maxiParaMap);
     axi->setMAXIChanParaMap(maxiChanParaMap);
+    axi->configTargetMAXIChanID(targetMaxiChanID);
+    axi->setAXILitePortsMap(axilitePortsMap);
+    axi->configTargetAXILitePortID(targetAXILitePortID);
+    axi->mBundledMemories = bundledMemories;
+
+    // TODO, the following Configurations are planned to be deprecated 
+    axi->setMAXIParaMap(maxiParaMap);
     axi->setAXILitePortsVec(axiLitePortsVec);
     axi->setAdapterPorts(ports);
-    axi->mBundledMemories = bundledMemories;
     axi->configIORegslice(enableIORegslice);
 
     // setCoreCost(axi);
     return true;
 }
+
+CoreInst::PrimitiveType CoreInstFactory::getInPrimitive(std::shared_ptr<CoreInst> core) {
+    // check DelayBudget
+    assert(core->getDelayBudget() > 0);
+    auto primitiveStr = QuerierFactory::getInstance().queryInOutPrimitive(core.get()).first;
+    
+    return CoreInst::str2primitiveType(primitiveStr);
+}
+
+CoreInst::PrimitiveType CoreInstFactory::getOutPrimitive(std::shared_ptr<CoreInst> core) {
+    // check DelayBudget
+    assert(core->getDelayBudget() > 0);
+    auto primitiveStr = QuerierFactory::getInstance().queryInOutPrimitive(core.get()).second;
+    
+    return CoreInst::str2primitiveType(primitiveStr);
+}
+
+std::pair<CoreInst::PrimitiveType, CoreInst::PrimitiveType> 
+CoreInstFactory::getMappedPrimitive(std::shared_ptr<CoreInst> source, 
+                    std::shared_ptr<CoreInst> destination, 
+                    unsigned bitwidth) {
+    // check DelayBudget
+    assert(source->getDelayBudget() > 0);
+    assert(destination->getDelayBudget() > 0);
+
+    auto sourceOut = QuerierFactory::getInstance().queryInOutPrimitive(source.get()).second;
+    auto destinationIn = QuerierFactory::getInstance().queryInOutPrimitive(destination.get()).first;
+
+    auto sourceType = CoreInst::str2primitiveType(sourceOut);
+    auto destinationType = CoreInst::str2primitiveType(destinationIn);
+    
+    return std::make_pair(sourceType, destinationType);
+}
+
+double CoreInstFactory::getWireDelay(CoreInst::PrimitiveType source, 
+                        CoreInst::PrimitiveType destination, 
+                        unsigned fanout) {
+    auto& s = Selector::getSelector();
+    std::string libName = GetTargetPlatform()->getFactory().getLibraryName();
+
+    std::string startPri = CoreInst::primitiveType2str(source);
+    std::string endPri = CoreInst::primitiveType2str(destination);
+
+    std::string cmd = "select FANOUT from " + libName + "_WireDelay where START='" + 
+                        startPri + "' and DESTINATION='" + endPri + "'";
+    std::vector<int> fanouts = s.selectIntList(cmd.c_str());
+
+    auto queryData = [startPri, endPri, libName](int fanout) {
+        std::string cmd = "select DELAY from " + libName + "_WireDelay where START='" + startPri + "' and DESTINATION='" + endPri
+                        + "' and FANOUT=" + std::to_string(fanout);
+        auto& s = Selector::getSelector();
+        auto resultOpt =s.selectDouble(cmd.c_str());
+        assert(resultOpt.valid);
+        return resultOpt.data;
+    };
+
+    unsigned index = 0;
+    for (index = 0; index < fanouts.size(); index ++) {
+        if (fanouts[index] > fanout) {
+            break;
+        }
+    }
+    if (index == 0) {
+        return queryData(fanouts[0]);
+    } else if (index == fanouts.size()) {
+        return queryData(fanouts[fanouts.size() - 1]);
+    } else {
+        double ldata = queryData(fanouts[index - 1]);
+        double rdata = queryData(fanouts[index]);
+
+        return ldata + (rdata - ldata) / (fanouts[index] - fanouts[index - 1]) * (fanout - fanouts[index - 1]);
+    }
+}
+
 
 void CoreInstFactory::setCoreCost(std::shared_ptr<CoreInst> core) {    
 
@@ -1952,48 +2131,6 @@ bool CoreInstFactory::is9Series() const
 {
     auto family = getFamilyName();
     return family.find("uplus") != std::string::npos;
-}
-
-double CoreInstFactory::getCore2CoreDelay(const std::string& coreA, const std::string& coreB, int bit) {
-    
-    auto& s = Selector::getSelector();
-    std::string libName = GetTargetPlatform()->getFactory().getLibraryName();
-    // std::string libName = "versal_medium";
-    std::string mapCmd = "select CORE_DELAY_MAP from " + libName + "_CoreDef where CORE_NAME='" + coreA + "' ";
-    std::string coreFrom = s.selectString(mapCmd.c_str());
-    mapCmd = "select CORE_DELAY_MAP from " + libName + "_CoreDef where CORE_NAME='" + coreB + "' ";
-    std::string coreTo = s.selectString(mapCmd.c_str());
-
-    assert(!coreFrom.empty());
-    assert(!coreTo.empty());
-
-    std::string cmd = "select BITS from " + libName + "_WireDelay where CORE_FROM='" + coreFrom + "' and CORE_TO='" + coreTo
-                        + "'";
-    std::vector<int> qBits = s.selectIntList(cmd.c_str());
-    auto queryData = [coreFrom, coreTo, libName](int qBit) {
-        std::string cmd = "select DELAY from " + libName + "_WireDelay where CORE_FROM='" + coreFrom + "' and CORE_TO='" + coreTo
-                        + "' and BITS=" + std::to_string(qBit);
-        auto& s = Selector::getSelector();
-        return s.selectDouble(cmd.c_str());
-    };
-
-    int index = 0;
-    for (index = 0; index < qBits.size(); index ++) {
-        if (qBits[index] > bit) {
-            break;
-        }
-    }
-    if (index == 0) {
-        return queryData(qBits[0]);
-    } else if (index == qBits.size()) {
-        return queryData(qBits[qBits.size() - 1]);
-    } else {
-        double ldata = queryData(qBits[index - 1]);
-        double rdata = queryData(qBits[index]);
-
-        return ldata + (rdata - ldata) / (qBits[index] - qBits[index - 1]) * (bit - qBits[index - 1]);
-    }
-    
 }
 
 void ConfigedLib::setConfigOp(PlatformBasic::OP_TYPE op, PlatformBasic::IMPL_TYPE impl, int latency)
@@ -2394,6 +2531,16 @@ pf_internal::Core* CoreInstFactory::createCore(const CoreDef& def, unsigned id)
     return core;
 }
 
+void CoreInstFactory::setOrigName(const std::string& libName)
+{
+    mOrigName = libName;
+}
+
+void CoreInstFactory::setDelayFactor(float delayFactor) 
+{
+    mDelayFactor = delayFactor;
+}
+
 void CoreInstFactory::setName(const std::string& libName)
 {
     mName = libName;
@@ -2787,8 +2934,8 @@ Core::Core(unsigned id, const std::string& name, const std::string& description,
             {
                 auto pb = platform::PlatformBasic::getInstance();
                 OperType opcode = static_cast<OperType>(pb->getOpFromName(opStr));
-                assert(Core::isValidOper(opcode) || opStr == "all");
-                if (opStr == "all") {
+                assert(Core::isValidOper(opcode));
+                if (opcode == platform::PlatformBasic::OP_ALL) {
                     mOperSet.insert(platform::AnyOperation);
                 } else {
                     mOperSet.insert(opcode);
@@ -2851,9 +2998,6 @@ bool Core::isNumber(const std::string& s)
 
 bool Core::isValidOper(OperType opc)
 {
-    if (opc == AnyOperation)
-        return true;
-
     return (opc > 0 && opc != platform::PlatformBasic::OP_UNSUPPORTED);
 }
 

@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -329,12 +332,20 @@ bool ReplaceableMetadataImpl::isReplaceable(const Metadata &MD) {
   return dyn_cast<ValueAsMetadata>(&MD);
 }
 
-static Function *getLocalFunction(Value *V) {
+static DISubprogram *getLocalFunctionMetadata(Value *V) {
   assert(V && "Expected value");
-  if (auto *A = dyn_cast<Argument>(V))
-    return A->getParent();
-  if (BasicBlock *BB = cast<Instruction>(V)->getParent())
-    return BB->getParent();
+  if (auto *A = dyn_cast<Argument>(V)) {
+    if (auto *Fn = A->getParent())
+      return Fn->getSubprogram();
+    return nullptr;
+  }
+
+  if (BasicBlock *BB = cast<Instruction>(V)->getParent()) {
+    if (auto *Fn = BB->getParent())
+      return Fn->getSubprogram();
+    return nullptr;
+  }
+
   return nullptr;
 }
 
@@ -410,9 +421,9 @@ void ValueAsMetadata::handleRAUW(Value *From, Value *To) {
       delete MD;
       return;
     }
-    if (getLocalFunction(From) && getLocalFunction(To) &&
-        getLocalFunction(From) != getLocalFunction(To)) {
-      // Function changed.
+    if (getLocalFunctionMetadata(From) && getLocalFunctionMetadata(To) &&
+        getLocalFunctionMetadata(From) != getLocalFunctionMetadata(To)) {
+      // DISubprogram changed.
       MD->replaceAllUsesWith(nullptr);
       delete MD;
       return;

@@ -1,4 +1,6 @@
-
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
+// 67d7842dbbe25473c3c32b93c0da8047785f30d78e8a024de1b57352245f9689
 
 #ifndef _PLATFORM_CoreInst_H
 #define _PLATFORM_CoreInst_H
@@ -182,6 +184,19 @@ public:
         URAM = 1 << 3,
         DSP = 1 << 4
     };
+    enum PrimitiveType
+    {
+        UNKNOWN_PRIMITIVE = -1,
+        LUT6 = 0,
+        FDRE,
+        LUT6CY,
+        LOOKAHEAD8,
+        RAMB36E5_INT,
+        DSP58,
+        SRLC32E,
+        RAMD32,
+        URAM288E5
+    };
     friend class CoreInstFactory;
     friend class QueryCoreCost;
 protected:
@@ -284,9 +299,12 @@ public:
     // get user latency, priority: fixed latency > bind_op > config_core > config_op
     virtual int getConfigedLatency() const;
 
+    static PrimitiveType str2primitiveType(std::string name);
+    static std::string primitiveType2str(PrimitiveType type);
+
 public:
     // void print(std::ostream& out);
-    std::string print(int user_lat = -1);
+    std::string print(int user_lat = -1, OperType oper=AnyOperation);
 
 protected:
     // configCoreWithCoreInstInfo
@@ -605,6 +623,7 @@ public:
         LogicSync /// Synchronous sequental logic
     };
 
+    // Ref: DSPOpCodes in clib/include/header_files/etc/dsp_functions.h
     enum DSPBuiltinOpcode {
         DSP_mul_add         = 0,
         DSP_mul_sub         = 1,
@@ -617,7 +636,12 @@ public:
         DSP_add_mul_acc     = 8,
         DSP_sub_mul_rev_sub = 9,
         DSP_full_mul_add    = 10,
-        DSP_full_add_mul_add = 11
+        DSP_full_add_mul_add = 11,
+        DSP_add_mul_rev_sub = 12,
+        DSP_mul_add_complex = 13,
+        DSP_mul_acc_complex = 14,
+        DSP_mul_complex     = 15,
+        DSP_full_mul_add_complex = 16
     };
 
     friend class CoreInstFactory;
@@ -749,9 +773,18 @@ public:
     virtual ~AdapterInst(); 
 
 public:
+    enum MAXIParaType
+    {
+        // channel id
+        ChanIDStart = 0,   // channel id start from 0
+        ChanIDEnd   = -3,  // channel id end with unsigned UINT_MAX - 2
+        // reserved
+        L2Cache = -2,       // L2 cache parameters
+        Global  = -1       // Global parameters
+    };
     enum MAXIParaKey
     {
-        // common parameters
+        // global parameters
         NumReadOutstanding = 0,
         NumWriteOutstanding,
         MaxReadBurstLen,
@@ -759,16 +792,25 @@ public:
         LsuFifoImpl,
         UserLatency,
         BusWidth,
+        AddrWidth,
         MaxReadBuffSize,
         MaxWriteBuffSize,
+        Conservative,
+        IORegslice,
+        DataRegslice,
+        Flushable,
+        UnalignedBurst,
+        SRLImplMaxDepth,
         // channel parameters
         ChanIOType = 100,
         ChanPortWidth,
+        ChanAlignWidth,
         // cache parameters
         CacheType = 200,
         CacheImpl,
         CacheLineNum,
         CacheLineDepth,
+        CacheNumPorts,
         CacheLineWays,
         CacheLineWidth
     };
@@ -781,17 +823,41 @@ public:
     };
     enum ChanIOType
     {
-        ReadWrite = 0,
-        ReadOnly,
-        WriteOnly
+        ReadOnly = 0,
+        WriteOnly,
+        ReadWrite
+    };
+
+    enum AXILiteParaKey
+    {
+        /// Common parameters
+        Dir = 0,        // enum Port::DirType
+        Width,          // unsigned
+        Depth,          // unsigned
+        Mode,           // enum IOModeType::IOType
+        OffsetStart,    // int
+        OffsetEnd,      // int
+        /// Array configurations
+        CoreOp = 100,   // enum PlatformBasic::OP_TYPE
+        CoreImpl,       // enum PlatformBasic::IMPL_TYPE
+        CoreLatency,    // int
+        ByteWriteEnable // bool
     };
 
     /// Get/set the bitwidth.
     void configBitWidth(int bw) { mBitWidth = bw; }
     int getBitWidth() const { return mBitWidth; }
-    /// set and get AXILite ports info
+
+    /// set and get AXILite ports info vector
     const std::vector<std::vector<unsigned> >& getAXILitePortsVec() const { return mAXILitePortsVec; }
     void setAXILitePortsVec( std::vector<std::vector<unsigned> >& portsVec) { mAXILitePortsVec = portsVec; } 
+    /// set and get AXILite ports info map
+    const std::map<uint64_t, std::map<unsigned, unsigned> >& getAXILitePortsMap() const { return mAXILitePortsMap; }
+    void setAXILitePortsMap( std::map<uint64_t, std::map<unsigned, unsigned> >& portsMap) { mAXILitePortsMap = portsMap; }
+
+    /// Get the target AXILite port ID (only used for per-port timing lookup)
+    void configTargetAXILitePortID(uint64_t id) { mTargetAXILitePortID = id; }
+    const uint64_t getTargetAXILitePortID() const { return mTargetAXILitePortID; }
 
     /// set and get Adapter ports info
     const CPortList& getAdapterPorts() const { return mAdapterPorts; }
@@ -801,9 +867,20 @@ public:
     const std::map<unsigned, unsigned>& getMAXIParaMap() const { return mMAXIParaMap; }
     void setMAXIParaMap(std::map<unsigned, unsigned>& pm) { mMAXIParaMap = pm; }
 
-    /// Get multi-channel maxi parameters list.
+    /// Get multi-channel MAXI parameter maps
+    // 1. Global parameters (key = -1): 
+    //   NumReadOutstanding, NumWriteOutstanding, MaxReadBurstLen, MaxWriteBurstLen, LsuFifoImpl, UserLatency, BusWidth, MaxReadBuffSize, MaxWriteBuffSize
+    // 2. Channel parameters (key = <ChanID>): 
+    //   (channel non-Cache parameters) ChanIOType, ChanPortWidth, NumReadOutstanding, NumWriteOutstanding
+    //   (channel Cache parameters) CacheType, CacheImpl, CacheLineNum, CacheLineDepth, CacheLineWays, CacheLineWidth
+    // 3. L2 cache parameters (key = -2):
+    //   CacheType, CacheImpl, CacheLineNum, CacheLineDepth, CacheLineWays, CacheLineWidth
     const std::map<unsigned, std::map<unsigned, unsigned> >& getMAXIChanParaMap() const { return mMAXIChanParaMap; }
     void setMAXIChanParaMap(std::map<unsigned, std::map<unsigned, unsigned> >& pm) { mMAXIChanParaMap = pm; }
+
+    /// Get target (MAXI) channel id (only used for per-channel timing lookup)
+    void configTargetMAXIChanID(unsigned id) { mTargetMAXIChanID = id; }
+    const unsigned getTargetMAXIChanID() const { return mTargetMAXIChanID; }
 
     /// enable Adapter IO regslice, currently only avaible for m_axi
     void configIORegslice(bool config)  { mIORegslice = config; }
@@ -841,16 +918,24 @@ public:
 protected: 
     /// Bitwidth
     int mBitWidth;
-    /// AXILite Ports info
-    std::vector<std::vector<unsigned>> mAXILitePortsVec;
-    /// Adapter ports info (currently for m_axi only)
-    CPortList mAdapterPorts;
-    /// MAXI para map
-    std::map<unsigned, unsigned> mMAXIParaMap;
+    /// AXILite Ports info Map
+    std::map<uint64_t, std::map<unsigned, unsigned> > mAXILitePortsMap;
+    /// AXILite target port id (only used for per-port timing lookup)
+    uint64_t mTargetAXILitePortID;
     /// MAXI channel para map
     std::map<unsigned, std::map<unsigned, unsigned> > mMAXIChanParaMap;
+    /// MAXI target Channel ID (only used for per-channel timing lookup)
+    unsigned mTargetMAXIChanID;
+
+    /// TODO: the following parameters and related APIs are planed to be deprecated
+    /// Adapter ports info (currently for m_axi only)
+    CPortList mAdapterPorts;
     /// IO Regslice Enable
     bool mIORegslice;
+    /// AXILite Ports info Vec 
+    std::vector<std::vector<unsigned>> mAXILitePortsVec;
+    /// MAXI para map (Already deprecated)
+    std::map<unsigned, unsigned> mMAXIParaMap;
 };
 
 // information and interfaces for commands config_op/config_storage
@@ -1137,8 +1222,23 @@ public:
         CPortList ports = {},
         StorageInstList bundledMemories = {},
         bool enableIORegslice = false,
-        std::map<unsigned, std::map<unsigned, unsigned> > maxiChanParaMap = {}
+        std::map<unsigned, std::map<unsigned, unsigned> > maxiChanParaMap = {},
+        unsigned targetMaxiChanID = 0,
+        std::map<uint64_t, std::map<unsigned, unsigned> > axilitePortsMap = {},
+        uint64_t targetAxilitePortID = 0
     );
+
+    CoreInst::PrimitiveType getInPrimitive(std::shared_ptr<CoreInst> core);
+    CoreInst::PrimitiveType getOutPrimitive(std::shared_ptr<CoreInst> core);
+    std::pair<CoreInst::PrimitiveType, CoreInst::PrimitiveType> 
+    getMappedPrimitive(std::shared_ptr<CoreInst> source, 
+                        std::shared_ptr<CoreInst> destination, 
+                        unsigned bitwidth = 0);
+    
+
+    double getWireDelay(CoreInst::PrimitiveType source, 
+                        CoreInst::PrimitiveType destination, 
+                        unsigned fanout);
 
     void setCoreCost(std::shared_ptr<CoreInst> core);
     // get targetPlatform for CoreRanker
@@ -1156,6 +1256,14 @@ public:
     bool is8Series() const;
     bool is9Series() const;
 
+    // set/get orig name 
+    void setOrigName (const std::string& libname); 
+    std::string getOrigName() const { return mOrigName; }
+
+    // set/get delay factor
+    void setDelayFactor(float delayFactor);
+    float getDelayFactor() const { return mDelayFactor; }
+    
     // set library name, familyName_speed, e.g. versal_fast, virtex_slow  
     void setName(const std::string& libName);
     std::string getName() const { return mName; }
@@ -1171,8 +1279,6 @@ public:
     ///void setHelper(pf_internal::ResLibHelper* helper) { mHelper = helper; }
     /// Get the resource library helper.
     ///pf_internal::ResLibHelper* getHelper() { return mHelper; }
-
-    double getCore2CoreDelay(const std::string& coreA, const std::string& coreB, int bit);
 
     int createCores();
 private:
@@ -1232,7 +1338,11 @@ private:
     TargetPlatform* mTargetPlatform;
 
     ConfigedLib* mCfgLib;
-
+    
+    // library Orig Name
+    std::string mOrigName;
+    // Delay Factor
+    float mDelayFactor;
     // library name 
     std::string mName;
     // family name for tool

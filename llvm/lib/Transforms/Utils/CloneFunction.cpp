@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -144,6 +145,22 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
     if (!MustCloneSP)
       MD[SP].reset(SP);
   }
+  // When we remap instructions, we want to avoid duplicating inlined
+  // DISubprograms, so record all subprograms we find as we duplicate
+  // instructions and then freeze them in the MD map.
+  // We also record information about dbg.value and dbg.declare to avoid
+  // duplicating the types.
+  DebugInfoFinder DIFinder;
+  DIFinder.processModule(*OldFunc->getParent());
+  for (DISubprogram *ISP : DIFinder.subprograms())
+    if (ISP != SP)
+      VMap.MD()[ISP].reset(ISP);
+
+  for (DICompileUnit *CU : DIFinder.compile_units())
+    VMap.MD()[CU].reset(CU);
+
+  for (DIType *Type : DIFinder.types())
+    VMap.MD()[Type].reset(Type);
 
   SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
   OldFunc->getAllMetadata(MDs);
@@ -155,13 +172,6 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
                      TypeMapper, Materializer));
   }
 
-  // When we remap instructions, we want to avoid duplicating inlined
-  // DISubprograms, so record all subprograms we find as we duplicate
-  // instructions and then freeze them in the MD map.
-  // We also record information about dbg.value and dbg.declare to avoid
-  // duplicating the types.
-  DebugInfoFinder DIFinder;
-
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.  Note that we save BE this way in order to handle cloning of
   // recursive functions into themselves.
@@ -171,8 +181,7 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
     const BasicBlock &BB = *BI;
 
     // Create a new basic block and copy instructions into it!
-    BasicBlock *CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo,
-                                      ModuleLevelChanges ? &DIFinder : nullptr);
+    BasicBlock *CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo);
 
     // Add basic block mapping.
     VMap[&BB] = CBB;
@@ -194,17 +203,7 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
       Returns.push_back(RI);
   }
 
-  for (DISubprogram *ISP : DIFinder.subprograms())
-    if (ISP != SP)
-      VMap.MD()[ISP].reset(ISP);
-
-  for (DICompileUnit *CU : DIFinder.compile_units())
-    VMap.MD()[CU].reset(CU);
-
-  for (DIType *Type : DIFinder.types())
-    VMap.MD()[Type].reset(Type);
-
-  // Loop over all of the instructions in the function, fixing up operand
+   // Loop over all of the instructions in the function, fixing up operand
   // references as we go.  This uses VMap to do all the hard work.
   for (Function::iterator BB =
            cast<BasicBlock>(VMap[&OldFunc->front()])->getIterator(),

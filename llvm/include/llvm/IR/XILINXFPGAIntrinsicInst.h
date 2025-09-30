@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -32,6 +32,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/CallSite.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Operator.h"
@@ -105,7 +106,8 @@ public:
                            Intrinsic::fpga_float_compare_le,
                            Intrinsic::fpga_float_compare_lt,
                            Intrinsic::fpga_float_compare_ne,
-                           Intrinsic::fpga_float_compare_uo);
+                           Intrinsic::fpga_float_compare_uo,
+                           Intrinsic::fpga_float_accumulate);
   }
 
   static inline bool classof(const Value *V) {
@@ -277,14 +279,14 @@ public:
   }
 
   /// getSrcType - Overload to input type as IntegerType
-  IntegerType *getSrcType() const {
-    return cast<IntegerType>(getArgOperand(0)->getType());
-  }
+  //IntegerType *getSrcType() const {
+  //  return cast<IntegerType>(getArgOperand(0)->getType());
+  //}
 
   /// getDestType - Overload to return type as IntegerType
-  IntegerType *getDestType() const {
-    return cast<IntegerType>(IntrinsicInst::getType());
-  }
+  //IntegerType *getDestType() const {
+  //  return cast<IntegerType>(IntrinsicInst::getType());
+  //}
 
   /// getSrcExpArgIndex - Return the SrcArgOperand index
   unsigned getSrcExpArgIndex() const { return getNumArgOperands() - 2; }
@@ -303,16 +305,16 @@ public:
   }
 
   /// getSrcBitwidth - Return the input total bitwidth
-  unsigned getSrcBitwidth() const { return getSrcType()->getBitWidth(); }
+  //unsigned getSrcBitwidth() const { return getSrcType()->getBitWidth(); }
 
   /// getDestBitwidth - Return the return total bitwidth
-  unsigned getDestBitwidth() const { return getDestType()->getBitWidth(); }
+  //unsigned getDestBitwidth() const { return getDestType()->getBitWidth(); }
 
   /// isSrcFloat - Return true if the input is floating point
-  bool isSrcFloat() const {
-    return getIntrinsicID() == Intrinsic::fpga_float_to_fixed ||
-           getIntrinsicID() == Intrinsic::fpga_float_to_float;
-  }
+  //bool isSrcFloat() const {
+  //  return getIntrinsicID() == Intrinsic::fpga_float_to_fixed ||
+  //         getIntrinsicID() == Intrinsic::fpga_float_to_float;
+  //}
 
   /// isSrcFixed - Return true if the input is fixed point
   bool isSrcFixed() const {
@@ -320,10 +322,10 @@ public:
   }
 
   /// isDestFloat - Return true if the output is floating point
-  bool isDestFloat() const {
-    return getIntrinsicID() == Intrinsic::fpga_float_from_fixed ||
-           getIntrinsicID() == Intrinsic::fpga_float_to_float;
-  }
+  //bool isDestFloat() const {
+  //  return getIntrinsicID() == Intrinsic::fpga_float_from_fixed ||
+  //         getIntrinsicID() == Intrinsic::fpga_float_to_float;
+  //}
 
   /// isDestFixed - Return true if the output is fixed point
   bool isDestFixed() const {
@@ -344,27 +346,27 @@ public:
 
   /// getSrcMantBitwidth - Return the input mantissa bitwidth (includes hidden bit)
   // (only meaningful if isSrcFloat() is true)
-  unsigned getSrcMantBitwidth() const {
-    return getSrcBitwidth() - getSrcExpBitwidth();
-  }
+  //unsigned getSrcMantBitwidth() const {
+  //  return getSrcBitwidth() - getSrcExpBitwidth();
+  //}
 
   /// getDestMantBitwidth - Return the output mantissa bitwidth (includes hidden bit)
   // (only meaningful if isDestFloat() is true)
-  unsigned getDestMantBitwidth() const {
-    return getDestBitwidth() - getDestExpBitwidth();
-  }
+  //unsigned getDestMantBitwidth() const {
+  //  return getDestBitwidth() - getDestExpBitwidth();
+  //}
 
   /// getSrcIntegerBitwidth - Return the input integer bitwidth
   // (only meaningful if isSrcFixed() is true)
-  unsigned getSrcIntBitwidth() const {
-    return (unsigned) (getSrcExp()->getZExtValue());
-  }
+  //unsigned getSrcIntBitwidth() const {
+  //  return (unsigned) (getSrcExp()->getZExtValue());
+  //}
 
   /// getDestIntegerBitwidth - Return the output integer bitwidth
   // (only meaningful if isDestFixed() is true)
-  unsigned getDestIntBitwidth() const {
-    return (unsigned) (getDestExp()->getZExtValue());
-  }
+  //unsigned getDestIntBitwidth() const {
+  //  return (unsigned) (getDestExp()->getZExtValue());
+  //}
 };
 
 #define FCInst(Name, name)                                                     \
@@ -399,16 +401,16 @@ public:
   }
 
   /// getPredicate - Return the FCmpInst predicate for this intrinsic
-  CmpInst::Predicate getPredicate() const {
-    switch (getIntrinsicID()) {
-    case Intrinsic::fpga_float_compare_eq: return FCmpInst::FCMP_OEQ;
-    case Intrinsic::fpga_float_compare_le: return FCmpInst::FCMP_OLE;
-    case Intrinsic::fpga_float_compare_lt: return FCmpInst::FCMP_OLT;
-    case Intrinsic::fpga_float_compare_ne: return FCmpInst::FCMP_ONE;
-    case Intrinsic::fpga_float_compare_uo: return FCmpInst::FCMP_UNO;
-    default: return FCmpInst::BAD_FCMP_PREDICATE;
-    }
-  }
+  //CmpInst::Predicate getPredicate() const {
+  //  switch (getIntrinsicID()) {
+  //  case Intrinsic::fpga_float_compare_eq: return FCmpInst::FCMP_OEQ;
+  //  case Intrinsic::fpga_float_compare_le: return FCmpInst::FCMP_OLE;
+  //  case Intrinsic::fpga_float_compare_lt: return FCmpInst::FCMP_OLT;
+  //  case Intrinsic::fpga_float_compare_ne: return FCmpInst::FCMP_ONE;
+  //  case Intrinsic::fpga_float_compare_uo: return FCmpInst::FCMP_UNO;
+  //  default: return FCmpInst::BAD_FCMP_PREDICATE;
+  //  }
+  //}
 
   /// getIntrinsicIDForPred - Return the intrinsic for a given FCmpInst predicate
   static Intrinsic::ID getIntrIDForPred(CmpInst::Predicate Pred) {
@@ -475,6 +477,171 @@ FCInst(CmpNE, compare_ne)
 FCInst(CmpUO, compare_uo)
 #undef FCInst
 
+class FloatAccumulateInst : public FloatInst {
+public:
+  static inline bool classof(const FloatInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_float_accumulate;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<FloatInst>(V) && classof(cast<FloatInst>(V));
+  }
+
+  /// getType - Overload to return type as IntegerType
+  IntegerType *getType() const {
+    return cast<IntegerType>(IntrinsicInst::getType());
+  }
+
+  /// getStateArgIndex - Return the ArgOperand index
+  unsigned getStateArgIndex() const { return 0; }
+
+  /// getState - Return the State argument
+  Value *getState() const { return getArgOperand(getStateArgIndex()); }
+
+  /// getStateType - Return the State type as PointerType
+  PointerType *getStateType() const {
+    return cast<PointerType>(getState()->getType());
+  }
+
+  /// getStateElementType - Return the State element type as IntegerType
+  IntegerType *getStateElementType() const {
+    return cast<IntegerType>(getStateType()->getElementType());
+  }
+
+  /// getInputArgIndex - Return the ArgOperand index
+  unsigned getInputArgIndex() const { return 1; }
+
+  /// getInput - Return the Input argument
+  Value *getInput() const { return getArgOperand(getInputArgIndex()); }
+
+  /// getLastArgIndex - Return the ArgOperand index
+  unsigned getLastArgIndex() const { return getNumArgOperands() - 4; }
+
+  /// getLast - Return the Last predicate argument
+  Value *getLast() const { return getArgOperand(getLastArgIndex()); }
+
+  /// getExpArgIndex - Return the ArgOperand index
+  unsigned getExpArgIndex() const { return getNumArgOperands() - 3; }
+
+  /// getExp - Return the Exponent bitwidth as ConstantInt
+  ConstantInt *getExp() const {
+    return cast<ConstantInt>(getArgOperand(getExpArgIndex()));
+  }
+
+  /// getOutIntArgIndex - Return the ArgOperand index
+  unsigned getOutIntArgIndex() const { return getNumArgOperands() - 2; }
+
+  /// getOutIntBitwidth - Return the Out integer bitwidth as ConstantInt
+  ConstantInt *getOutInt() const {
+    return cast<ConstantInt>(getArgOperand(getOutIntArgIndex()));
+  }
+
+  /// getInIntArgIndex - Return the ArgOperand index
+  unsigned getInIntArgIndex() const { return getNumArgOperands() - 1; }
+
+  /// getInIntBitwidth - Return the In integer bitwidth as ConstantInt
+  ConstantInt *getInInt() const {
+    return cast<ConstantInt>(getArgOperand(getInIntArgIndex()));
+  }
+
+  /// getBitwidth - Return the total bitwidth
+  unsigned getBitwidth() const { return getType()->getBitWidth(); }
+
+  /// getExpBitwidth - Return the exponent bitwidth
+  unsigned getExpBitwidth() const {
+    return (unsigned) (getExp()->getZExtValue());
+  }
+
+  /// getMantBitwidth - Return the mantissa bitwidth (includes hidden bit)
+  unsigned getMantBitwidth() const {
+    return getBitwidth() - getExpBitwidth();
+  }
+
+  /// getStateBitwidth - Return the total bitwidth of the accumulator state
+  unsigned getStateBitwidth() const {
+    return getStateElementType()->getBitWidth();
+  }
+};
+
+/// This represents the fpga_dsp
+class DSPInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_dsp;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  // Struct indexes in the return struct
+  unsigned getAStructIndex() const { return 0; }
+  unsigned getBStructIndex() const { return 1; }
+  unsigned getPStructIndex() const { return 2; }
+
+  // Argument indexes
+  unsigned getFuncIdxArgIndex() const { return 0; }
+  unsigned getFlagsArgIndex() const { return 1; }
+  unsigned getDArgIndex() const { return 2; }
+  unsigned getAArgIndex() const { return 3; }
+  unsigned getBArgIndex() const { return 4; }
+  unsigned getCArgIndex() const { return 5; }
+  unsigned getInitArgIndex() const { return 6; }
+  unsigned getStateArgIndex() const { return 7; }
+
+  /// Function Index value as ConstantInt
+  ConstantInt *getFuncIdx() const {
+    return cast<ConstantInt>(getArgOperand(getFuncIdxArgIndex()));
+  }
+
+  /// Flags value as ConstantInt
+  ConstantInt *getFlags() const {
+    return cast<ConstantInt>(getArgOperand(getFlagsArgIndex()));
+  }
+
+  /// D, A, B, C as Value
+  Value *getD() const { return getArgOperand(getDArgIndex()); }
+  Value *getA() const { return getArgOperand(getAArgIndex()); }
+  Value *getB() const { return getArgOperand(getBArgIndex()); }
+  Value *getC() const { return getArgOperand(getCArgIndex()); }
+
+  /// Init and State as Value
+  Value *getInit() const { return getArgOperand(getInitArgIndex()); }
+  Value *getState() const { return getArgOperand(getStateArgIndex()); }
+
+  /// getType overload to return as StructType
+  StructType *getType() const {
+    return cast<StructType>(IntrinsicInst::getType());
+  }
+
+  /// Function Index type as IntegerType
+  IntegerType *getFuncIdxType() const {
+    return cast<IntegerType>(getFuncIdx()->getType());
+  }
+
+  /// Flags type as IntegerType
+  IntegerType *getFlagsType() const {
+    return cast<IntegerType>(getFlags()->getType());
+  }
+
+  /// D, A, B, C types as IntegerType
+  IntegerType *getDType() const { return cast<IntegerType>(getD()->getType()); }
+  IntegerType *getAType() const { return cast<IntegerType>(getA()->getType()); }
+  IntegerType *getBType() const { return cast<IntegerType>(getB()->getType()); }
+  IntegerType *getCType() const { return cast<IntegerType>(getC()->getType()); }
+  IntegerType *getPType() const { return getCType(); } // P type is same as C
+
+  /// State type as PointerType
+  PointerType *getStateType() const {
+    return cast<PointerType>(getState()->getType());
+  }
+
+  /// State element type as IntegerType
+  IntegerType *getStateElementType() const {
+    return cast<IntegerType>(getStateType()->getElementType());
+  }
+};
+
 /// This represents the fpga_bit_concat
 class BitConcatInst : public IntrinsicInst {
 public:
@@ -497,6 +664,27 @@ public:
 
   /// \brief Return the element at [Hi, Lo], without the bitcast
   Value *getElement(unsigned Hi, unsigned Lo) const;
+};
+
+/// This represents the llvm_bitreverse instrinsic
+/// @note Should be moved to IntrinsicInst.h?
+class BitReverseInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::bitreverse;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  IntegerType *getType() const {
+    return cast<IntegerType>(IntrinsicInst::getType());
+  }
+
+  Value *getSrc() const {
+    return getArgOperand(0);
+  }
 };
 
 /// This represent the fpga_part_select
@@ -877,9 +1065,6 @@ public:
 
   SeqBeginInst *getPointerOperand() const { return getBegin(); }
   SeqBeginInst *getBegin() const;
-  Value *getSize() const { return getArgOperand(1); }
-  Type *getSizeType() const { return getSize()->getType(); }
-  void updateSize(Value *V);
 };
 
 class SeqAccessInst : public IntrinsicInst {
@@ -1354,6 +1539,27 @@ struct BRAMStoreInst : public FPGAStoreInst {
 
   static inline bool classof(const Value *V) {
     return isa<FPGAStoreInst>(V) && classof(cast<FPGAStoreInst>(V));
+  }
+};
+
+// spir pipe
+class SPIRPIPEInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::spir_read_pipe_2 ||
+           I->getIntrinsicID() == Intrinsic::spir_read_pipe_block_2 ||
+           I->getIntrinsicID() == Intrinsic::spir_write_pipe_2 ||
+           I->getIntrinsicID() == Intrinsic::spir_write_pipe_block_2;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  // PIPE operand is always the last one
+  Value *getPIPEOperand() { return getArgOperand(getNumArgOperands() - 1); }
+  const Value *getPIPEOperand() const {
+    return getArgOperand(getNumArgOperands() - 1);
   }
 };
 
@@ -2040,6 +2246,18 @@ public:
 //  Scope
 //
 //===---
+struct ScopeInst : public IntrinsicInst {
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::directive_scope_entry ||
+           I->getIntrinsicID() == Intrinsic::hint_scope_entry ||
+           I->getIntrinsicID() == Intrinsic::directive_scope_exit ||
+           I->getIntrinsicID() == Intrinsic::hint_scope_exit;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
 
 struct ScopeEntry : public IntrinsicInst {
   static inline bool classof(const IntrinsicInst *I) {
@@ -2078,6 +2296,23 @@ struct ScopeEntry : public IntrinsicInst {
     return dyn_cast_or_null<DILocation>(
         md->getOperand(md->getNumOperands() - 1));
   }
+
+  // get pragma location for any kind of scope pragma 
+  DILocation *getPragmaLoc() const {
+    MDNode *md = getMetadata("pragma.location");
+    if (!md)
+      return nullptr;
+    return dyn_cast_or_null<DILocation>(
+        md->getOperand(md->getNumOperands() - 1));
+  }
+
+  void setPragmaLoc(DebugLoc Loc) {
+    MDNode *md = getMetadata("pragma.location");
+    if (!md)
+      return;    
+    md->replaceOperandWith(md->getNumOperands() - 1, Loc.getAsMDNode());
+  }
+
 };
 
 struct ScopeExit : public IntrinsicInst {
@@ -2248,7 +2483,6 @@ DEFINE_SCOPE(Directive, GlobalIdULTRegion, global_id_ult)
 DEFINE_SCOPE(Directive, PipelineStage, pipeline_stage)
 DEFINE_SCOPE(Directive, OutlineRegion, xcl_outline)
 DEFINE_SCOPE(Directive, LatencyRegion, xcl_latency)
-DEFINE_SCOPE(Directive, PerformanceRegion, xlx_performance)
 DEFINE_SCOPE(Directive, ExprBalanceRegion, xlx_expr_balance)
 DEFINE_SCOPE(Directive, InlineRegion, xcl_inline)
 DEFINE_SCOPE(Directive, OccurrenceRegion, xlx_occurrence)
@@ -2262,7 +2496,6 @@ DEFINE_SCOPE(Directive, InfiniteTask, xlx_infinite_task_def)
 DEFINE_SCOPE(Directive, Task, xlx_task_def)
 
 DEFINE_SCOPE(Hint, LatencyHintRegion, xcl_latency)
-DEFINE_SCOPE(Hint, PerformanceHintRegion, xlx_performance)
 DEFINE_SCOPE(Hint, ExprBalanceHintRegion, xlx_expr_balance)
 DEFINE_SCOPE(Hint, OccurrenceHintRegion, xlx_occurrence)
 DEFINE_SCOPE(Hint, LoopMergeHintRegion, xlx_merge_loop)
@@ -2348,6 +2581,8 @@ DEFINE_SSA_ATTRIBUTE(ArrayGeometry, xcl_array_geometry)
 DEFINE_SSA_ATTRIBUTE(ArrayView, xcl_array_view)
 DEFINE_SSA_ATTRIBUTE(ReadOnly, xcl_read_only)
 DEFINE_SSA_ATTRIBUTE(WriteOnly, xcl_write_only)
+
+class InterfaceInst;
 
 // Intrinsics for pragmas
 class PragmaInst : public IntrinsicInst {
@@ -2552,7 +2787,9 @@ protected:
         if (PopulateGEP)
           get(Extract, PSet, PopulateGEP);
       } else if (auto *PI = dyn_cast<PragmaInstType>(U)) {
-        PSet.insert(PI);
+        if (!isa<InterfaceInst>(PI) || PI->getVariable() == V) {
+          PSet.insert(PI);
+        }
       }
     }
   }
@@ -2595,6 +2832,7 @@ class DependenceInst : public PragmaInst {
 public:
   enum class Direction { NODIR = -1, RAW = 0, WAR = 1, WAW = 2 };
   enum class DepType { INTRA, INTER };
+  enum class ClassKind { NoClass = 0, Array = 1, Pointer = 2 };
 
   static const std::string BundleTagName;
   static inline bool classof(const PragmaInst *I) {
@@ -2621,12 +2859,15 @@ public:
     return V->getType()->isPointerTy() ? V : nullptr;
   }
 
-  int32_t getClass() const {
+  ClassKind getClass() const {
     // class option
     // 0: No class set; 1: Array; 2: Pointer
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
     assert(Bundle && "Illegal dependence intrinsic");
-    return cast<ConstantInt>(Bundle.getValue().Inputs[1])->getSExtValue();
+    uint64_t ClassValue =
+        cast<ConstantInt>(Bundle.getValue().Inputs[1])->getSExtValue();
+    assert(ClassValue <= 2 && "Unexpected dependence class type!");
+    return static_cast<ClassKind>(ClassValue);
   }
 
   bool isEnforced() const {
@@ -2924,11 +3165,46 @@ public:
 
   static inline unsigned getConstValueNum() { return 0; }
 
-  void getStables(SmallVectorImpl<Value *> &Stables) {
+  static StableInst *get(Value *V) {
+    return PragmaInst::get<StableInst>(V, true);
+  }
+
+  static const StableInst *get(const Value *V) {
+    return PragmaInst::get<StableInst>(V, true);
+  }
+
+  void getAllVariables( SmallVectorImpl<Value*> &Vars){ 
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
     assert(Bundle && "Illegal stable intrinsic");
-    for (auto &U : Bundle.getValue().Inputs) {
-      Stables.push_back(U);
+    for( int i = 0; i < Bundle.getValue().Inputs.size();){ 
+      Value *var = Bundle.getValue().Inputs[i++].get();
+      Value *isOff = Bundle.getValue().Inputs[i++];
+      Vars.push_back(var); 
+    }
+  }
+
+  void getStables(SmallVectorImpl<Value *> &Stables) { 
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal stable intrinsic");
+    for( int i = 0; i < Bundle.getValue().Inputs.size();){ 
+      Value *var = Bundle.getValue().Inputs[i++].get();
+      Value *isOff = Bundle.getValue().Inputs[i++];
+      assert(isa<ConstantInt>(isOff) && "unexpected"); 
+      if (cast<ConstantInt>(isOff)->getSExtValue()) { 
+        Stables.push_back(var); 
+      } 
+    }
+  }
+  void getUnStables( SmallVectorImpl<Value*> &unStables){ 
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    assert(Bundle && "Illegal stable intrinsic");
+    for( int i = 0; i < Bundle.getValue().Inputs.size();){ 
+      Value *var = Bundle.getValue().Inputs[i++].get();
+      Value *isOff = Bundle.getValue().Inputs[i++];
+      assert(isa<ConstantInt>(isOff) && "unexpected"); 
+      if (!cast<ConstantInt>(isOff)->getSExtValue()) { 
+        unStables.push_back(var); 
+      } 
     }
   }
 };
@@ -3024,7 +3300,7 @@ public:
     return isa<PragmaInst>(V) && classof(cast<PragmaInst>(V));
   }
 
-  Value* getVariable() {
+  Value* getVariable() const {
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
     assert(Bundle && "Illegal aggregate intrinsic");
     return Bundle.getValue().Inputs[0];
@@ -3938,8 +4214,21 @@ public:
     if (!isValidInst())
       assert(0 && "Illegal m_axi intrinsic");
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    auto *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[2]);
-    return Depth->getSExtValue();
+    const Use &U = Bundle.getValue().Inputs[2];
+    if (isa<ConstantInt>(U)) {
+      return cast<ConstantInt>(U)->getSExtValue();
+    }
+    else {
+      return 0;
+    }
+  }
+
+  Value* getDepthVal() const {
+    if (!isValidInst())
+      assert(0 && "Illegal m_axi intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    const Use &U = Bundle.getValue().Inputs[2];
+    return cast<Value>(U);
   }
 
   StringRef getOffset() const {
@@ -4132,8 +4421,21 @@ public:
     if (!isValidInst())
       assert(0 && "Illegal axis intrinsic");
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    auto *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[3]);
-    return Depth->getSExtValue();
+    const Use &U = Bundle.getValue().Inputs[3];
+    if (isa<ConstantInt>(U)) {
+      return cast<ConstantInt>(U)->getSExtValue();
+    }
+    else {
+      return 0;
+    }
+  }
+
+  Value* getDepthVal() const {
+    if (!isValidInst())
+      assert(0 && "Illegal axis intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    const Use &U = Bundle.getValue().Inputs[3];
+    return cast<Value>(U);
   }
 
   StringRef getBundleName() const {
@@ -4221,8 +4523,21 @@ public:
     if (!isValidInst())
       assert(0 && "Illegal ap_fifo intrinsic");
     Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
-    auto *Depth = cast<ConstantInt>(Bundle.getValue().Inputs[3]);
-    return Depth->getSExtValue();
+    const Use &U = Bundle.getValue().Inputs[3];
+    if (isa<ConstantInt>(U)) {
+      return cast<ConstantInt>(U)->getSExtValue();
+    }
+    else {
+      return 0;
+    }
+  }
+
+  Value* getDepthVal() const {
+    if (!isValidInst())
+      assert(0 && "Illegal ap_fifo intrinsic");
+    Optional<OperandBundleUse> Bundle = getOperandBundle(BundleTagName);
+    const Use &U = Bundle.getValue().Inputs[3];
+    return cast<Value>(U);
   }
 
   // get call intrinsic from root value
@@ -4364,7 +4679,7 @@ public:
 
   int32_t getDirectIO() const {
     auto CS = CallSite(const_cast<ApMemoryInst *>(this));
-    auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+8));
+    auto DirectIO = cast<ConstantInt>(*(CS.data_operands_end()-1));
     return DirectIO->getSExtValue();
   }
 
@@ -4487,7 +4802,7 @@ public:
 
   int32_t getDirectIO() const {
     auto CS = CallSite(const_cast<BRAMInst *>(this));
-    auto DirectIO = cast<ConstantInt>(*(CS.data_operands_begin()+8));
+    auto DirectIO = cast<ConstantInt>(*(CS.data_operands_end()-1));
     return DirectIO->getSExtValue();
   }
 
@@ -5216,6 +5531,14 @@ public:
     return cast<ConstantInt>(getOperand(2))->getZExtValue();
   }
 
+  uint64_t getPorts() const {
+    return cast<ConstantInt>(getOperand(3))->getZExtValue();
+  }
+
+  uint64_t getL2Lines() const {
+    return cast<ConstantInt>(getOperand(4))->getZExtValue();
+  }
+
   static void get(Value *V, SetVector<MaxiCacheInst *> &PSet, bool Indirect = true) {
     return PragmaInst::get(V, PSet, Indirect);
   }
@@ -5270,7 +5593,9 @@ public:
   void getBeforeAfterObjects(SmallVectorImpl<Value *> &BeforeObjs,
                              SmallVectorImpl<Value *> &AfterObjs) {
     bool IsBefore = true;
-    for (Value *Arg : arg_operands()) {
+    assert(getNumArgOperands() >= 1 && "fpga_fence require at least one argument");
+    for (unsigned i = 0; i < getNumArgOperands() - 1; i++) {
+      auto Arg = getArgOperand(i);
       if (Arg->getType()->isPointerTy()) {
         if (IsBefore)
           BeforeObjs.push_back(Arg);
@@ -5278,9 +5603,17 @@ public:
           AfterObjs.push_back(Arg);
       } else if (ConstantInt *C = dyn_cast<ConstantInt>(Arg)) {
         if (-1 == (int)C->getSExtValue())
-          IsBefore = false;     
+          IsBefore = false;
       }
     }
+  }
+
+  unsigned getDelay() {
+    auto ArgNum = getNumArgOperands();
+    assert(ArgNum >= 1 && "fpga_fence require at least one argument");
+    auto C = dyn_cast<ConstantInt>(getArgOperand(ArgNum - 1));
+    assert(C && "fpga_fence require delay must be constant integer");
+    return C->getZExtValue();
   }
 };
 
@@ -5318,6 +5651,16 @@ public:
   }
 };
 
+class FPGAXorReduceInst : public IntrinsicInst {
+public:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::fpga_xor_reduce;
+  }
+
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
 } // namespace llvm
 
 #endif // REFLOW_SPIR_INTRINSICINST_H

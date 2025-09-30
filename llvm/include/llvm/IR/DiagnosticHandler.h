@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 // Base DiagnosticHandler class declaration. Derive from this class to provide
@@ -69,6 +72,10 @@ struct DiagnosticHandler {
 
   /// Return true if any type of remarks are enabled for any pass.
   virtual bool isAnyRemarkEnabled() const;
+
+  virtual void disableRemarksTemporarily();
+
+  virtual void recoverRemarks();
 };
 } // namespace llvm
 

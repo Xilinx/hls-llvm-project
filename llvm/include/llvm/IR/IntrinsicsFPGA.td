@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -157,11 +157,38 @@ def int_fpga_mux : Intrinsic<[llvm_any_ty], [llvm_anyint_ty, llvm_vararg_ty]>;
 // Sparse Multiplexer (SSA equivalent to switch)
 // a_k = sparse.mux(k, a_default, cond_0, a_0, cond_1, a_1, cond_2, a_2, ..., cond_N, a_N)
 def int_fpga_sparse_mux : Intrinsic<[llvm_any_ty], [llvm_anyint_ty, LLVMMatchType<0>, llvm_vararg_ty]>;
+
+// llvm.fpga.xor.reduce(A) - ^A in verilog
+def int_fpga_xor_reduce : Intrinsic<[llvm_i1_ty], [llvm_anyint_ty]>;
 }
 
 //Intrinsics that are used to keep load/store for stream objects
 def int_fpga_ssa_keep : Intrinsic<[llvm_any_ty], [LLVMMatchType<0>],
                                   [IntrInaccessibleMemOnly, IntrWillReturn]>;
+
+
+// iN fpga.float.accumulate(iW *%acc, iN %val, i1 %last, i32 <exp>, i32 <out_int>, i32 <in_int>)
+//   - N: bitwidth of the value to add and of the result (both floating point format)
+//   - W: bitwidth of the internal accumulator (fixed precision format)
+//   - <exp>: bitwidth of the exponent of the value to add and of the result
+//   - <out_int>: bitwidth of the integer part of the internal accumulator
+//   - <in_int>: bitwidth of the integer part of the converted input value (must be less or equal to out_int)
+def int_fpga_float_accumulate : Intrinsic<[llvm_anyint_ty],
+                                          [LLVMAnyPointerType<llvm_anyint_ty>, LLVMMatchType<0>, llvm_i1_ty,
+                                           llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                                          [IntrArgMemOnly, IntrWillReturn]>;
+
+// {iA, iB, iC} fpga.dsp(i32 <func_idx>, i64 <flags>, iD, iA, iB, iC, i1 %init, iC* %acc)
+//   - A, B, C, D: bitwidths of the different arguments (architecture dependent)
+//   - <func_idx>: defines the function to perform
+//   - <flags>: defines options of the function
+//   - %init: defines if the internal state must be reset right before the call
+//   - %acc: pointer to the internal state (can be nullptr if state-less)
+def int_fpga_dsp : Intrinsic<[llvm_anyint_ty, llvm_anyint_ty, llvm_anyint_ty],
+                             [llvm_i32_ty, llvm_i64_ty, llvm_anyint_ty,
+                              LLVMMatchType<0>, LLVMMatchType<1>, LLVMMatchType<2>,
+                              llvm_i1_ty, LLVMAnyPointerType<LLVMMatchType<2>>],
+                             [IntrArgMemOnly, IntrWillReturn]>;
 
 // fpga.gmem.load(Ptr, volatile)
 def int_fpga_gmem_load : DefaultAttrsIntrinsic<[llvm_any_ty],
@@ -474,7 +501,7 @@ def int_fpga_type_annotate: Intrinsic<[], [llvm_vararg_ty], [IntrInaccessibleMem
 //      %tok = fpga.seq.load.begin(%addr, %n)
 //      for (%i = 0; %i < %n; ++%i)
 //        ... = fpga.seq.load(%tok, %i)
-//      fpga.seq.load.end(%tok, %n)
+//      fpga.seq.load.end(%tok)
 //
 //  The loop structure can be more complex, but:
 //    - load.begin and load.end must have a matching number (here %n)
@@ -491,7 +518,7 @@ def int_fpga_type_annotate: Intrinsic<[], [llvm_vararg_ty], [IntrInaccessibleMem
 //
 //      %tok = fpga.seq.load.begin(%addr, %n)
 //      ...
-//      fpga.seq.load.end(%tok, %n)
+//      fpga.seq.load.end(%tok)
 //      %z = load %addr  ; This one should not go inside the region above
 //
 //===---
@@ -508,8 +535,7 @@ def int_fpga_seq_load : Intrinsic<[llvm_any_ty],
                                   [IntrArgMemOnly, IntrWillReturn]>;
 
 // fpga.seq.load.end(Ptr, Len)
-def int_fpga_seq_load_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>,
-                                           llvm_anyint_ty],
+def int_fpga_seq_load_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>],
                                       [IntrArgMemOnly, IntrWillReturn]>;
 
 // Ptr = fpga.seq.store.begin(Ptr, Len)
@@ -524,8 +550,7 @@ def int_fpga_seq_store : Intrinsic<[], [llvm_any_ty,
                                    [IntrArgMemOnly, IntrWillReturn]>;
 
 // fpga.seq.store.end(Ptr, Len)
-def int_fpga_seq_store_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>,
-                                            llvm_anyint_ty],
+def int_fpga_seq_store_end : Intrinsic<[], [LLVMAnyPointerType<llvm_any_ty>],
                                        [IntrArgMemOnly, IntrWillReturn]>;
 
 // Abstracted function to write to printf buffer
@@ -590,8 +615,8 @@ def int_fpga_fence_group : Intrinsic<[llvm_i32_ty],
                                      [llvm_vararg_ty],
                                      [IntrArgMemOnly, IntrWillReturn]>;
 
-// void llvm.fpga.fence.with.group(i32 %group1, i32 %group2)
+// void llvm.fpga.fence.with.group(i32 %group1, i32 %group2, i32 %delay)
 def int_fpga_fence_with_group : Intrinsic<[], 
-                                          [llvm_i32_ty, llvm_i32_ty],
+                                          [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                                           [IntrWillReturn]>;
 }

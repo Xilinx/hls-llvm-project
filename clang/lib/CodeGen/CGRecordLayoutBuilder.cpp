@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2020 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -747,12 +748,6 @@ CGRecordLayout *CodeGenTypes::ComputeRecordLayout(const RecordDecl *D,
   // signifies that the type is no longer opaque and record layout is complete,
   // but we may need to recursively layout D while laying D out as a base type.
   Ty->setBody(Builder.FieldTypes, Builder.Packed);
-
-  if (Context.getLangOpts().HLSExt && D->hasAttr<UnpackedAttr>()) {
-    auto *MD = TheModule.getOrInsertNamedMetadata("struct.unpack");
-    MD->addOperand(llvm::MDNode::get(getLLVMContext(),
-        llvm::ValueAsMetadata::get(llvm::UndefValue::get(Ty))));
-  }
 
   CGRecordLayout *RL =
     new CGRecordLayout(Ty, BaseTy, Builder.IsZeroInitializable,

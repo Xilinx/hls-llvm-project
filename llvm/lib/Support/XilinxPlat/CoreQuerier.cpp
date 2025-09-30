@@ -1,4 +1,6 @@
-
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
+// 67d7842dbbe25473c3c32b93c0da8047785f30d78e8a024de1b57352245f9689
 #include <cstring>
 #include <iostream>
 #include <algorithm>
@@ -7,6 +9,7 @@
 #include <cassert>
 #include <cmath>
 #include <sstream>
+#include <array>
 #if XILINX_HLS_FE_STANDALONE
 #include "llvm/Support/XilinxPlat/CoreInst.h"
 #include "llvm/Support/XilinxPlat/CoreQuerier.h"
@@ -23,40 +26,6 @@
 
 namespace platform
 {
-class ExtrapolationManager {
-public:
-    static bool isEnableExtrapolationDelay(const std::string& name) {        
-        if (mEnableExtrapolation.count(name)) {
-            return std::get<0>(mEnableExtrapolation.at(name));
-        }
-        return false;
-    }
-    static bool isEnableExtrapolationLatency(const std::string& name) {
-        if (mEnableExtrapolation.count(name)) {
-            return std::get<1>(mEnableExtrapolation.at(name));
-        }
-        return false;
-    }
-    static bool isEnableExtrapolationResource(const std::string& name) {
-        if (mEnableExtrapolation.count(name)) {
-            return std::get<2>(mEnableExtrapolation.at(name));
-        }
-        return false;
-    }
-private:
-    // core name -> (delay, latency, resource) 
-    const static std::map<std::string, std::tuple<bool, bool, bool>> mEnableExtrapolation;
-};
-const std::map<std::string, std::tuple<bool, bool, bool>> ExtrapolationManager::mEnableExtrapolation{
-    {"RAMBlock", {false, false, true}},
-    {"RAMVivadoDo", {false, false, true}},
-    {"RAMDistributed", {false, false, true}},
-    {"RAMUltra", {false, false, true}},
-    {"URAMECC", {false, false, true}},
-    {"BRAMECC", {false, false, true}},
-    {"BRAMECC_WInit", {false, false, true}}
-};
-
 // max length of SQL command string
 const int MAX_CMD_SIZE = 200;
 
@@ -81,6 +50,207 @@ ResourceData operator*(double a, const ResourceData& res) {
 
     return value;
 }
+
+class ExtrapolationFormula {
+public:
+    virtual ~ExtrapolationFormula() = default;
+    ExtrapolationFormula() = default;
+    ExtrapolationFormula(const std::vector<double>& k):
+        mK(k) {}
+
+    virtual double predict(const std::vector<int>& xVec) const = 0;
+protected:
+    std::vector<double> mK;
+};
+
+class SingleKeyExtrapolationFormula : public ExtrapolationFormula {
+public:
+    virtual ~SingleKeyExtrapolationFormula() = default;
+    SingleKeyExtrapolationFormula() = default;
+    SingleKeyExtrapolationFormula(const std::vector<double>& k):
+        ExtrapolationFormula(k) {}
+
+    // formula: k0 * x * x + k1 * log(x) + k2 * x + k3
+    virtual double predict(const std::vector<int>& xVec) const override{
+        int x = xVec.at(0);
+        return mK.at(0) * x * x + mK.at(1) * std::log(x) + 
+                mK.at(2) * x + mK.at(3);
+    }
+};
+
+class DoubleKeyExtrapolationFormula : public ExtrapolationFormula {
+public:
+    virtual ~DoubleKeyExtrapolationFormula() = default;
+    DoubleKeyExtrapolationFormula() = default;
+    DoubleKeyExtrapolationFormula(const std::vector<double>& k):
+        ExtrapolationFormula(k) {}
+
+    // formula: k0*x0*x0 + k1*logx0 + k2*x0 + 
+    //          k3*x1*x1 + k4*logx1 + k5*x1 + 
+    //          k6*x0*x1 + k10 
+    virtual double predict(const std::vector<int>& xVec) const override{
+        int x0 = xVec.at(0);
+        int x1 = xVec.at(1);
+        return mK.at(0) * x0 * x0 + mK.at(1) * std::log(x0) + mK.at(2) * x0 + 
+               mK.at(3) * x1 * x1 + mK.at(4) * std::log(x1) + mK.at(5) * x1 + 
+               mK.at(6) * x0 * x1 + mK.at(7);
+    }
+};
+
+class CoreExtrapolation {
+public:
+    CoreExtrapolation() = default;
+    ~CoreExtrapolation() {
+        for (auto& item: mFormulaMap) {
+            for (auto& f: item.second) {
+                delete f;
+                f = nullptr;
+            }
+        }
+    }
+    enum class Kind {
+        DELAY0 = 0, 
+        DELAY1, 
+        DELAY2, 
+        LUT, 
+        FF, 
+        DSP, 
+        BRAM, 
+        URAM
+    };
+    Kind KindStr2Enum(const std::string& kind) {
+        if (kind == "DELAY0") {
+            return Kind::DELAY0;
+        } else if (kind == "DELAY1") {
+            return Kind::DELAY1;
+        } else if (kind == "DELAY2") {
+            return Kind::DELAY2;
+        } else if (kind == "LUT") {
+            return Kind::LUT;
+        } else if (kind == "FF") {
+            return Kind::FF;
+        } else if (kind == "DSP") {
+            return Kind::DSP;
+        } else if (kind == "BRAM") {
+            return Kind::BRAM;
+        } else if (kind == "URAM") {
+            return Kind::URAM;
+        } else {
+            assert(0);
+        }
+    }
+    std::vector<double> predictDelay(int latency, const std::vector<int>& x) const {
+        double delay0 = GetTargetPlatform()->getCoreInstFactory()->getDelayFactor() * mFormulaMap.at(latency).at(static_cast<int>(Kind::DELAY0))->predict(x);
+        double delay1 = GetTargetPlatform()->getCoreInstFactory()->getDelayFactor() * mFormulaMap.at(latency).at(static_cast<int>(Kind::DELAY1))->predict(x);
+        double delay2 = GetTargetPlatform()->getCoreInstFactory()->getDelayFactor() * mFormulaMap.at(latency).at(static_cast<int>(Kind::DELAY2))->predict(x);
+        double maxDelay = std::max({delay0, delay1, delay2});
+        return {delay0, maxDelay, delay2};
+    }
+
+    DelayMap predictDelayMap(const std::vector<int>& x) const {
+        DelayMap delayMap;
+        for (const auto& item: mFormulaMap) {
+            int latency = item.first;
+            auto delay = predictDelay(latency, x);
+            delayMap[latency] = delay;
+        }
+        return delayMap;
+    }
+    ResourceData predictResource(int latency, const std::vector<int>& x) const {
+        ResourceData res;
+        res.Lut  = mFormulaMap.at(latency).at(static_cast<int>(Kind::LUT))->predict(x);
+        res.Ff   = mFormulaMap.at(latency).at(static_cast<int>(Kind::FF))->predict(x);
+        res.Dsp  = mFormulaMap.at(latency).at(static_cast<int>(Kind::DSP))->predict(x);
+        res.Bram = mFormulaMap.at(latency).at(static_cast<int>(Kind::BRAM))->predict(x);
+        res.Uram = mFormulaMap.at(latency).at(static_cast<int>(Kind::URAM))->predict(x);
+        return res;
+    }
+
+    void insertFormula(int latency, Kind kind, ExtrapolationFormula* formula) {
+        mFormulaMap[latency][static_cast<int>(kind)] = formula;
+    }
+
+    void insertFormula(int latency, const std::string& kind, ExtrapolationFormula* formula) {
+        auto k = KindStr2Enum(kind);
+        insertFormula(latency, k, formula);
+    }
+    
+private:
+    std::map<int, std::array<ExtrapolationFormula*, 8>> mFormulaMap;
+};
+
+class CoreExtrapolationManager {
+public:
+    CoreExtrapolationManager() = default;
+    ~CoreExtrapolationManager() = default;
+
+    static CoreExtrapolationManager& getInstance() { 
+        static CoreExtrapolationManager qf; 
+        return qf; 
+    }
+
+    void init1DExtrapolation() {
+        std::string libName = GetTargetPlatform()->getFactory().getLibraryName();
+        // 1D extrapolation
+        std::string tableName = libName + "_1D_Core_Params";
+        auto& s = Selector::getSelector();
+
+        // Does not support extrapolation algorithm
+        if (!s.isExistTable(tableName.c_str())) {
+            return;
+        }
+        std::string cmd = "select CORE_NAME, LATENCY, KIND, XX, LOG, X, INTERCEPT from " + tableName;
+        auto data = s.selectCore1DParams(cmd);
+
+        for (const auto &item: data) {
+            std::string coreName = item.name;
+            std::transform(coreName.begin(), coreName.end(), coreName.begin(), ::tolower);
+            int latency = item.latency;
+            auto* formula = new SingleKeyExtrapolationFormula({item.xx, item.log, item.x, item.intercept});
+            mExtrapolationMap[coreName].insertFormula(latency, item.kind, formula);
+        }
+    }
+
+    void init2DExtrapolation() {
+        std::string libName = GetTargetPlatform()->getFactory().getLibraryName();
+        // 2D extrapolation
+        std::string tableName = libName + "_2D_Core_Params";
+        auto& s = Selector::getSelector();
+
+        // Does not support extrapolation algorithm
+        if (!s.isExistTable(tableName.c_str())) {
+            return;
+        }
+        std::string cmd = "select CORE_NAME, LATENCY, KIND, X0X0, LOGX0, X0, X1X1, LOGX1, X1,"
+            " X0X1, INTERCEPT from " + tableName;
+        auto data = s.selectCore2DParams(cmd);
+
+        for (const auto &item: data) {
+            std::string coreName = item.name;
+            std::transform(coreName.begin(), coreName.end(), coreName.begin(), ::tolower);
+            int latency = item.latency;
+            auto* formula = new DoubleKeyExtrapolationFormula({item.x0x0, item.logx0, item.x0, 
+                item.x1x1, item.logx1, item.x1, item.x0x1, item.intercept});
+            mExtrapolationMap[coreName].insertFormula(latency, item.kind, formula);
+        }
+    }
+
+    void init() {
+        mExtrapolationMap.clear();
+        init1DExtrapolation();
+        init2DExtrapolation();
+    }
+    
+    const CoreExtrapolation* getCoreExtrapolation(std::string coreName) const {
+        std::transform(coreName.begin(), coreName.end(), coreName.begin(), ::tolower);
+        if (mExtrapolationMap.count(coreName)) {
+            return &mExtrapolationMap.at(coreName);
+        }
+        return nullptr;
+    }
+private:
+    std::map<std::string, CoreExtrapolation> mExtrapolationMap;
+};
 
 bool QuerierCache::hasCached(const CacheKey& k) const {
     return mMap.count(k) > 0;
@@ -142,11 +312,17 @@ void QuerierFactory::init() {
     mQueriers[DSP_QADD_SUB]             = new DSPQAddSubQuerier();
     mQueriers[SPARSE_MUX]               = new SparseMuxQuerier();
     mQueriers[BIN_SPARSE_MUX]           = new BinarySparseMuxQuerier();
-    mQueriers[QUADRUPLE_KEY_AXI]        = new QuadrupleAxiQuerier();
+    mQueriers[QUADKEY_MAXI]             = new MAXIQuerier();
+    mQueriers[QUADKEY_AXILITE]          = new AXILiteQuerier();
     mQueriers[REG_SLICE]                = new RegSliceQuerier();
     mQueriers[DSP58BUILTIN]             = new DSP58BuiltinQuerier();
     mQueriers[DSP48BUILTIN]             = new DSP48BuiltinQuerier();
     mQueriers[QUADKEY_APFLOAT]          = new QuadrupleKeyApFloatConversionQuerier();
+    mQueriers[BIT_SELECTOR]             = new BitSelectorQuerier();
+    mQueriers[DOUBLE_KEY_BIT_SELECTOR]  = new DoubleKeyBitSelectorQuerier();
+    mQueriers[DOUBLE_KEY_BITSET]        = new DoubleKeyBitSetQuerier();
+    mQueriers[CPLX]                     = new CplxQuerier();
+    mQueriers[DIVIDER_LOGICORE]         = new DividerLogiCoreQuerier();
 
     mFullCache = new QuerierCache(true, true, true);
     mCacheMap.emplace(mQueriers[ARITHMETIC], mFullCache);
@@ -154,6 +330,11 @@ void QuerierFactory::init() {
     mCacheMap.emplace(mQueriers[DOUBLE_KEY_ARITHMETIC], mFullCache);
     mCacheMap.emplace(mQueriers[DOUBLE_KEY_FIFO], mFullCache);
     mCacheMap.emplace(mQueriers[DOUBLE_KEY_DIVNS], mFullCache);
+    mCacheMap.emplace(mQueriers[BIT_SELECTOR], mFullCache);
+    mCacheMap.emplace(mQueriers[DOUBLE_KEY_BIT_SELECTOR], mFullCache);
+    mCacheMap.emplace(mQueriers[DOUBLE_KEY_BITSET], mFullCache);
+    mCacheMap.emplace(mQueriers[SPARSE_MUX], mFullCache);
+    mCacheMap.emplace(mQueriers[BIN_SPARSE_MUX], mFullCache);
 
     mNoResCache = new QuerierCache(true, true, false);
     mCacheMap.emplace(mQueriers[FIFO], mNoResCache);
@@ -166,12 +347,19 @@ void QuerierFactory::init() {
     mSingleKeyQuerier.insert(mQueriers[FIFO]);
     mSingleKeyQuerier.insert(mQueriers[MEMORY]);
 
+    mDoubleKeyQuerier.insert(mQueriers[BIT_SELECTOR]);
     mDoubleKeyQuerier.insert(mQueriers[DOUBLE_KEY_ARITHMETIC]);
     mDoubleKeyQuerier.insert(mQueriers[DOUBLE_KEY_FIFO]);
     mDoubleKeyQuerier.insert(mQueriers[DOUBLE_KEY_DIVNS]);
     mDoubleKeyQuerier.insert(mQueriers[DOUBLE_KEY_MEMORY]);
 
+    mTripleKeyQuerier.insert(mQueriers[SPARSE_MUX]);
+    // mTripleKeyQuerier.insert(mQueriers[BIN_SPARSE_MUX]);
+    // used the data of 3 key bit selector
+    mTripleKeyQuerier.insert(mQueriers[DOUBLE_KEY_BIT_SELECTOR]);
+    mBinarySparseMuxQuerier = mQueriers[BIN_SPARSE_MUX];
     initCoreTypeMap();
+    CoreExtrapolationManager::getInstance().init();
 }
 
 QuerierFactory::~QuerierFactory()
@@ -188,7 +376,7 @@ QuerierFactory::~QuerierFactory()
 std::string QuerierFactory::getNameInDB(CoreInst* core) const
 {
     std::string core_name = core->getName();
-    std::string name_in_db(core_name);
+    std::string name_in_db;
     if(core->getType() == CoreInst::Storage)
     {
         auto storageInst = static_cast<StorageInst*>(core);
@@ -249,21 +437,68 @@ std::string QuerierFactory::getNameInDB(CoreInst* core) const
             {
                 name_in_db = "RAMVivadoDo";
             }
+            if((core_name == "RAM_1P" || core_name == "RAM_S2P") && hasCoreData("RAMVivadoDo_1Port"))
+            {
+                name_in_db = "RAMVivadoDo_1Port";
+            }
+            if(core_name == "RAM_2P" && hasCoreData("RAMVivadoDo_2p_rwro"))
+            {
+                name_in_db = "RAMVivadoDo_2p_rwro";
+            }
+            if(core_name == "RAM_2P_BRAM" && hasCoreData("RAMBlock_2p_rwro"))
+            {
+                name_in_db = "RAMBlock_2p_rwro";
+            }
+            if((core_name == "ROM_1P") && hasCoreData("RAMVivadoDo_1Port"))
+            {
+                name_in_db = "RAMVivadoDo_1Port";
+            }
+            if((core_name == "ROM_2P") && hasCoreData("RAMVivadoDo_2p_rwro"))
+            {
+                name_in_db = "RAMVivadoDo_2p_rwro";
+            }
+        }
+        else 
+        {
+            name_in_db = core_name;
         }
     }
-    else if(name_in_db == "AddSub" || name_in_db == "AddSubnS")
+    else if(core_name == "AddSub" || core_name == "AddSubnS")
     {
         name_in_db = "Adder";
     }
-    else if(name_in_db == "Mul" || name_in_db == "MulnS")
+    else if(core_name == "Mul" || core_name == "MulnS")
     {
         name_in_db = "Multiplier";
     }
-    else if ((core->getOp() == PlatformBasic::OP_TYPE::OP_UREM || core->getOp() == PlatformBasic::OP_TYPE::OP_UDIV) && name_in_db == "Divider_IP") 
+    else if ((core->getOp() == PlatformBasic::OP_TYPE::OP_UREM || core->getOp() == PlatformBasic::OP_TYPE::OP_UDIV) && core_name == "Divider_IP") 
     {
         name_in_db = "UnsignedDivider_IP";
     }
-
+    else if (core_name == "PartSelect")
+    {
+        name_in_db = "BitSelector";
+    }
+    else if (core_name == "PartSet")
+    {
+        name_in_db = "BitSet";
+    }
+    else if (core_name == "CPLXMul")
+    {
+        name_in_db = "CMult_Intrinsic";
+    }
+    else if (core_name == "CPLXMulAdd")
+    {
+        name_in_db = "CMultAdd_Intrinsic";
+    }
+    else if (core_name == "CPLXMulAcc") 
+    {
+        name_in_db = "CMultAcc_Intrinsic";
+    }
+    else 
+    {
+        name_in_db = core_name;
+    }
     return name_in_db;
 }
 
@@ -322,6 +557,10 @@ CoreQuerier* QuerierFactory::getCoreQuerier(CoreInst* core) const
         {
             querier = mQueriers.at(DIVNS);
         }
+        else if (name_in_db == "Divider_IP" || name_in_db == "UnsignedDivider_IP") 
+        {
+            querier = mQueriers.at(DIVIDER_LOGICORE);
+        }
     }
     else if(typeStr == "2D_Arithmetic")
     {
@@ -330,6 +569,10 @@ CoreQuerier* QuerierFactory::getCoreQuerier(CoreInst* core) const
         if (name_in_db == "Divider" || name_in_db == "DivnS_SEQ")
         {
             querier = mQueriers.at(DOUBLE_KEY_DIVNS);
+        }
+        if (name_in_db == "BitSet")
+        {
+            querier = mQueriers.at(DOUBLE_KEY_BITSET);
         }
     }
     else if(typeStr == "FIFO")
@@ -378,16 +621,25 @@ CoreQuerier* QuerierFactory::getCoreQuerier(CoreInst* core) const
     {
         querier = mQueriers.at(REGISTER);
     }
-    else if (name_in_db == "s_axilite" || name_in_db == "m_axi")
+    else if (name_in_db == "s_axilite")
     {
         querier = mQueriers.at(ADAPTER);
-        if (name_in_db == "m_axi") {
-            std::string axiTable = GetTargetPlatform()->getFactory().getLibraryName() + "_AXI";
+        std::string axiTable = GetTargetPlatform()->getFactory().getLibraryName() + "_4D_AXI";
+        if (Selector::getSelector().isExistTable(axiTable.c_str())) {
+            querier = mQueriers.at(QUADKEY_AXILITE);
+        }
+    }
+    else if (name_in_db == "m_axi")
+    {
+        querier = mQueriers.at(ADAPTER);
+        auto maxi = static_cast<AdapterInst*>(core);
+        if (maxi->getMAXIChanParaMap().count(AdapterInst::MAXIParaType::Global) > 0) {
+            std::string axiTable = GetTargetPlatform()->getFactory().getLibraryName() + "_4D_AXI";
             if (Selector::getSelector().isExistTable(axiTable.c_str())) {
-                querier = mQueriers.at(QUADRUPLE_KEY_AXI);
+                querier = mQueriers.at(QUADKEY_MAXI);
             }
         }
-    } 
+    }
     else if(name_in_db == "simo" || name_in_db == "miso")
     {
         querier = mQueriers.at(CHANNEL);
@@ -425,8 +677,18 @@ CoreQuerier* QuerierFactory::getCoreQuerier(CoreInst* core) const
     {
         querier = mQueriers.at(BLACK_BOX);
     }
-    else if (name_in_db == "BinarySparseMux_DontCare" || name_in_db == "BinarySparseMux_HasDef") {
+    else if ((GetTargetPlatform()->getFactory().isVersal()) && (name_in_db == "BinarySparseMux_DontCare" || name_in_db == "BinarySparseMux_HasDef")) {
         querier = mQueriers.at(BIN_SPARSE_MUX);
+    } 
+    else if (name_in_db == "BitSelector") {
+        if (GetTargetPlatform()->getFactory().isVersal()) {
+            querier = mQueriers.at(DOUBLE_KEY_BIT_SELECTOR);
+        } else {
+            querier = mQueriers.at(BIT_SELECTOR);
+        }
+    }
+    else if (name_in_db == "CMult_Intrinsic" || name_in_db == "CMultAdd_Intrinsic" || name_in_db == "CMultAcc_Intrinsic") {
+        querier = mQueriers.at(CPLX);
     }
     return querier;
 }
@@ -438,7 +700,6 @@ int QuerierFactory::queryLatency(CoreInst* core, OperType oper) {
     if (cache != nullptr && cache->isCacheLatency()) {
         return data.Latency;
     }
-
     if (querier->isMultOperQuerier()) {
         auto multOpQuerier = static_cast<MultOperQuerier *>(querier);
         multOpQuerier->setCurOper(oper);
@@ -477,6 +738,16 @@ bool QuerierFactory::getLegality(CoreInst* core, OperType oper) {
     return querier->getLegality(core);
 }
 
+std::pair<std::string, std::string> QuerierFactory::queryInOutPrimitive(CoreInst* core) {
+    auto querier = getInstance().getCoreQuerier(core);
+    return querier->queryInOutPrimitive(core);
+}
+
+PlatformBasic::IMPL_TYPE QuerierFactory::autoTypeChangeTo(CoreInst* core) {
+    auto querier = getInstance().getCoreQuerier(core);
+    return querier->autoTypeChangeTo(core);
+}
+
 const QuerierCache* QuerierFactory::updateCache(CoreInst* core, CoreQuerier* querier, QueryData& data) {
     if (!mCacheMap.count(querier)) {
         return nullptr;
@@ -484,20 +755,35 @@ const QuerierCache* QuerierFactory::updateCache(CoreInst* core, CoreQuerier* que
     auto cache = mCacheMap.at(querier);
 
     // int id = core->getId();
-    auto nameInDb  = getNameInDB(core);
+    auto nameInDb  = querier->getNameInDB(core);
     int userLatency = core->getConfigedLatency();
     double delayBudget = core->getDelayBudget();
     int key0 = 0;
     int key1 = 0;
-    if (mSingleKeyQuerier.count(querier)) {
+    int key2 = 0;
+    if (querier == mBinarySparseMuxQuerier) {
+        auto* sparseMux = static_cast<BinarySparseMuxQuerier*>(querier)->mSimpleLabelMux;
+        key0 = sparseMux->getKey0(core);
+        key1 = sparseMux->getKey1(core);
+        key2 = sparseMux->getKey2(core);
+        auto fu = static_cast<FuncUnitInst*>(core);
+        if (fu->getSparseMuxIncrEncoding()) {
+            nameInDb = nameInDb + "_Incr_";
+        }
+    } else if (mSingleKeyQuerier.count(querier)) {
         key0 = static_cast<SingleKeyQuerier*>(querier)->getKey(core);
     } else if (mDoubleKeyQuerier.count(querier)) {
         auto doubleKeyQuerier = static_cast<DoubleKeyQuerier*>(querier);
         key0 = doubleKeyQuerier->getKey0(core);
         key1 = doubleKeyQuerier->getKey1(core);
+    } else if (mTripleKeyQuerier.count(querier)) {
+        auto tripleKeyQuerier = static_cast<TripleKeyQuerier*>(querier);
+        key0 = tripleKeyQuerier->getKey0(core);
+        key1 = tripleKeyQuerier->getKey1(core);
+        key2 = tripleKeyQuerier->getKey2(core);
     }
     
-    CacheKey cacheKey(nameInDb, key0, key1, userLatency, delayBudget);
+    CacheKey cacheKey(nameInDb, key0, key1, key2, userLatency, delayBudget);
     if (cache->hasCached(cacheKey)) {
         data = cache->get(cacheKey);
     } else {
@@ -606,6 +892,10 @@ int CoreQuerier::getLatency(int user_lat, unsigned max_lat, double delay_budget,
     int latency = 0;
     if (user_lat < 0)
     {
+        auto beginItem = *lat_delay_map.begin();
+        int minDelayLatency = beginItem.first;
+        auto beginDelays = beginItem.second;
+        double minDelay = *std::max_element(beginDelays.begin(), beginDelays.end());
         bool match = false;
         for (const auto &p : lat_delay_map)
         {
@@ -613,17 +903,30 @@ int CoreQuerier::getLatency(int user_lat, unsigned max_lat, double delay_budget,
 
             auto delays = p.second;
             assert(!delays.empty());
-            double maxDelay = *std::max_element(delays.begin(), delays.end());
-            if (maxDelay < delay_budget)
+            double delay = *std::max_element(delays.begin(), delays.end());
+            if (delay < delay_budget)
             {
                 latency = p.first;
                 match = true;
                 break;
             }
+            if (delay < minDelay)
+            {
+                minDelay = delay;
+                minDelayLatency = p.first;
+            }
         }
         if (!match)
         {
-            latency = (max_lat < lat_delay_map.rbegin()->first) ? max_lat : lat_delay_map.rbegin()->first;
+            if (PFSettings::getInstance().getUseMinDelayLatency()) 
+            {
+                latency = minDelayLatency;
+            } 
+            else 
+            {
+                latency = (max_lat < lat_delay_map.rbegin()->first) ? max_lat : lat_delay_map.rbegin()->first;
+
+            }
         }
     }
     else
@@ -917,6 +1220,39 @@ std::vector<std::vector<int>> SingleKeyQuerier::selectKeyResource2dList(const ch
     return values;
 }
 
+int SingleKeyQuerier::selectMinGEValue(const char *core_name,
+                                             const char *column,
+                                             int value, 
+                                             bool& overLimit)
+{
+    int length = MAX_CMD_SIZE + std::strlen(core_name) + std::strlen(column);
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select min(%s) from %s_%s "
+             "where CORE_NAME = '%s' COLLATE NOCASE "
+             "and %s >= %d",
+             column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name, column, value);
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto resultOpt = s.selectInt(cmd);
+    // value is greater than max(column), then choose max(column)
+    if(!resultOpt.valid)
+    {
+        int n = snprintf(cmd,
+                 length,
+                 "select max(%s) from %s_%s "
+                 "where CORE_NAME = '%s' COLLATE NOCASE ",
+                 column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name);
+        assert(n > 0 && n < length);
+        resultOpt = s.selectInt(cmd);
+        overLimit = true;
+    }
+    delete[] cmd;
+    return resultOpt.data;
+}
+
+
 int SingleKeyQuerier::queryLatency(CoreInst* core)
 {
     int key = getKey(core);
@@ -928,26 +1264,36 @@ int SingleKeyQuerier::queryLatency(CoreInst* core)
 
     int latency = 0;
     std::vector<int> keys = selectKeyList(name_db);
-    int left = 0, right = 0;
-    int index = binarySearch<int>(keys, key, left, right);
-    if (index == -1)
+    const auto& extraManager = CoreExtrapolationManager::getInstance();
+    const auto coreExtrapolation = extraManager.getCoreExtrapolation(nameDb);
+    // Exceeding the limit, using extrapolation
+    if (coreExtrapolation && key > *std::max_element(keys.begin(), keys.end()))
+    {   
+        auto latDelayMap = coreExtrapolation->predictDelayMap({key});
+        latency = getLatency(user_lat, maxLat, delay_budget, latDelayMap);
+    } 
+    else 
     {
-        // if the key is not in the database, do interpolation for it first
-        int left_key= keys[left];
-        int right_key = keys[right];
+        int left = 0, right = 0;
+        int index = binarySearch<int>(keys, key, left, right);
+        if (index == -1)
+        {
+            // if the key is not in the database, do interpolation for it first
+            int left_key= keys[left];
+            int right_key = keys[right];
 
-        auto left_map = selectLatencyDelayMap(name_db, core->getImpl(), left_key);
-        auto right_map = selectLatencyDelayMap(name_db, core->getImpl(), right_key);
-        DelayMap intersection_map = CoreQuerier::interpolate(key, left_key, right_key, left_map, right_map);
+            auto left_map = selectLatencyDelayMap(name_db, core->getImpl(), left_key);
+            auto right_map = selectLatencyDelayMap(name_db, core->getImpl(), right_key);
+            DelayMap intersection_map = CoreQuerier::interpolate(key, left_key, right_key, left_map, right_map);
 
-        latency = getLatency(user_lat, maxLat, delay_budget, intersection_map);
+            latency = getLatency(user_lat, maxLat, delay_budget, intersection_map);
+        }
+        else
+        {
+            auto lat_delay_map = selectLatencyDelayMap(name_db, core->getImpl(), key);
+            latency = getLatency(user_lat, maxLat, delay_budget, lat_delay_map);
+        }
     }
-    else
-    {
-        auto lat_delay_map = selectLatencyDelayMap(name_db, core->getImpl(), key);
-        latency = getLatency(user_lat, maxLat, delay_budget, lat_delay_map);
-    }
-
     return latency; 
 }
 
@@ -956,8 +1302,20 @@ std::vector<double> SingleKeyQuerier::queryDelayList(CoreInst* core)
     int key = getKey(core);
     int latency = SingleKeyQuerier::queryLatency(core);
     std::string name_db = getNameInDB(core);
-    auto map = selectKeyDelayMap(name_db.c_str(), latency);
-    auto delayList = getValue<std::vector<double>>(map, key);
+    std::vector<int> keys = selectKeyList(name_db.c_str());
+    std::vector<double> delayList;
+    const auto& extraManager = CoreExtrapolationManager::getInstance();
+    const auto coreExtrapolation = extraManager.getCoreExtrapolation(name_db);
+    // Exceeding the limit, using extrapolation
+    if (coreExtrapolation && key > *std::max_element(keys.begin(), keys.end()))
+    {   
+        delayList = coreExtrapolation->predictDelay(latency, {key});
+    } 
+    else 
+    {
+        auto map = selectKeyDelayMap(name_db.c_str(), latency);
+        delayList = getValue<std::vector<double>>(map, key);
+    }
     if(core->getName() == "TAddSub")
     {
         for(int i = 0; i < delayList.size(); ++i)
@@ -973,28 +1331,61 @@ ResourceData SingleKeyQuerier::queryResource(CoreInst* core)
     int key = getKey(core);
     int latency = SingleKeyQuerier::queryLatency(core);
     std::string name_db = getNameInDB(core);
-    auto res2dList = selectKeyResource2dList(name_db.c_str(), latency);
-    std::map<int, int> lutMap;
-    std::map<int, int> ffMap;
-    std::map<int, int> dspMap;
-    std::map<int, int> bramMap;
-    std::map<int, int> uramMap;
-
-    for (const auto& line: res2dList) {
-        lutMap[line[0]]     = line[1];      // ff
-        ffMap[line[0]]      = line[2];      // lut
-        dspMap[line[0]]     = line[3];      // dsp
-        bramMap[line[0]]    = line[4];      // bram
-        uramMap[line[0]]    = line[5];      // uram
-    }
+    std::vector<int> keys = selectKeyList(name_db.c_str());
     ResourceData resource;
-    resource.Lut = getValue<int>(lutMap, key);
-    resource.Ff = getValue<int>(ffMap, key);
-    resource.Dsp = getValue<int>(dspMap, key);
-    resource.Bram = getValue<int>(bramMap, key);
-    resource.Uram = getValue<int>(uramMap, key);
+    const auto& extraManager = CoreExtrapolationManager::getInstance();
+    const auto coreExtrapolation = extraManager.getCoreExtrapolation(name_db);
+    // Exceeding the limit, using extrapolation
+    if (coreExtrapolation && key > *std::max_element(keys.begin(), keys.end()))
+    {   
+        resource = coreExtrapolation->predictResource(latency, {key});
+    }
+    else 
+    {
+        auto res2dList = selectKeyResource2dList(name_db.c_str(), latency);
+        std::map<int, int> lutMap;
+        std::map<int, int> ffMap;
+        std::map<int, int> dspMap;
+        std::map<int, int> bramMap;
+        std::map<int, int> uramMap;
+
+        for (const auto& line: res2dList) {
+            lutMap[line[0]]     = line[1];      // ff
+            ffMap[line[0]]      = line[2];      // lut
+            dspMap[line[0]]     = line[3];      // dsp
+            bramMap[line[0]]    = line[4];      // bram
+            uramMap[line[0]]    = line[5];      // uram
+        }
+        resource.Lut = getValue<int>(lutMap, key);
+        resource.Ff = getValue<int>(ffMap, key);
+        resource.Dsp = getValue<int>(dspMap, key);
+        resource.Bram = getValue<int>(bramMap, key);
+        resource.Uram = getValue<int>(uramMap, key);
+    }
 
     return resource;
+}
+
+std::pair<std::string, std::string> SingleKeyQuerier::queryInOutPrimitive(CoreInst* core) {
+    int key = getKey(core);
+    int latency = SingleKeyQuerier::queryLatency(core);
+    std::string name_db = getNameInDB(core);
+    bool overLimit = false;
+    int keyMge = selectMinGEValue(name_db.c_str(), getKeyType(), key, overLimit);
+
+    const char* table_name = getTableName();
+    int length = MAX_CMD_SIZE + std::strlen(table_name) + name_db.size();
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select INPUT_PRIMITIVE, OUTPUT_PRIMITIVE from %s_%s "
+             "where LATENCY = %d and %s = %d and CORE_NAME = '%s' COLLATE NOCASE ",
+             GetTargetPlatform()->getFactory().getLibraryName().c_str(), table_name, 
+                latency, getKeyType(), keyMge, name_db.c_str());
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto PrimitivePair = s.selectStrPair(cmd);
+    return PrimitivePair;
 }
 
 // TODO: 
@@ -1483,9 +1874,9 @@ int DoubleKeyQuerier::selectMinGEValue(const char *core_name,
              column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name, column, value);
     assert(n > 0 && n < length);
     auto& s = Selector::getSelector();
-    int result = s.selectInt(cmd);
+    auto resultOpt = s.selectInt(cmd);
     // value is greater than max(column), then choose max(column)
-    if(result == 0)
+    if(!resultOpt.valid)
     {
         int n = snprintf(cmd,
                  length,
@@ -1493,11 +1884,11 @@ int DoubleKeyQuerier::selectMinGEValue(const char *core_name,
                  "where CORE_NAME = '%s' COLLATE NOCASE ",
                  column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name);
         assert(n > 0 && n < length);
-        result = s.selectInt(cmd);
+        resultOpt = s.selectInt(cmd);
         overLimit = true;
     }
     delete[] cmd;
-    return result;
+    return resultOpt.data;
 }
 
 // DoubleKeyQuerier 
@@ -1568,8 +1959,14 @@ DelayMap DoubleKeyQuerier::selectLatencyDelayMap(const char *name_db,
         delete[] cmd;
         return values;
     };
-    
-    auto delayMap = queryDelayMap(keyPair.first, keyPair.second);
+    DelayMap delayMap;
+    const auto& extraManager = CoreExtrapolationManager::getInstance();
+    const auto coreExtrapolation = extraManager.getCoreExtrapolation(name_db);
+    if (coreExtrapolation && (overLimit.first || overLimit.second)) { 
+        delayMap = coreExtrapolation->predictDelayMap({key0, key1});
+    } else {
+        delayMap = queryDelayMap(keyPair.first, keyPair.second);
+    }
     
     return delayMap;
 }
@@ -1599,8 +1996,14 @@ std::vector<double> DoubleKeyQuerier::selectDelayList(const char* core_name,
         delete[] cmd;
         return values;
     };
-    
-    auto delay = queryDelayList(keyPair.first, keyPair.second);
+    std::vector<double> delay;
+    const auto& extraManager = CoreExtrapolationManager::getInstance();
+    const auto coreExtrapolation = extraManager.getCoreExtrapolation(core_name);
+    if (coreExtrapolation && (overLimit.first || overLimit.second)) {
+        delay = coreExtrapolation->predictDelay(latency, {key0, key1});
+    } else {
+        delay = queryDelayList(keyPair.first, keyPair.second);
+    }
     return delay;
     
 }
@@ -1636,16 +2039,15 @@ ResourceData DoubleKeyQuerier::selectResource(const char* core_name,
         resource.Uram = value[4];
         return resource;
     };
-    ResourceData resource = queryResource(keyPair.first, keyPair.second);
-    if (ExtrapolationManager::isEnableExtrapolationResource(std::string(core_name))){
-        // memory's bitwidth or funcUnit's operands 0 over limit   
-        // memory's depth or funcUnit's operands 1 over limit  
-        if (overLimit.first || overLimit.second) {
-            // over limit, use extrapolation to estimate the data.
-            double factor = 1.0 * key0 / keyPair.first * key1 / keyPair.second;
-            resource = factor * resource;
-        }
+    ResourceData resource;
+    const auto& extraManager = CoreExtrapolationManager::getInstance();
+    const auto coreExtrapolation = extraManager.getCoreExtrapolation(core_name);
+    if (coreExtrapolation && (overLimit.first || overLimit.second)) {
+        resource = coreExtrapolation->predictResource(latency, {key0, key1});
+    } else {
+        resource = queryResource(keyPair.first, keyPair.second);
     }
+
     return resource;
 }
 
@@ -1677,6 +2079,40 @@ ResourceData DoubleKeyQuerier::queryResource(CoreInst* core)
     return value;
 }
 
+std::pair<std::string, std::string> DoubleKeyQuerier::queryInOutPrimitive(CoreInst* core) {
+
+    int key0 = getKey0(core);
+    int key1 = getKey1(core);
+    int latency = DoubleKeyQuerier::queryLatency(core);
+    std::string name_db = getNameInDB(core);
+    std::pair<bool, bool> overLimit = {false, false};
+    auto keyMge = selectMinGEValue(name_db.c_str(), 
+                getKey0Type(), key0, 
+                getKey1Type(), key1, overLimit);
+
+    const char* table_name = getTableName();
+    int length = MAX_CMD_SIZE + std::strlen(table_name) + name_db.size();
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select INPUT_PRIMITIVE, OUTPUT_PRIMITIVE from %s_%s "
+             "where LATENCY = %d and %s = %d and %s = %d and CORE_NAME = '%s' COLLATE NOCASE ",
+             GetTargetPlatform()->getFactory().getLibraryName().c_str(), table_name, 
+                latency, getKey0Type(), keyMge.first, getKey1Type(), keyMge.second, name_db.c_str());
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto PrimitivePair = s.selectStrPair(cmd);
+    return PrimitivePair;
+}
+
+const std::map<PlatformBasic::IMPL_TYPE, PlatformBasic::MEMORY_IMPL> DoubleKeyFIFOQuerier::fifoImpl2MemoryImpl = {
+    {PlatformBasic::IMPL_TYPE::FIFO_BRAM, PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_BRAM},
+    {PlatformBasic::IMPL_TYPE::FIFO_URAM, PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_URAM},
+    {PlatformBasic::IMPL_TYPE::FIFO_LUTRAM, PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_LUTRAM},
+    {PlatformBasic::IMPL_TYPE::FIFO_SRL, PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_LUTRAM},
+    {PlatformBasic::IMPL_TYPE::FIFO_MEMORY, PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_AUTO}
+};
+
 int DoubleKeyFIFOQuerier::queryLatency(CoreInst* core) {
     // the "read latency" of FIFO is 0
     return 0;
@@ -1691,9 +2127,57 @@ std::vector<double> DoubleKeyFIFOQuerier::queryDelayList(CoreInst* core) {
 ResourceData DoubleKeyFIFOQuerier::queryResource(CoreInst* core) {
     int rawLatency = getRawLatency(core);
     std::string name_db = getNameInDB(core);
-    auto value = selectResource(name_db.c_str(), getKey0(core), getKey1(core), rawLatency);
+    auto valueFromFIFOLib = selectResource(name_db.c_str(), getKey0(core), getKey1(core), rawLatency);
 
+    PlatformBasic::MEMORY_IMPL memoryImpl = fifoImpl2MemoryImpl.at(core->getImpl());
+    StorageInstList list;
+    int memoryDepth = static_cast<StorageInst*>(core)->getDepth()-static_cast<StorageInst*>(core)->getFIFORawLatency()+1;
+    auto& fac = GetTargetPlatform()->getFactory();
+    fac.requestStorageInstList(list, PlatformBasic::MEMORY_RAM_S2P, core->getDelayBudget(), getKey0(core),memoryDepth, 
+        false, false, {}, 1, 0 /*required1WNRNumPorts0*/, memoryImpl);
+    CoreQuerier* querier = NULL;
+    querier = QuerierFactory::getInstance().getCoreQuerier(list[0].get());
+    auto valueFromMemLib = querier->queryResource(list[0].get());
+    
+    // Initialization
+    auto value = valueFromFIFOLib;
+
+    // Genera flow
+    value.Bram = valueFromMemLib.Bram;
+    value.Uram = valueFromMemLib.Uram;
+
+    // Special Case
+    if (valueFromFIFOLib.Bram == 0 && valueFromMemLib.Bram > 0 && valueFromFIFOLib.Uram == 0 && valueFromMemLib.Uram == 0) {
+        value.Bram = valueFromFIFOLib.Bram;
+        value.Uram = valueFromFIFOLib.Uram;
+    }
+    
     return value;
+}
+
+std::pair<std::string, std::string> DoubleKeyFIFOQuerier::queryInOutPrimitive(CoreInst* core) {
+    int key0 = getKey0(core);
+    int key1 = getKey1(core);
+    int latency = getRawLatency(core);
+    std::string name_db = getNameInDB(core);
+    std::pair<bool, bool> overLimit = {false, false};
+    auto keyMge = selectMinGEValue(name_db.c_str(), 
+                getKey0Type(), key0, 
+                getKey1Type(), key1, overLimit);
+
+    const char* table_name = getTableName();
+    int length = MAX_CMD_SIZE + std::strlen(table_name) + name_db.size();
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select INPUT_PRIMITIVE, OUTPUT_PRIMITIVE from %s_%s "
+             "where LATENCY = %d and %s = %d and %s = %d and CORE_NAME = '%s' COLLATE NOCASE ",
+             GetTargetPlatform()->getFactory().getLibraryName().c_str(), table_name, 
+                latency, getKey0Type(), keyMge.first, getKey1Type(), keyMge.second, name_db.c_str());
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto PrimitivePair = s.selectStrPair(cmd);
+    return PrimitivePair;
 }
 
 int DoubleKeyFIFOQuerier::getRawLatency(CoreInst* core) {
@@ -1720,6 +2204,27 @@ int DoubleKeyFIFOQuerier::getKey1(CoreInst* core) {
     return static_cast<StorageInst*>(core)->getDepth();
 }
 
+int DoubleKeyUramQuerier::getKey0(CoreInst* core) { 
+    return static_cast<StorageInst*>(core)->getBitWidth(); 
+}
+int DoubleKeyUramQuerier::getKey1(CoreInst* core) { 
+    return static_cast<StorageInst*>(core)->getDepth();
+}
+
+const std::string DoubleKeyMemoryQuerier::mRam1PortName = "RAMVivadoDo_1Port";
+const std::string DoubleKeyMemoryQuerier::mRam2PortName = "RAMVivadoDo_2p_rwro";
+const std::string DoubleKeyMemoryQuerier::mRom1PortName = "ROMVivadoDo_1Port";
+const std::string DoubleKeyMemoryQuerier::mRom2PortName = "ROMVivadoDo_2Port";
+const std::string DoubleKeyMemoryQuerier::mRamBlock2PortName = "RAMBlock_2p_rwro";
+
+DoubleKeyMemoryQuerier::DoubleKeyMemoryQuerier() {
+    mUramQuerier = new DoubleKeyUramQuerier();
+}
+
+DoubleKeyMemoryQuerier::~DoubleKeyMemoryQuerier() {
+    delete mUramQuerier;
+}
+
 int DoubleKeyMemoryQuerier::getKey0(CoreInst* core) { 
     return static_cast<StorageInst*>(core)->getBitWidth(); 
 }
@@ -1727,22 +2232,249 @@ int DoubleKeyMemoryQuerier::getKey1(CoreInst* core) {
     return static_cast<StorageInst*>(core)->getDepth();
 }
 
+bool DoubleKeyMemoryQuerier::isMeetDelayBudget(CoreInst* core) {
+    auto delayList = DoubleKeyQuerier::queryDelayList(core);
+    auto delayBudget = core->getDelayBudget();
+    if (delayBudget <= 0 || delayList[1] < delayBudget) {
+        return true;
+    } 
+    return false;
+}
+
+bool DoubleKeyMemoryQuerier::isSDPMode(const std::vector<unsigned>& usedPorts) {
+    if (usedPorts.size() <= 1) {
+        return true;
+    }
+    if (usedPorts.size() > 2) {
+        return false;
+    }
+    
+    bool isSDP = false;
+    if(usedPorts == std::vector<unsigned>{MemoryQuerier::READ_ONLY, MemoryQuerier::WRITE_ONLY} || 
+        usedPorts == std::vector<unsigned>{MemoryQuerier::WRITE_ONLY, MemoryQuerier::READ_ONLY} ||
+        usedPorts == std::vector<unsigned>{MemoryQuerier::READ_ONLY, MemoryQuerier::READ_ONLY}) {
+         
+        isSDP = true;
+    }
+    
+    return isSDP;
+}
+
+unsigned DoubleKeyMemoryQuerier::queryVersalBRAM(StorageInst* storage) {
+
+    // remove unused
+    std::vector<unsigned> usedPorts = storage->getMemUsedPorts();
+    usedPorts.erase(std::remove_if(usedPorts.begin(), usedPorts.end(),
+                                   [](unsigned i) {
+                                     return i > MemoryQuerier::READ_WRITE;
+                                   }),
+                    usedPorts.end());
+    bool isSDP = isSDPMode(usedPorts);
+
+    int memoryWidth = storage->getBitWidth();
+    int memoryDepth = storage->getDepth();
+
+    if (memoryWidth <= 0 || memoryDepth <= 0) {
+        return 0;
+    }
+    
+    unsigned totalNum = 0;
+
+    if(isSDP) {
+        std::map<unsigned, unsigned> pairsForSDP = {{512, 36},
+                                                    {1024, 18},
+                                                    {1024 * 2, 9}};
+        std::map<unsigned, unsigned> pairsForShallowSDP = {{512, 36},
+                                                    {1024, 18}};
+        
+        unsigned minDepth = pairsForSDP.begin()->first;
+        unsigned widthOnMinDepth = pairsForSDP.begin()->second;
+        unsigned minWidth = pairsForSDP.rbegin()->second;
+        unsigned depthOnMinWidth = pairsForSDP.rbegin()->first;
+        unsigned secondMinDepth = std::next(pairsForSDP.begin())->first;
+        unsigned secondMinWidth = std::next(pairsForSDP.begin())->second;
+
+        if (memoryDepth <= minDepth) {
+            totalNum = singleConfigCalculateBRAM(widthOnMinDepth,minDepth,memoryWidth,memoryDepth);
+        } else if (memoryWidth <= minWidth) {
+            totalNum = singleConfigCalculateBRAM(minWidth,depthOnMinWidth,memoryWidth,memoryDepth);
+        } else if (memoryWidth <= secondMinWidth) {
+            totalNum = singleConfigCalculateBRAM(secondMinWidth,secondMinDepth,memoryWidth,memoryDepth);
+        } else if (memoryDepth > minDepth && memoryDepth <= secondMinDepth && memoryWidth > secondMinWidth) {
+            totalNum = decomposeCalculateBRAM(pairsForShallowSDP, memoryWidth, memoryDepth);                   
+        } else {
+            totalNum = decomposeCalculateBRAM(pairsForSDP, memoryWidth, memoryDepth);
+        }
+    } else {
+        std::map<unsigned, unsigned> pairs = {{1024, 18},
+                                              {1024 * 2, 9}};
+        unsigned minDepth = pairs.begin()->first;
+        unsigned widthOnMinDepth = pairs.begin()->second;
+        unsigned minWidth = pairs.rbegin()->second;
+        unsigned depthOnMinWidth = pairs.rbegin()->first;
+
+        if (memoryDepth <= minDepth) {
+            totalNum = singleConfigCalculateBRAM(widthOnMinDepth,minDepth,memoryWidth,memoryDepth);
+        } else if (memoryWidth <= minWidth) {
+            totalNum = singleConfigCalculateBRAM(minWidth,depthOnMinWidth,memoryWidth,memoryDepth);
+        } else {
+            totalNum = decomposeCalculateBRAM(pairs, memoryWidth, memoryDepth);
+        } 
+    }
+    
+    return totalNum;
+}
+
+unsigned DoubleKeyMemoryQuerier::decomposeCalculateBRAM(const std::map<unsigned, unsigned>& pairs, int memoryWidth, int memoryDepth)
+{
+    unsigned totalNum = 0;
+    unsigned cascadeNum = 0;
+    unsigned bramOnEachCascade = 0;
+    int      remainWidth = memoryWidth;
+    int      depth = memoryDepth;
+    // bitwidth decreasing
+    for(auto p : pairs)
+    {
+        if (remainWidth <= 0) {
+            break;
+        }
+        cascadeNum = remainWidth / p.second;
+        if (cascadeNum == 0) {
+            cascadeNum = 1;
+        }
+        remainWidth -= cascadeNum * p.second;
+        bramOnEachCascade = (depth + p.first - 1) / p.first;
+        totalNum += cascadeNum * bramOnEachCascade;
+    }
+    
+    if (remainWidth > 0) {
+        auto it = pairs.rbegin();
+        unsigned bramOnResidualWidth = (depth + it->first - 1) / it->first;
+        totalNum += bramOnResidualWidth;
+    }
+
+    return totalNum;
+}
+
+unsigned DoubleKeyMemoryQuerier::singleConfigCalculateBRAM(unsigned uniformWidth, unsigned uniformDepth, int memoryWidth, int memoryDepth)
+{
+    unsigned cascadeNum = 0;
+    unsigned bramOnEachCascade = 0;
+    unsigned totalNum = 0;
+    cascadeNum = (memoryWidth + uniformWidth - 1) / uniformWidth;
+    bramOnEachCascade = (memoryDepth + uniformDepth - 1) / uniformDepth;
+    totalNum = cascadeNum * bramOnEachCascade;
+    return totalNum;
+}
 // TODO: 
 int DoubleKeyMemoryQuerier::queryLatency(CoreInst* core) {
+
+    // core->getName() == "RAM_1WnR" ||
+    // core->getName() == "RAM_1P" ||
+    // core->getName() == "RAM_2P" || 
+    // core->getName() == "RAM_S2P" ||
+    // core->getName() == "RAM_T2P"
+    if (core->getName() == "RAM") {
+        if (!isMeetDelayBudget(core)) {
+            // Try to use URAM
+            return mUramQuerier->queryLatency(core);
+        }
+    }
+
     return DoubleKeyQuerier::queryLatency(core);
 }
+
+std::vector<double> DoubleKeyMemoryQuerier::queryDelayList(CoreInst* core) {
+    if (core->getName() == "RAM") {
+        if (!isMeetDelayBudget(core)) {
+            // Try to use URAM
+            return mUramQuerier->queryDelayList(core);
+        }
+    }
+
+    return DoubleKeyQuerier::queryDelayList(core);
+}
+
 ResourceData DoubleKeyMemoryQuerier::queryResource(CoreInst* core)
 {
     int latency = DoubleKeyQuerier::queryLatency(core);
     std::string name_db = getNameInDB(core);
-    
+
+    if (core->getName() == "RAM") {
+        if (!isMeetDelayBudget(core)) {
+            // Try to use URAM
+            latency = mUramQuerier->queryLatency(core);
+            name_db = mUramQuerier->getNameInDB(core);
+            ResourceData value = selectResource(name_db.c_str(), getKey0(core), getKey1(core), latency);
+            return value;
+        }
+    }
+
     ResourceData value = selectResource(name_db.c_str(), getKey0(core), getKey1(core), latency);
         
     auto storage = static_cast<StorageInst*>(core);
     std::vector<unsigned> usedPorts = storage->getMemUsedPorts();
     usedPorts.erase(std::remove_if(usedPorts.begin(), usedPorts.end(), [](unsigned i) { return i > 2;}),usedPorts.end());
     unsigned memPortNum= usedPorts.size();
+
+    auto& s = Selector::getSelector();
+    std::string cmd = "SELECT EXISTS(SELECT 1 FROM " + 
+            GetTargetPlatform()->getFactory().getLibraryName() + "_" +
+            getTableName() + " WHERE CORE_NAME = '" + mRam1PortName + "')";
+    auto exists1PData = s.selectInt(cmd.c_str());
+    std::string cmdFor2p = "SELECT EXISTS(SELECT 1 FROM " + 
+            GetTargetPlatform()->getFactory().getLibraryName() + "_" +
+            getTableName() + " WHERE CORE_NAME = '" + mRam2PortName + "')";
+    auto exists2PData = s.selectInt(cmdFor2p.c_str());
+    std::string cmdForRom1P = "SELECT EXISTS(SELECT 1 FROM " + 
+            GetTargetPlatform()->getFactory().getLibraryName() + "_" +
+            getTableName() + " WHERE CORE_NAME = '" + mRom1PortName + "')";
+    auto existsROM1PData = s.selectInt(cmdForRom1P.c_str());
+    std::string cmdForRom2P = "SELECT EXISTS(SELECT 1 FROM " + 
+            GetTargetPlatform()->getFactory().getLibraryName() + "_" +
+            getTableName() + " WHERE CORE_NAME = '" + mRom2PortName + "')";
+    auto existsROM2PData = s.selectInt(cmdForRom2P.c_str());
+    std::string cmdForRamBlock2P = "SELECT EXISTS(SELECT 1 FROM " + 
+            GetTargetPlatform()->getFactory().getLibraryName() + "_" +
+            getTableName() + " WHERE CORE_NAME = '" + mRamBlock2PortName + "')";
+    auto existsRAMBlock2PData = s.selectInt(cmdForRamBlock2P.c_str());    
     
+    if (exists1PData.data == 0 || (exists1PData.data == 1 && !storage->isAuto())) {
+        if (usedPorts == std::vector<unsigned>{2,2} ) 
+            value.Bram = value.Bram * 2;
+    }
+    if (storage->isAuto()) {
+        if (exists1PData.data == 1 && (usedPorts == std::vector<unsigned>{2} || usedPorts == std::vector<unsigned>{0, 1} || usedPorts == std::vector<unsigned>{1, 0})) {
+            value = selectResource(mRam1PortName.c_str(), getKey0(core), getKey1(core), latency);
+        }
+        if (exists2PData.data == 1 && (usedPorts == std::vector<unsigned>{1, 2} || usedPorts == std::vector<unsigned>{2, 1})) {
+            value = selectResource(mRam2PortName.c_str(), getKey0(core), getKey1(core), latency);
+        }
+        if (exists1PData.data == 1 && usedPorts == std::vector<unsigned>{1}) {
+            value = selectResource(mRam1PortName.c_str(), getKey0(core), getKey1(core), latency);
+        }
+        if (exists2PData.data == 1 && usedPorts == std::vector<unsigned>{1, 1}) {
+            value = selectResource(mRam2PortName.c_str(), getKey0(core), getKey1(core), latency);
+        }
+    }
+    if (storage->isBRAM()) {
+        if (existsRAMBlock2PData.data == 1 && (usedPorts == std::vector<unsigned>{1, 2} || usedPorts == std::vector<unsigned>{2, 1})) {
+            value = selectResource(mRamBlock2PortName.c_str(), getKey0(core), getKey1(core), latency);
+        }
+    }
+
+    std::pair<bool, bool> overLimit {false, false};
+    auto key0 = getKey0(core);
+    auto key1 = getKey1(core);
+    auto keyPair = selectMinGEValue(name_db.c_str(), getKey0Type(), key0, getKey1Type(), key1, overLimit);
+    if (key0 != keyPair.first || key1 != keyPair.second) {
+        if (GetTargetPlatform()->getFactory().isVersal()) {
+            if (value.Bram != 0) {
+                value.Bram = queryVersalBRAM(static_cast<StorageInst *>(core));
+            }
+        }
+    }
+
     // post-handling based on memPortNum for 1WnR RAM
     bool isROM = true;
     for (auto value : usedPorts) 
@@ -1773,6 +2505,16 @@ ResourceData DoubleKeyMemoryQuerier::queryResource(CoreInst* core)
     }
 
     return value;
+}
+
+PlatformBasic::IMPL_TYPE DoubleKeyMemoryQuerier::autoTypeChangeTo(CoreInst* core) {
+    if (core->getName() == "RAM") {
+        if (!isMeetDelayBudget(core)) {
+           return PlatformBasic::IMPL_TYPE::XPM_MEMORY_URAM;
+        }
+    }
+
+    return PlatformBasic::IMPL_TYPE::AUTO;
 }
 
 int DoubleKeyArithmeticQuerier::getKey0(CoreInst* core)
@@ -2220,14 +2962,14 @@ int AdapterQuerier::queryLatency(CoreInst* core)
                                 { Regslice_IO, {1, 6, 4, 10, 4} } } }
         };
 
-        auto adapInst = static_cast<AdapterInst*>(core);
+        auto maxi = static_cast<AdapterInst*>(core);
 
         MAXI_TYPE MAXIChanType = SingleChannel;
-        if (adapInst->enableReadOnlyCache()) MAXIChanType = ReadOnlyCache;
-        else if (adapInst->isMultiChannelMAXI()) MAXIChanType = MultiChannel;
+        if (maxi->enableReadOnlyCache()) MAXIChanType = ReadOnlyCache;
+        else if (maxi->isMultiChannelMAXI()) MAXIChanType = MultiChannel;
 
         IO_TYPE IOType = Native_IO; 
-        if (adapInst->enableIORegslice()) IOType = Regslice_IO;
+        if (maxi->enableIORegslice()) IOType = Regslice_IO;
 
         std::vector<int> latVals = mMAXILatMap[MAXIChanType][IOType];
         //std::cout << "DBG : query OP " << mCurOper <<  " for " << MAXIChanType << " MAXI , with " << IOType << " Interface." << std::endl;
@@ -2269,20 +3011,32 @@ ResourceData AdapterQuerier::queryResource(CoreInst* core)
 ResourceData AdapterQuerier::queryAXILiteResource(CoreInst* core)
 {
     assert(core->getName() == "s_axilite");
+
     ResourceData resource;
     resource.Ff = 30;
-    auto adapInst = static_cast<AdapterInst*>(core);
-    auto ports = adapInst->getAXILitePortsVec();
-    for (auto port : ports)
-    resource.Ff = (port[0]) ? (resource.Ff + 80) : (resource.Ff + port[1] + 6) ; 
     resource.Lut = 40;
-    // auto adapInst = static_cast<AdapterInst*>(core);
-    // auto ports = adapInst->getAXILitePortsVec();
-    for (auto port : ports)
-            resource.Lut = (port[0]) ? (resource.Lut + 70) : (resource.Lut + port[1] * 2) ; 
 
-    auto adapterInst = static_cast<AdapterInst*>(core); 
-    auto& adaptMemories = adapterInst->getInnerMemInstList();
+    auto axilite = static_cast<AdapterInst*>(core);
+    auto portsMap = axilite->getAXILitePortsMap();
+    if (portsMap.size() > 0) {
+        for (auto& port : portsMap) {
+            auto pm = port.second;
+            int depth     = pm.at(AdapterInst::AXILiteParaKey::Depth);
+            int width     = pm.at(AdapterInst::AXILiteParaKey::Width);
+            resource.Ff  += ((depth) ? 80 : (width + 6));
+            resource.Lut += ((depth) ? 70 : (width * 2));
+        }
+    } else {
+        auto portsVec = axilite->getAXILitePortsVec();
+        for (auto& port : portsVec) {
+            int depth     = port[0];
+            int width     = port[1];
+            resource.Ff  += ((depth) ? 80 : (width + 6));
+            resource.Lut += ((depth) ? 70 : (width * 2));
+        }
+    }
+
+    auto& adaptMemories = axilite->getInnerMemInstList();
     CoreQuerier *querier = NULL;
     for (auto& mem : adaptMemories) 
     {
@@ -2323,12 +3077,12 @@ ResourceData AdapterQuerier::queryMAXIResource(CoreInst* core)
     resourceUsage.Ff = getResourceUsageByResourceType("FF");
     resourceUsage.Lut = getResourceUsageByResourceType("LUT");
 
-    auto adapterInst = static_cast<AdapterInst*>(core); 
-    auto& adaptMemories = adapterInst->getInnerMemInstList();
+    auto maxi = static_cast<AdapterInst*>(core); 
+    auto& adaptMemories = maxi->getInnerMemInstList();
     if (adaptMemories.empty()) 
     {
         // config when getInnerMemInstList() is empty.
-        configInnerMemories(adapterInst);
+        configInnerMemories(maxi);
     }
 
     CoreQuerier* querier = NULL;
@@ -2336,6 +3090,7 @@ ResourceData AdapterQuerier::queryMAXIResource(CoreInst* core)
     {
         querier = QuerierFactory::getInstance().getCoreQuerier(mem.get());
         resourceUsage += querier->queryResource(mem.get());
+        //std::cout << "DBG: storage is " << mem.get()->getName() << ". width is " << mem.get()->getBitWidth() << ". depth is " << mem.get()->getDepth() << ". BRAM is " << querier->queryResource(mem.get()).Bram << std::endl;
     }
     
     return resourceUsage;
@@ -2347,8 +3102,11 @@ void AdapterQuerier::configInnerMemories(AdapterInst* adapterInst)
         // tuple<impl, width, depth>
         std::vector<std::tuple<unsigned, unsigned, unsigned> > fifoCfg, memCfg;
 
-        auto& paraMap      = adapterInst->getMAXIParaMap();
         auto& chanParaMaps = adapterInst->getMAXIChanParaMap();
+        assert(chanParaMaps.count(AdapterInst::MAXIParaType::Global) > 0);
+
+        std::map<unsigned, unsigned> paraMap;
+        paraMap = chanParaMaps.at(AdapterInst::MAXIParaType::Global);
 
         auto toMultipleOf8 = [](int value) -> int {
             return ((value + 7) / 8) * 8;
@@ -2360,8 +3118,11 @@ void AdapterQuerier::configInnerMemories(AdapterInst* adapterInst)
             }
             return power;
         };
+        // user/bus width configuration
+        unsigned userWidth = toMultipleOf8(adapterInst->getBitWidth());
+        unsigned busWidth  = static_cast<unsigned>(paraMap.at(AdapterInst::MAXIParaKey::BusWidth));
 
-        // user control on read/write buffer size 
+        // user control on read/write buffer size and the maximum allowed depth for srl implementation
         int maxReadBuffSize  = -1;
         int maxWriteBuffSize = -1;
         if (paraMap.count(AdapterInst::MAXIParaKey::MaxReadBuffSize) > 0) {
@@ -2370,67 +3131,58 @@ void AdapterQuerier::configInnerMemories(AdapterInst* adapterInst)
         if (paraMap.count(AdapterInst::MAXIParaKey::MaxWriteBuffSize) > 0) {
             maxWriteBuffSize = static_cast<int>(paraMap.at(AdapterInst::MAXIParaKey::MaxWriteBuffSize));
         }
-
-        // user/bus width configuration
-        unsigned userWidth = toMultipleOf8(adapterInst->getBitWidth());
-        unsigned busWidth  = toNextPowerOf2(userWidth);
-        if (paraMap.count(AdapterInst::MAXIParaKey::MaxReadBuffSize) > 0) {
-            busWidth = static_cast<unsigned>(paraMap.at(AdapterInst::MAXIParaKey::BusWidth));
+        int defaultSRLImplMaxDepth = 32;
+        if (paraMap.count(AdapterInst::MAXIParaKey::SRLImplMaxDepth) > 0) {
+            defaultSRLImplMaxDepth = static_cast<int>(paraMap.at(AdapterInst::MAXIParaKey::SRLImplMaxDepth));
         }
         
-        if (chanParaMaps.size() < 1) {
-            // buff_rdata
-            fifoCfg.push_back( std::make_tuple(
-                paraMap.at(AdapterInst::MAXIParaKey::LsuFifoImpl), 
-                busWidth,
-                (maxReadBuffSize < 0) ? paraMap.at(AdapterInst::MAXIParaKey::NumReadOutstanding) * paraMap.at(AdapterInst::MAXIParaKey::MaxReadBurstLen) : maxReadBuffSize ));
+        for (auto& pm : chanParaMaps) {
 
-            // buff_wdata
-            fifoCfg.push_back(std::make_tuple(
-                paraMap.at(AdapterInst::MAXIParaKey::LsuFifoImpl), 
-                userWidth,
-                (maxWriteBuffSize < 0) ? int(paraMap.at(AdapterInst::MAXIParaKey::MaxWriteBurstLen) * busWidth / toNextPowerOf2(userWidth)) : maxWriteBuffSize));
-        
-        } else {
-            for (auto& pm : chanParaMaps) {
-                //auto& chId     = pm.first;
-                auto&    chParaMap     = pm.second;
-                int      cacheType     = chParaMap.at(AdapterInst::MAXIParaKey::CacheType);
-                int      chanIOType    = chParaMap.at(AdapterInst::MAXIParaKey::ChanIOType);
-                unsigned chanPortWidth = toMultipleOf8(chParaMap.at(AdapterInst::MAXIParaKey::ChanPortWidth));
+            if (pm.first == AdapterInst::MAXIParaType::Global) continue;
+            if (pm.first == AdapterInst::MAXIParaType::L2Cache) continue;
+            //auto& chId     = pm.first;
+            auto&    chnParaMap    = pm.second;
+            int      cacheType     = chnParaMap.at(AdapterInst::MAXIParaKey::CacheType);
+            int      chanIOType    = chnParaMap.at(AdapterInst::MAXIParaKey::ChanIOType);
+            unsigned chanPortWidth = toMultipleOf8(chnParaMap.at(AdapterInst::MAXIParaKey::ChanPortWidth));
 
-                assert(cacheType == AdapterInst::CacheType::None || cacheType == AdapterInst::CacheType::ReadOnlyCache);
+            assert(cacheType == AdapterInst::CacheType::None || cacheType == AdapterInst::CacheType::ReadOnlyCache);
 
-                // Read Buffer/Cache Configurations
-                if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::ReadOnly) {
-                    // read buffer configuration when cacheType is None
-                    if (cacheType == AdapterInst::CacheType::None){
-                        fifoCfg.push_back( std::make_tuple(
-                            chParaMap.at(AdapterInst::MAXIParaKey::LsuFifoImpl), 
-                            busWidth,
-                            (maxReadBuffSize < 0) ? chParaMap.at(AdapterInst::MAXIParaKey::NumReadOutstanding) * chParaMap.at(AdapterInst::MAXIParaKey::MaxReadBurstLen) : maxReadBuffSize));
-
-                    // read cache configuration when cacheType is ReadOnlyCache
-                    } else if (cacheType == AdapterInst::CacheType::ReadOnlyCache) {
-                        auto cacheLineWidth = chParaMap.at(AdapterInst::MAXIParaKey::CacheLineWidth);
-                        auto cacheLineDepth = chParaMap.at(AdapterInst::MAXIParaKey::CacheLineDepth);
-                        auto cacheLineNum   = chParaMap.at(AdapterInst::MAXIParaKey::CacheLineNum);
-                        int  memDepth       = int(toNextPowerOf2(cacheLineWidth) * cacheLineDepth / busWidth ) * cacheLineNum;
-
-                        memCfg.push_back( std::make_tuple(
-                            chParaMap.at(AdapterInst::MAXIParaKey::CacheImpl), 
-                            busWidth, 
-                            memDepth));
-                    }
-                }
-                
-                // Write Buffer configuraitons.
-                if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::WriteOnly) {
+            // Read Buffer/Cache Configurations
+            if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::ReadOnly) {
+                // read buffer configuration when cacheType is None
+                if (cacheType == AdapterInst::CacheType::None){
+                    unsigned depth = (maxReadBuffSize >= 0) ? maxReadBuffSize : 
+                        chnParaMap.at(AdapterInst::MAXIParaKey::NumReadOutstanding) * chnParaMap.at(AdapterInst::MAXIParaKey::MaxReadBurstLen);
                     fifoCfg.push_back( std::make_tuple(
-                        chParaMap.at(AdapterInst::MAXIParaKey::LsuFifoImpl),
-                        chanPortWidth,
-                        (maxWriteBuffSize < 0) ? 2 * int(paraMap.at(AdapterInst::MAXIParaKey::MaxWriteBurstLen) * busWidth / toNextPowerOf2(chanPortWidth)) : maxWriteBuffSize ));
+                        chnParaMap.at(AdapterInst::MAXIParaKey::LsuFifoImpl), 
+                        busWidth,
+                        depth));
+
+                // read cache configuration when cacheType is ReadOnlyCache
+                } else if (cacheType == AdapterInst::CacheType::ReadOnlyCache) {
+                    auto cacheLineWidth = chnParaMap.at(AdapterInst::MAXIParaKey::CacheLineWidth);
+                    auto cacheLineDepth = chnParaMap.at(AdapterInst::MAXIParaKey::CacheLineDepth);
+                    auto cacheLineNum   = chnParaMap.at(AdapterInst::MAXIParaKey::CacheLineNum);
+                    unsigned  memDepth  = int(toNextPowerOf2(cacheLineWidth) * cacheLineDepth / busWidth ) * cacheLineNum;
+
+                    memCfg.push_back( std::make_tuple(
+                        chnParaMap.at(AdapterInst::MAXIParaKey::CacheImpl), 
+                        busWidth, 
+                        memDepth));
                 }
+            }
+            
+            // Write Buffer configuraitons.
+            if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::WriteOnly) {
+                auto busWidthEqual = (toNextPowerOf2(chanPortWidth) == busWidth);
+                unsigned depth = (maxWriteBuffSize >= 0) ?
+                                    std::max(int(paraMap.at(AdapterInst::MAXIParaKey::MaxWriteBurstLen)) , maxWriteBuffSize ) :
+                                    int(paraMap.at(AdapterInst::MAXIParaKey::MaxWriteBurstLen) * (int(busWidthEqual)+1) );
+                fifoCfg.push_back( std::make_tuple(
+                    chnParaMap.at(AdapterInst::MAXIParaKey::LsuFifoImpl),
+                    chanPortWidth,
+                    depth));
             }
         }
 
@@ -2446,12 +3198,15 @@ void AdapterQuerier::configInnerMemories(AdapterInst* adapterInst)
             PlatformBasic::MEMORY_TYPE fifoType = PlatformBasic::MEMORY_FIFO;
             // FIFO doesn't have MEMORY_IMPL_AUTO impl, convert to MEMORY_IMPL_MEMORY instead
             PlatformBasic::MEMORY_IMPL fifoImpl = (impl == PlatformBasic::MEMORY_IMPL_AUTO) ? PlatformBasic::MEMORY_IMPL_MEMORY : impl;
+
+            // Enable SRL implementation for small depth FIFO
+            auto preferredImpl  = (depth <= defaultSRLImplMaxDepth) ? PlatformBasic::MEMORY_IMPL_SRL : fifoImpl;
             
             auto& fac = GetTargetPlatform()->getFactory();
             StorageInstList list;
             fac.requestStorageInstList(list, fifoType, -1, width, 
                 depth, false, false, {}, 
-                AnyLatency, 0 /*required1WNRNumPorts0*/, fifoImpl);
+                AnyLatency, 0 /*required1WNRNumPorts0*/, preferredImpl);
             adapterInst->pushBackInnerMemInst(list[0]);
         }
 
@@ -2463,14 +3218,13 @@ void AdapterQuerier::configInnerMemories(AdapterInst* adapterInst)
 
             if (depth == 0) continue;
 
-            // PF does not support RAM_S2P_AUTO currenlty, use RAM_2P_AUTO instead to estimate cache memory resource usage.
-            PlatformBasic::MEMORY_TYPE memType = (impl == PlatformBasic::MEMORY_IMPL_AUTO) ? PlatformBasic::MEMORY_RAM_2P : PlatformBasic::MEMORY_RAM_S2P;
+            PlatformBasic::MEMORY_TYPE memType = PlatformBasic::MEMORY_RAM_S2P;
             PlatformBasic::MEMORY_IMPL memImpl = impl;
 
             auto& fac = GetTargetPlatform()->getFactory();
             StorageInstList list;
             fac.requestStorageInstList(list, memType, -1, width, 
-                depth, false, false, {}, 
+                depth, false, false, {0, 1}, 
                 AnyLatency, 0 /*required1WNRNumPorts0*/, memImpl);
             adapterInst->pushBackInnerMemInst(list[0]);
         }
@@ -4136,9 +4890,9 @@ int TripleMGEKeyQuerier::selectMinGEValue(const char *core_name,
              column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name, column, value);
     assert(n > 0 && n < length);
     auto& s = Selector::getSelector();
-    int result = s.selectInt(cmd);
+    auto resultOpt = s.selectInt(cmd);
     // value is greater than max(column), then choose max(column)
-    if(result == 0)
+    if(!resultOpt.valid)
     {
         int n = snprintf(cmd,
                  length,
@@ -4146,11 +4900,87 @@ int TripleMGEKeyQuerier::selectMinGEValue(const char *core_name,
                  "where CORE_NAME = '%s' COLLATE NOCASE ",
                  column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name);
         assert(n > 0 && n < length);
-        result = s.selectInt(cmd);
+        resultOpt = s.selectInt(cmd);
         overLimit = true;
     }
     delete[] cmd;
-    return result;
+    return resultOpt.data;
+}
+
+int TripleMGEKeyQuerier::selectMinGEValueByFixOneKey(const char *core_name,
+                                             const char *column,
+                                             int value, 
+                                             int fixKey,
+                                             unsigned fixColumn,
+                                             bool& overLimit)
+{
+    int length = MAX_CMD_SIZE + std::strlen(core_name) + std::strlen(column);
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select min(%s) from %s_%s "
+             "where CORE_NAME = '%s' COLLATE NOCASE and %s = %d "
+             "and %s >= %d",
+             column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+             getTableName(), core_name, getKey0Type(), fixKey, column, value);
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto resultOpt = s.selectInt(cmd);
+    // value is greater than max(column), then choose max(column)
+    if(!resultOpt.valid)
+    {
+        int n = snprintf(cmd,
+                 length,
+                 "select max(%s) from %s_%s "
+                 "where CORE_NAME = '%s' COLLATE NOCASE "
+                 "and %s = %d",
+                 column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+                 getTableName(), core_name, getKey0Type(), fixKey);
+        assert(n > 0 && n < length);
+        resultOpt = s.selectInt(cmd);
+        overLimit = true;
+    }
+    delete[] cmd;
+    return resultOpt.data;
+}
+
+int TripleMGEKeyQuerier::selectMinGEValueByFixDoubleKeys(const char *core_name,
+                                            const char* column,
+                                            int value, 
+                                            int fixKey0,
+                                            unsigned fixColumn0,
+                                            int fixKey1,
+                                            unsigned fixColumn1,
+                                            bool& overLimit)
+{
+    int length = MAX_CMD_SIZE + std::strlen(core_name) + std::strlen(column);
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select min(%s) from %s_%s "
+             "where CORE_NAME = '%s' COLLATE NOCASE and %s = %d and %s = %d "
+             "and %s >= %d",
+             column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+             getTableName(), core_name, getKey0Type(), fixKey0, getKey1Type(), fixKey1, column, value);
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto resultOpt = s.selectInt(cmd);
+    // value is greater than max(column), then choose max(column)
+    if(!resultOpt.valid)
+    {
+        int n = snprintf(cmd,
+                 length,
+                 "select max(%s) from %s_%s "
+                 "where CORE_NAME = '%s' COLLATE NOCASE "
+                 "and %s = %d and %s = %d",
+                 column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+                 getTableName(), core_name, getKey0Type(), fixKey0, getKey1Type(), fixKey1);
+        assert(n > 0 && n < length);
+        resultOpt = s.selectInt(cmd);
+        overLimit = true;
+    }
+    delete[] cmd;
+    return resultOpt.data;
 }
 
 DelayMap TripleMGEKeyQuerier::selectLatencyDelayMap(const char *name_db,
@@ -4231,8 +5061,16 @@ void TripleMGEKeyQuerier::getQueryMinGEKeys(CoreInst *core, int& key0, int& key1
     std::string nameDb = getNameInDB(core);
     bool overlimit = false;
     key0 = selectMinGEValue(nameDb.c_str(), getKey0Type(), getKey0(core), overlimit);
-    key1 = selectMinGEValue(nameDb.c_str(), getKey1Type(), getKey1(core), overlimit);
-    key2 = selectMinGEValue(nameDb.c_str(), getKey2Type(), getKey2(core), overlimit);
+    if (nameDb == "BinarySparseMux_DontCare_IncrEncode") {
+        key1 = selectMinGEValueByFixOneKey(nameDb.c_str(), getKey1Type(), getKey1(core), key0, 0, overlimit);
+    } else {
+        key1 = selectMinGEValue(nameDb.c_str(), getKey1Type(), getKey1(core), overlimit);
+    }
+    if (nameDb == "BinarySparseMux_DontCare_IncrEncode") {
+        key2 = selectMinGEValueByFixDoubleKeys(nameDb.c_str(), getKey2Type(), getKey2(core), key0, 0, key1, 1, overlimit);
+    } else {
+        key2 = selectMinGEValue(nameDb.c_str(), getKey2Type(), getKey2(core), overlimit);
+    }
 }
 
 int TripleMGEKeyQuerier::queryLatency(CoreInst* core)
@@ -4274,6 +5112,29 @@ ResourceData TripleMGEKeyQuerier::queryResource(CoreInst* core)
 
     auto value = selectResource(name_db.c_str(), key0MGE, key1MGE, key2MGE, latency);
     return value;
+}
+
+std::pair<std::string, std::string> TripleMGEKeyQuerier::queryInOutPrimitive(CoreInst* core) {
+    int latency = TripleMGEKeyQuerier::queryLatency(core);
+    std::string name_db = getNameInDB(core);
+    int key0MGE;
+    int key1MGE;
+    int key2MGE;
+    getQueryMinGEKeys(core, key0MGE, key1MGE, key2MGE);
+
+    const char* table_name = getTableName();
+    int length = MAX_CMD_SIZE + std::strlen(table_name) + name_db.size();
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select INPUT_PRIMITIVE, OUTPUT_PRIMITIVE from %s_%s "
+             "where LATENCY = %d and %s = %d and %s = %d and %s = %d and CORE_NAME = '%s' COLLATE NOCASE ",
+             GetTargetPlatform()->getFactory().getLibraryName().c_str(), table_name, 
+            latency, getKey0Type(), key0MGE, getKey1Type(), key1MGE, 
+            getKey2Type(), key2MGE, name_db.c_str());
+    auto& s = Selector::getSelector();
+    auto PrimitivePair = s.selectStrPair(cmd);
+    return PrimitivePair;
 }
 
 //  SparseMuxQuerier
@@ -4428,9 +5289,9 @@ int MultipleMGEKeyQuerier::selectMinGEValue(const char *core_name,
              column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name, column, value);
     assert(n > 0 && n < length);
     auto& s = Selector::getSelector();
-    int result = s.selectInt(cmd);
+    auto resultOpt = s.selectInt(cmd);
     // value is greater than max(column), then choose max(column)
-    if(result == 0)
+    if(!resultOpt.valid)
     {
         int n = snprintf(cmd,
                  length,
@@ -4438,11 +5299,11 @@ int MultipleMGEKeyQuerier::selectMinGEValue(const char *core_name,
                  "where CORE_NAME = '%s' COLLATE NOCASE ",
                  column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name);
         assert(n > 0 && n < length);
-        result = s.selectInt(cmd);
+        resultOpt = s.selectInt(cmd);
         overLimit = true;
     }
     delete[] cmd;
-    return result;
+    return resultOpt.data;
 }
 
 DelayMap MultipleMGEKeyQuerier::selectLatencyDelayMap(CoreInst *core)
@@ -4552,26 +5413,427 @@ ResourceData MultipleMGEKeyQuerier::queryResource(CoreInst* core)
     return value;
 }
 
-std::vector<int> QuadrupleAxiQuerier::getKeys(CoreInst* core) {
+std::pair<std::string, std::string> MultipleMGEKeyQuerier::queryInOutPrimitive(CoreInst* core) {
+    int latency = MultipleMGEKeyQuerier::queryLatency(core);
+    std::string name_db = getNameInDB(core);
+    auto keyTypes = getKeyTypes();
+    auto MGEKeys = getMinGEKeys(core);
+
+    std::stringstream ss;
+    ss << "select INPUT_PRIMITIVE, OUTPUT_PRIMITIVE from " 
+        << GetTargetPlatform()->getFactory().getLibraryName() 
+        << "_" << getTableName() << " where ";
+    for (std::size_t i=0; i < keyTypes.size(); i ++) {
+        ss << keyTypes[i] << " = " << MGEKeys[i] << " and ";
+    }
+    ss << "LATENCY = " << latency << " and CORE_NAME = '" << name_db << "' COLLATE NOCASE ";  
+
+    std::string cmd = ss.str();
+    auto& s = Selector::getSelector();
+    auto PrimitivePair = s.selectStrPair(cmd.c_str());
+    return PrimitivePair;
+}
+
+// MAXIQuerier
+MAXIQuerier::MAXIQuerier() {
+    mQueriers[MAXIQuerier::LoadUnit]    = new LoadUnitQuerier();
+    mQueriers[MAXIQuerier::StoreUnit]   = new StoreUnitQuerier();
+    mQueriers[MAXIQuerier::CacheUnit]   = new CacheUnitQuerier();
+    mQueriers[MAXIQuerier::BusRead]     = new BusReadQuerier();
+    mQueriers[MAXIQuerier::BusWrite]    = new BusWriteQuerier();
+}
+
+MAXIQuerier::~MAXIQuerier() {
+    mQueriers.clear();
+}
+
+std::vector<int> MAXIQuerier::LoadUnitQuerier::getKeys(CoreInst* core) {
     auto maxi = static_cast<AdapterInst*>(core);
-    const auto &paraMap = maxi->getMAXIParaMap();
-    // key : 0          1               2               3
-    //    bus_width burst_length    outstanding     user Latency
-    int busWidth    = maxi->getBitWidth();
-    // default value 
-    int burstLength = 64;
-    int outstanding = 64;
-    int userLatency = 59;
-    if (paraMap.count(AdapterInst::MAXIParaKey::MaxReadBurstLen)) {
-        burstLength = paraMap.at(AdapterInst::MAXIParaKey::MaxReadBurstLen);
-    } 
-    if (paraMap.count(AdapterInst::MAXIParaKey::NumReadOutstanding)) {
-        outstanding = paraMap.at(AdapterInst::MAXIParaKey::NumReadOutstanding);
+    // key : 0             1            2               3
+    //       channel_width outstanding  burst_length    aligned_width
+    auto maxiParaMap    = maxi->getMAXIChanParaMap();
+    auto targetChanId   = this->getTargetChanID();
+
+    assert((maxiParaMap.count(AdapterInst::MAXIParaType::Global) > 0) && (maxiParaMap.count(targetChanId) > 0));
+    
+    auto paraMap    = maxiParaMap.at(AdapterInst::MAXIParaType::Global);
+    auto chnParaMap = maxiParaMap.at(targetChanId);
+
+    int portWidth   = chnParaMap.at(AdapterInst::MAXIParaKey::ChanPortWidth);
+    int outstanding = chnParaMap.at(AdapterInst::MAXIParaKey::NumReadOutstanding);
+    int burstLength = paraMap.at(AdapterInst::MAXIParaKey::MaxReadBurstLen);
+    int alignWidth  = 0;
+    if ((paraMap.at(AdapterInst::UnalignedBurst) != 0) && (chnParaMap.count(AdapterInst::MAXIParaKey::ChanAlignWidth) > 0)) {
+        alignWidth = chnParaMap.at(AdapterInst::MAXIParaKey::ChanAlignWidth);
     }
-    if (paraMap.count(AdapterInst::MAXIParaKey::UserLatency)) {
-        userLatency = paraMap.at(AdapterInst::MAXIParaKey::UserLatency);
+
+    return {portWidth, outstanding, burstLength, alignWidth};
+}
+
+std::vector<int> MAXIQuerier::StoreUnitQuerier::getKeys(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    // key : 0             1            2               3
+    //       channel_width outstanding  burst_length    aligned_width
+    auto maxiParaMap    = maxi->getMAXIChanParaMap();
+    auto targetChanId   = this->getTargetChanID();
+
+    assert((maxiParaMap.count(AdapterInst::MAXIParaType::Global) > 0) && (maxiParaMap.count(targetChanId) > 0));
+    
+    auto paraMap    = maxiParaMap.at(AdapterInst::MAXIParaType::Global);
+    auto chnParaMap = maxiParaMap.at(targetChanId);
+
+    int portWidth   = chnParaMap.at(AdapterInst::MAXIParaKey::ChanPortWidth);
+    int outstanding = chnParaMap.at(AdapterInst::MAXIParaKey::NumWriteOutstanding);
+    int burstLength = paraMap.at(AdapterInst::MAXIParaKey::MaxWriteBurstLen);
+    int alignWidth  = 0;
+    if ((paraMap.at(AdapterInst::UnalignedBurst) != 0) && (chnParaMap.count(AdapterInst::MAXIParaKey::ChanAlignWidth) > 0)) {
+        alignWidth = chnParaMap.at(AdapterInst::MAXIParaKey::ChanAlignWidth);
     }
-    return {busWidth, burstLength, outstanding, userLatency};
+
+    return {portWidth, outstanding, burstLength, alignWidth};
+}
+
+std::string MAXIQuerier::CacheUnitQuerier::getNameInDB(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    auto maxiParaMap    = maxi->getMAXIChanParaMap();
+    auto targetChanId   = this->getTargetChanID();
+
+    assert((maxiParaMap.count(AdapterInst::MAXIParaType::Global) > 0) && (maxiParaMap.count(targetChanId) > 0));
+    auto chnParaMap = maxiParaMap.at(targetChanId);
+    auto cacheImpl = static_cast<PlatformBasic::MEMORY_IMPL>(chnParaMap.at(AdapterInst::MAXIParaKey::CacheImpl));
+
+    if (cacheImpl == PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_BRAM) {
+        return "cache_unit_bram";
+    } else if (cacheImpl == PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_URAM) {
+        return "cache_unit_uram";
+    } else if (cacheImpl == PlatformBasic::MEMORY_IMPL::MEMORY_IMPL_LUTRAM) {
+        return "cache_unit_lutram";
+    } else {
+        return "cache_unit";
+    }
+}
+
+std::vector<int> MAXIQuerier::CacheUnitQuerier::getKeys(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    // key : 0          1               2                  3
+    //       bus_width  cacheline_num   cacheline_depth    null
+    auto maxiParaMap    = maxi->getMAXIChanParaMap();
+    auto targetChanId   = this->getTargetChanID();
+
+    assert((maxiParaMap.count(AdapterInst::MAXIParaType::Global) > 0) && (maxiParaMap.count(targetChanId) > 0));
+    
+    auto paraMap    = maxiParaMap.at(AdapterInst::MAXIParaType::Global);
+    auto chnParaMap = maxiParaMap.at(targetChanId);
+
+    int busWidth        = paraMap.at(AdapterInst::MAXIParaKey::BusWidth);
+    int cacheLineNum    = chnParaMap.at(AdapterInst::MAXIParaKey::CacheLineNum);
+    int cacheLineDepth  = chnParaMap.at(AdapterInst::MAXIParaKey::CacheLineDepth);
+
+    return {busWidth, cacheLineNum, cacheLineDepth, 0};
+}
+
+std::vector<int> MAXIQuerier::BusReadQuerier::getKeys(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    // key : 0          1           2               3
+    //       bus_width  outstanding burst_length    null
+    auto maxiParaMap    = maxi->getMAXIChanParaMap();
+    auto targetChanId   = this->getTargetChanID();
+
+    assert(maxiParaMap.count(AdapterInst::MAXIParaType::Global) > 0);
+    
+    auto paraMap    = maxiParaMap.at(AdapterInst::MAXIParaType::Global);
+
+    int busWidth    = paraMap.at(AdapterInst::MAXIParaKey::BusWidth);
+    int outstanding = paraMap.at(AdapterInst::MAXIParaKey::NumReadOutstanding);
+    int burstLength = paraMap.at(AdapterInst::MAXIParaKey::MaxReadBurstLen);
+
+    return {busWidth, outstanding, burstLength, 0};
+}
+
+std::vector<int> MAXIQuerier::BusWriteQuerier::getKeys(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    // key : 0          1           2               3
+    //       bus_width  outstanding burst_length    null
+    auto maxiParaMap    = maxi->getMAXIChanParaMap();
+
+    assert(maxiParaMap.count(AdapterInst::MAXIParaType::Global) > 0);
+    
+    auto paraMap    = maxiParaMap.at(AdapterInst::MAXIParaType::Global);
+
+    int busWidth    = paraMap.at(AdapterInst::MAXIParaKey::BusWidth);
+    int outstanding = paraMap.at(AdapterInst::MAXIParaKey::NumWriteOutstanding);
+    int burstLength = paraMap.at(AdapterInst::MAXIParaKey::MaxWriteBurstLen);
+
+    return {busWidth, outstanding, burstLength, 0};
+}
+
+std::shared_ptr<CoreInst> MAXIQuerier::getMAXIRequestFIFO(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    auto maxiParaMap    = maxi->getMAXIChanParaMap();
+
+    assert(maxiParaMap.count(AdapterInst::MAXIParaType::Global) > 0);
+    auto paraMap    = maxiParaMap.at(AdapterInst::MAXIParaType::Global);
+    
+    StorageInstList list;
+    auto& fac = GetTargetPlatform()->getFactory();
+    fac.requestStorageInstList(list, PlatformBasic::MEMORY_FIFO, -1, 96, 
+        int(paraMap.at(AdapterInst::MAXIParaKey::UserLatency)), false, false, {}, 
+        AnyLatency, 0 /*required1WNRNumPorts0*/, PlatformBasic::MEMORY_IMPL_SRL);
+
+    return list[0];
+}
+
+int MAXIQuerier::queryLatency(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+
+    // According to the operation type, query the latency of the corresponding unit
+    // keep consistent with "unsigned SchedHelper::getNodePipeLatency(const Node* node, bool useCache)"
+    std::vector<int> keys;
+    if (mCurOper == PlatformBasic::OP_READREQ) {
+        auto chnParaMap = maxi->getMAXIChanParaMap().at(maxi->getTargetMAXIChanID());
+        auto cacheType = chnParaMap.at(AdapterInst::MAXIParaKey::CacheType);
+
+        QuadrupleKeyAxiComponentQuerier* querier = mQueriers.at(MAXIQuerier::LoadUnit);
+        if (cacheType == AdapterInst::CacheType::ReadOnlyCache) querier = mQueriers.at(MAXIQuerier::CacheUnit);
+        querier->setTargetChanID(maxi->getTargetMAXIChanID());
+        return querier->queryLatency(core);
+    } else if (mCurOper == PlatformBasic::OP_WRITERESP) {
+        QuadrupleKeyAxiComponentQuerier* querier = mQueriers.at(MAXIQuerier::StoreUnit);
+        querier->setTargetChanID(maxi->getTargetMAXIChanID());
+        return querier->queryLatency(core);
+    }
+
+    return 0;
+}
+
+std::vector<double> MAXIQuerier::queryDelayList(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    auto paraMap = maxi->getMAXIChanParaMap();
+    auto targetChanId = maxi->getTargetMAXIChanID();
+
+    assert( paraMap.count(targetChanId) > 0);
+    auto chnParaMap = paraMap.at(targetChanId);
+    auto chanIOType = chnParaMap.at(AdapterInst::MAXIParaKey::ChanIOType);
+    auto cacheType  = chnParaMap.at(AdapterInst::MAXIParaKey::CacheType);
+
+    std::vector<MAXIComponent> components;
+    std::vector<MAXIComponent> componentsOnlyForInternalDelay;
+    std::vector<double> delay;
+
+    if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::ReadOnly) {
+        if (cacheType == AdapterInst::CacheType::ReadOnlyCache) {
+            components.push_back(MAXIComponent::CacheUnit);
+        } else {
+            components.push_back(MAXIComponent::LoadUnit);
+        }
+        componentsOnlyForInternalDelay.push_back(MAXIComponent::BusRead);
+    }
+    
+    if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::WriteOnly) {
+        components.push_back(MAXIComponent::StoreUnit);
+        componentsOnlyForInternalDelay.push_back(MAXIComponent::BusWrite);
+    }
+    
+    double delay0 = 0, delay1 = 0, delay2 = 0;
+    // request fifo delay calibration
+    auto fifo = getMAXIRequestFIFO(core);
+    if (fifo) {
+        auto querier = QuerierFactory::getInstance().getCoreQuerier(fifo.get());
+        auto delayList = querier->queryDelayList(fifo.get());
+        delay0 = std::max(delay0, delayList[0]);
+        delay1 = std::max(delay1, delayList[1]);
+        delay2 = std::max(delay2, delayList[2]);
+    }
+    for (auto comp : components) {
+        auto querier = mQueriers.at(comp);
+        querier->setTargetChanID(targetChanId);
+        auto delayList = querier->queryDelayList(core);
+        delay0 = std::max(delay0, delayList[0]);
+        delay1 = std::max(delay1, delayList[1]);
+        delay2 = std::max(delay2, delayList[2]);
+    }
+    for (auto comp : componentsOnlyForInternalDelay) {
+        auto querier = mQueriers.at(comp);
+        querier->setTargetChanID(targetChanId);
+        auto delayList = querier->queryDelayList(core);
+        delay1 = std::max(delay1, delayList[1]);
+    }
+
+    return {delay0, delay1, delay2};
+
+}
+
+ResourceData MAXIQuerier::queryResource(CoreInst* core) {
+    auto maxi = static_cast<AdapterInst*>(core);
+    auto paraMap = maxi->getMAXIChanParaMap();
+    bool hasRead = false;
+    bool hasWrite = false;
+    ResourceData resource;
+    ResourceData fifoRes;
+
+    auto fifo = getMAXIRequestFIFO(core);
+    if (fifo) {
+        auto querier = QuerierFactory::getInstance().getCoreQuerier(fifo.get());
+        fifoRes = querier->queryResource(fifo.get());
+    }
+
+    for (auto pm : paraMap) {
+        if (pm.first == AdapterInst::MAXIParaType::Global) continue;
+        if (pm.first == AdapterInst::MAXIParaType::L2Cache) continue;
+
+        auto chnParaMap = pm.second;
+        auto chanIOType = chnParaMap.at(AdapterInst::MAXIParaKey::ChanIOType);
+
+        // load_unit/cache_unit
+        if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::ReadOnly) {
+            auto cacheType = chnParaMap.at(AdapterInst::MAXIParaKey::CacheType);
+            auto querier = mQueriers.at(MAXIQuerier::LoadUnit);
+            if (cacheType == AdapterInst::CacheType::ReadOnlyCache) querier = mQueriers.at(MAXIQuerier::CacheUnit);
+            querier->setTargetChanID(pm.first);
+            resource += querier->queryResource(core);
+            resource += fifoRes;
+            hasRead = true;
+        } 
+        // store_unit
+        if (chanIOType == AdapterInst::ChanIOType::ReadWrite || chanIOType == AdapterInst::ChanIOType::WriteOnly) {
+            auto querier = mQueriers.at(MAXIQuerier::StoreUnit);
+            querier->setTargetChanID(pm.first);
+            resource += querier->queryResource(core);
+            resource += fifoRes;
+            hasWrite = true;
+        }
+    }
+
+    if (hasRead) {
+        auto querier = mQueriers.at(MAXIQuerier::BusRead);
+        resource += querier->queryResource(core);
+    }
+    if (hasWrite) {
+        auto querier = mQueriers.at(MAXIQuerier::BusWrite);
+        resource += querier->queryResource(core);
+    }
+
+    // Calculate the bram or uram usage through InnerMemory 
+    auto memRes = memUsage.queryResource(core);
+    resource.Bram = memRes.Bram;
+    resource.Uram = memRes.Uram;
+    return resource;
+}
+
+// AXILiteQuerier
+AXILiteQuerier::AXILiteQuerier() {
+    mQueriers[AXILiteQuerier::AXILiteCtrl]   = new AXILiteCtrlQuerier();
+    mQueriers[AXILiteQuerier::AXILiteScalar] = new AXILiteScalarQuerier();
+    mQueriers[AXILiteQuerier::AXILiteArray]  = new AXILiteArrayQuerier();
+}
+
+AXILiteQuerier::~AXILiteQuerier() {
+    mQueriers.clear();
+
+}
+
+std::vector<int> AXILiteQuerier::AXILiteCtrlQuerier::getKeys(CoreInst* core) {
+    auto axilite = static_cast<AdapterInst*>(core);
+    // key : 0          1       2       3
+    //       bus_width  null    null    null
+    int busWidth = axilite->getBitWidth();
+
+    return {busWidth, 0, 0, 0};
+}
+
+std::vector<int> AXILiteQuerier::AXILiteScalarQuerier::getKeys(CoreInst* core) {
+    auto axilite = static_cast<AdapterInst*>(core);
+    // key : 0          1           2       3
+    //       bus_width  port_width  dir     null
+    auto portsMap = axilite->getAXILitePortsMap();
+    auto portID = this->getTargetPortID();
+
+    int busWidth = axilite->getBitWidth();
+    int portWidth = 32;
+    int dir = 0;
+    if (portsMap.count(portID) > 0) {
+        auto pm   = portsMap.at(portID);
+        portWidth = pm.at(AdapterInst::AXILiteParaKey::Width);
+        dir       = pm.at(AdapterInst::AXILiteParaKey::Dir);
+    }
+    //std::cout << "  >> getKeys for AXILite port(" << portID << "), " << " busWidth : " << busWidth << ", portWidth : " << portWidth << ", dir : " << dir << std::endl;
+    return {busWidth, portWidth, dir, 0};
+    
+}
+
+std::vector<int> AXILiteQuerier::AXILiteArrayQuerier::getKeys(CoreInst* core) {
+    auto axilite = static_cast<AdapterInst*>(core);
+    // key : 0          1           2       3
+    //       bus_width  port_width  depth   null
+    auto portsMap = axilite->getAXILitePortsMap();
+    auto portID = this->getTargetPortID();
+
+    int busWidth = axilite->getBitWidth();
+    int portWidth = 32;
+    int depth = 1;
+    if (portsMap.count(portID) > 0) {
+        auto pm   = portsMap.at(portID);
+        portWidth = pm.at(AdapterInst::AXILiteParaKey::Width);
+        depth     = pm.at(AdapterInst::AXILiteParaKey::Depth);
+    }
+
+    return {busWidth, portWidth, depth, 0};
+
+}
+
+int AXILiteQuerier::queryLatency(CoreInst* core) {
+    return 0;
+}
+
+std::vector<double> AXILiteQuerier::queryDelayList(CoreInst* core) {
+    auto axilite = static_cast<AdapterInst*>(core);
+    auto portsMap = axilite->getAXILitePortsMap();
+    auto portID   = axilite->getTargetAXILitePortID();
+
+    //std::cout << "query Delay in AXILite Querier, ports.size = " << ports.size() << ", portIndex = " << portIndex << std::endl;
+    if (portsMap.count(portID) > 0) {
+        auto pm   = portsMap.at(portID);
+        auto mode = pm.at(AdapterInst::AXILiteParaKey::Mode);
+    
+        auto querier = (mode == IOModeType::IOType::ModeMemory) ? 
+                            mQueriers[AXILiteQuerier::AXILiteArray] : mQueriers[AXILiteQuerier::AXILiteScalar];
+
+        querier->setTargetPortID(portID);
+        return querier->queryDelayList(core);
+    } else {
+        return { 1.0, 1.0, 1.0 };
+    }
+}
+
+ResourceData AXILiteQuerier::queryResource(CoreInst* core) {
+    auto axilite = static_cast<AdapterInst*>(core);
+    auto portsMap = axilite->getAXILitePortsMap();
+
+    uint64_t index = 0;
+    ResourceData resource;
+
+    //std::cout << "query resource in AXILite Querier, ports.size = " << ports.size() << std::endl;
+    for (auto portMap : portsMap)
+    {
+        auto pm = portMap.second;
+        auto mode = pm.at(AdapterInst::AXILiteParaKey::Mode);
+
+        auto querier = (mode == IOModeType::IOType::ModeMemory) ? 
+                            mQueriers[AXILiteQuerier::AXILiteArray] : mQueriers[AXILiteQuerier::AXILiteScalar];
+
+        querier->setTargetPortID(index);
+        resource += querier->queryResource(core);
+        index ++;
+    }
+
+    // Calculate the bram or uram usage through InnerMemory 
+    auto memRes = memUsage.queryResource(core);
+    if (portsMap.size() == 0)  resource += memRes;
+    resource.Bram = memRes.Bram;
+    resource.Uram = memRes.Uram;
+    //std::cout << "  >> resource(Total) : { FF : " <<  resource.Ff << ", LUT : " << resource.Lut << ", BRAM : " << resource.Bram << ", URAM : " << resource.Uram << " }. " << std::endl;
+
+    return resource;
 }
 
 DSPBuiltinQuerier::DSPBuiltinQuerier(): useAreg(false),
@@ -4927,9 +6189,9 @@ int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixOneKey(const char
              getTableName(), core_name, getKeyTypes()[fixColumn].c_str(), fixKey, column, value);
     assert(n > 0 && n < length);
     auto& s = Selector::getSelector();
-    int result = s.selectInt(cmd);
+    auto resultOpt = s.selectInt(cmd);
     // value is greater than max(column), then choose max(column)
-    if(result == 0)
+    if(!resultOpt.valid)
     {
         int n = snprintf(cmd,
                  length,
@@ -4939,11 +6201,11 @@ int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixOneKey(const char
                  column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
                  getTableName(), core_name, getKeyTypes()[fixColumn].c_str(), fixKey);
         assert(n > 0 && n < length);
-        result = s.selectInt(cmd);
+        resultOpt = s.selectInt(cmd);
         overLimit = true;
     }
     delete[] cmd;
-    return result;
+    return resultOpt.data;
 }
 
 int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixDoubleKeys(const char *core_name,
@@ -4966,9 +6228,9 @@ int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixDoubleKeys(const 
              getTableName(), core_name, getKeyTypes()[fixColumn0].c_str(), fixKey0, getKeyTypes()[fixColumn1].c_str(), fixKey1, column, value);
     assert(n > 0 && n < length);
     auto& s = Selector::getSelector();
-    int result = s.selectInt(cmd);
+    auto resultOpt = s.selectInt(cmd);
     // value is greater than max(column), then choose max(column)
-    if(result == 0)
+    if(!resultOpt.valid)
     {
         int n = snprintf(cmd,
                  length,
@@ -4978,11 +6240,11 @@ int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixDoubleKeys(const 
                  column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
                  getTableName(), core_name, getKeyTypes()[fixColumn0].c_str(), fixKey0, getKeyTypes()[fixColumn1].c_str(), fixKey1);
         assert(n > 0 && n < length);
-        result = s.selectInt(cmd);
+        resultOpt = s.selectInt(cmd);
         overLimit = true;
     }
     delete[] cmd;
-    return result;
+    return resultOpt.data;
 }
 
 int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixTripleKeys(const char *core_name,
@@ -5007,9 +6269,9 @@ int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixTripleKeys(const 
              getTableName(), core_name, getKeyTypes()[fixColumn0].c_str(), fixKey0, getKeyTypes()[fixColumn1].c_str(), fixKey1, getKeyTypes()[fixColumn2].c_str(), fixKey2, column, value);
     assert(n > 0 && n < length);
     auto& s = Selector::getSelector();
-    int result = s.selectInt(cmd);
+    auto resultOpt = s.selectInt(cmd);
     // value is greater than max(column), then choose max(column)
-    if(result == 0)
+    if(!resultOpt.valid)
     {
         int n = snprintf(cmd,
                  length,
@@ -5019,11 +6281,11 @@ int QuadrupleKeyApFloatConversionQuerier::selectMinGEValueByFixTripleKeys(const 
                  column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
                  getTableName(), core_name, getKeyTypes()[fixColumn0].c_str(), fixKey0, getKeyTypes()[fixColumn1].c_str(), fixKey1,getKeyTypes()[fixColumn2].c_str(), fixKey2);
         assert(n > 0 && n < length);
-        result = s.selectInt(cmd);
+        resultOpt = s.selectInt(cmd);
         overLimit = true;
     }
     delete[] cmd;
-    return result;
+    return resultOpt.data;
 }
 
 std::vector<int> QuadrupleKeyApFloatConversionQuerier::getKeys(CoreInst* core) {
@@ -5934,6 +7196,350 @@ bool DSP58Querier::getLegality(CoreInst* core) {
             return false;
     }
     return true;
+}
+
+int BitSelectorQuerier::getKey0(CoreInst* core) {
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    if (fu->getInputBWList().size() == 0) {
+        return 0;
+    }
+    return fu->getInputBWList()[0];
+}
+
+int BitSelectorQuerier::getKey1(CoreInst* core) {
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    if (fu->getInputBWList().size() <= 1) {
+        return 0;
+    }
+    return fu->getInputBWList()[1];
+}
+
+std::pair<int, int> BitSelectorQuerier::selectMinGEValue(const char *core_name,
+                                             const char* column0,
+                                             int value0,
+                                             const char* column1,
+                                             int value1,
+                                             std::pair<bool, bool>& overLimit)
+{
+    value0 = DoubleKeyQuerier::selectMinGEValue(core_name, column0, value0, overLimit.first);
+    value1 = selectMinGEValueByFixOneKey(core_name, column1, value1, value0, 0, overLimit.second); 
+    int length = MAX_CMD_SIZE + std::strlen(core_name) + std::strlen(column0)*3 + std::strlen(column1)*3;
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select %s, %s from %s_%s "
+             "where CORE_NAME = '%s' COLLATE NOCASE "
+             "and %s >= %d and %s >= %d "
+             "ORDER BY %s * %s ASC LIMIT 1",
+             column0, column1, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name, 
+             column0, value0, column1, value1, column0, column1);
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto result = s.selectIntPair(cmd);
+    delete[] cmd;
+    return result;
+}
+
+int BitSelectorQuerier::selectMinGEValueByFixOneKey(const char *core_name,
+                                             const char *column,
+                                             int value, 
+                                             int fixKey,
+                                             unsigned fixColumn,
+                                             bool& overLimit)
+{
+    int length = MAX_CMD_SIZE + std::strlen(core_name) + std::strlen(column);
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select min(%s) from %s_%s "
+             "where CORE_NAME = '%s' COLLATE NOCASE and %s = %d "
+             "and %s >= %d",
+             column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+             getTableName(), core_name, getKey0Type(), fixKey, column, value);
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto resultOpt = s.selectInt(cmd);
+    // value is greater than max(column), then choose max(column)
+    if(!resultOpt.valid)
+    {
+        int n = snprintf(cmd,
+                 length,
+                 "select max(%s) from %s_%s "
+                 "where CORE_NAME = '%s' COLLATE NOCASE "
+                 "and %s = %d",
+                 column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+                 getTableName(), core_name, getKey0Type(), fixKey);
+        assert(n > 0 && n < length);
+        resultOpt = s.selectInt(cmd);
+        overLimit = true;
+    }
+    delete[] cmd;
+    return resultOpt.data;
+}
+
+
+int DoubleKeyBitSelectorQuerier::getKey0(CoreInst* core) {
+    return 1;
+}
+int DoubleKeyBitSelectorQuerier::getKey1(CoreInst* core) {
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    if (fu->getInputBWList().size() <= 1) {
+       return 0;
+    }
+    return fu->getInputBWList()[1];
+}
+int DoubleKeyBitSelectorQuerier::getKey2(CoreInst* core) {
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    if (fu->getInputBWList().size() == 0) {
+        return 0;
+    }
+    return fu->getInputBWList()[0];
+}
+
+int DoubleKeyBitSetQuerier::getKey0(CoreInst* core)
+{
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    if (fu->getInputBWList().size() == 0) {
+        return 0;
+    }
+    return fu->getInputBWList()[0];
+}
+
+int DoubleKeyBitSetQuerier::getKey1(CoreInst* core)
+{
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    if (fu->getInputBWList().size() <= 1) {
+       return 0;
+    }
+    return fu->getInputBWList()[1];
+}
+
+std::pair<int, int> DoubleKeyBitSetQuerier::selectMinGEValue(const char *core_name,
+                                             const char* column0,
+                                             int value0,
+                                             const char* column1,
+                                             int value1,
+                                             std::pair<bool, bool>& overLimit)
+{
+    value0 = DoubleKeyQuerier::selectMinGEValue(core_name, column0, value0, overLimit.first);
+    value1 = selectMinGEValueByFixOneKey(core_name, column1, value1, value0, 0, overLimit.second); 
+    int length = MAX_CMD_SIZE + std::strlen(core_name) + std::strlen(column0)*3 + std::strlen(column1)*3;
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select %s, %s from %s_%s "
+             "where CORE_NAME = '%s' COLLATE NOCASE "
+             "and %s >= %d and %s >= %d "
+             "ORDER BY %s * %s ASC LIMIT 1",
+             column0, column1, GetTargetPlatform()->getFactory().getLibraryName().c_str(), getTableName(), core_name, 
+             column0, value0, column1, value1, column0, column1);
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto result = s.selectIntPair(cmd);
+    delete[] cmd;
+    return result;
+}
+
+int DoubleKeyBitSetQuerier::selectMinGEValueByFixOneKey(const char *core_name,
+                                             const char *column,
+                                             int value, 
+                                             int fixKey,
+                                             unsigned fixColumn,
+                                             bool& overLimit)
+{
+    int length = MAX_CMD_SIZE + std::strlen(core_name) + std::strlen(column);
+    char* cmd = new char[length];
+    int n = snprintf(cmd,
+             length,
+             "select min(%s) from %s_%s "
+             "where CORE_NAME = '%s' COLLATE NOCASE and %s = %d "
+             "and %s >= %d",
+             column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+             getTableName(), core_name, getKey0Type(), fixKey, column, value);
+    assert(n > 0 && n < length);
+    auto& s = Selector::getSelector();
+    auto resultOpt = s.selectInt(cmd);
+    // value is greater than max(column), then choose max(column)
+    if(!resultOpt.valid)
+    {
+        int n = snprintf(cmd,
+                 length,
+                 "select max(%s) from %s_%s "
+                 "where CORE_NAME = '%s' COLLATE NOCASE "
+                 "and %s = %d",
+                 column, GetTargetPlatform()->getFactory().getLibraryName().c_str(), 
+                 getTableName(), core_name, getKey0Type(), fixKey);
+        assert(n > 0 && n < length);
+        resultOpt = s.selectInt(cmd);
+        overLimit = true;
+    }
+    delete[] cmd;
+    return resultOpt.data;
+}
+
+int CplxQuerier::regsToIndex(const std::vector<unsigned>& inputBWList, CplxType type) {
+
+    assert(inputBWList.size() == 9);
+    std::vector<unsigned> regs;
+    regs.push_back(inputBWList[CplxQuerier::A1]);
+    regs.push_back(inputBWList[CplxQuerier::A2]);
+    regs.push_back(inputBWList[CplxQuerier::B1]);
+    regs.push_back(inputBWList[CplxQuerier::B2]);
+    regs.push_back(inputBWList[CplxQuerier::AD]);
+    regs.push_back(inputBWList[CplxQuerier::M]);
+    regs.push_back(inputBWList[CplxQuerier::P]);
+
+    unsigned regNum = 0;
+    for (auto r: regs) {
+        regNum <<= 1;
+        if (r != 0) {
+            regNum |= 1;
+        }
+    }
+
+    const static std::map<unsigned, unsigned> mulRegsToIndex = {
+        {0b0000000, 0},
+        {0b0000010, 1},
+        {0b0000001, 2},
+        {0b0000011, 3},
+
+        {0b1010000, 4},
+        {0b1010010, 5},
+        {0b1010001, 6},
+        {0b1010011, 7},
+
+        {0b1111100, 8},
+        {0b1111110, 9},
+        {0b1111101, 10},
+        {0b1111111, 11},
+        
+        {0b0001000, 0},
+        {0b0001010, 1},
+        {0b0001001, 2},
+        {0b0001011, 3},
+
+        {0b1011000, 4},
+        {0b1011010, 5},
+        {0b1011001, 6},
+        {0b1011011, 7}        
+    };
+
+    const static std::map<unsigned, unsigned> mulAddRegsToIndex = {
+        {0b0000000, 0},
+        {0b0000010, 1},
+        {0b0000001, 2},
+        {0b0000011, 3},
+
+        {0b1010000, 4},
+        {0b1010010, 5},
+        {0b1010001, 6},
+        {0b1010011, 7},
+
+        {0b1111100, 8},
+        {0b1111110, 9},
+        {0b1111101, 10},
+        {0b1111111, 11},
+        
+        {0b0001000, 0},
+        {0b0001010, 1},
+        {0b0001001, 2},
+        {0b0001011, 3},
+
+        {0b1011000, 4},
+        {0b1011010, 5},
+        {0b1011001, 6},
+        {0b1011011, 7}
+    };
+
+    const static std::map<unsigned, unsigned> mulAccRegsToIndex = {
+        {0b0000001, 0},
+        {0b0000011, 1},
+
+        {0b1010001, 2},
+        {0b1010011, 3},
+
+        {0b1111101, 4},
+        {0b1111111, 5},
+        
+        {0b0001001, 0},
+        {0b0001011, 1},
+
+        {0b1011001, 2},
+        {0b1011011, 3}
+    };
+
+    int retIndex = 0;
+    if (type == CplxType::Mul) {
+        assert(mulRegsToIndex.count(regNum));
+        retIndex = mulRegsToIndex.at(regNum);
+    } else if (type == CplxType::MulAdd) {
+        assert(mulAddRegsToIndex.count(regNum));
+        retIndex = mulAddRegsToIndex.at(regNum);
+    } else if (type == CplxType::MulAcc) {
+        assert(mulAccRegsToIndex.count(regNum));
+        retIndex = mulAccRegsToIndex.at(regNum);
+    } else {
+        assert(false && "unsupported type");
+    }
+
+    return retIndex;
+}
+
+std::vector<double> CplxQuerier::selectDelayList(const std::string& nameDb, 
+                            int latency, int bits) {
+
+  std::stringstream ss;
+  ss << "select " << getDelayColumn() << " from "
+     << GetTargetPlatform()->getFactory().getLibraryName() << "_"
+     << getTableName() << " where " << getKeyType() << " = " << bits
+     << " and LATENCY = " << latency << " and CORE_NAME = '" << nameDb
+     << "' COLLATE NOCASE ";
+
+  std::string cmd = ss.str();
+  auto &s = Selector::getSelector();
+  auto values = s.selectDoubleList(cmd.c_str());
+  return values;
+}
+
+std::vector<double> CplxQuerier::queryDelayList(CoreInst* core) {
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    const auto regsVec = fu->getInputBWList();
+    auto nameDb = getNameInDB(core);
+
+    int index = 0;
+    if (nameDb == "CMult_Intrinsic") {
+        index = regsToIndex(regsVec, CplxType::Mul);
+    } else if (nameDb == "CMultAdd_Intrinsic") {
+        index = regsToIndex(regsVec, CplxType::MulAdd);
+    } else if (nameDb == "CMultAcc_Intrinsic") {
+        index = regsToIndex(regsVec, CplxType::MulAcc);
+    } else {
+        assert(false && "unsupported core");
+    }
+    return selectDelayList(nameDb, index, 18);
+}
+
+ResourceData CplxQuerier::queryResource(CoreInst* core) {
+    ResourceData resource;
+    resource.Dsp = 2;
+    return resource;
+}
+
+int CplxQuerier::queryLatency(CoreInst* core) {
+    auto* fu = static_cast<FuncUnitInst*>(core);
+    std::vector<unsigned> latRegs = {B1, B2, AD, M, P};
+    const auto regsVec = fu->getInputBWList();
+    int latency = 0;
+    for (auto r: latRegs) {
+        latency += regsVec[r];
+    }
+    return latency;
+}
+
+int DividerLogiCoreQuerier::getKey(CoreInst* core) {
+    auto operands = CoreQuerier::getFuncUnitOperands(core);
+    // 0: diveidend, 1: divisor, 2: output
+    return operands[0];
 }
 
 }   // platform namespace

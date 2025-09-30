@@ -1,3 +1,5 @@
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //===- TreeHeightReduction.cpp - Minimize the height of an operation tree -===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -53,6 +55,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/TreeHeightReduction.h"
+#include <set>
 #include <queue>
 #include <utility>
 #include <vector>
@@ -82,6 +85,31 @@ static cl::opt<unsigned> MinLeaves(
     cl::init(4));
 
 namespace {
+
+unsigned getRankFromValue(Value *V) {
+  Type *type = V->getType();
+  if (!isa<IntegerType>(type)) {
+    unsigned BitWidth = type->getPrimitiveSizeInBits();
+    return isa<LoadInst>(V) ? BitWidth + 1 : BitWidth;
+  }
+
+  unsigned Rank = 0;
+  // Integer type 
+  if (isa<SExtInst>(V) || isa<ZExtInst>(V)) {
+    const Instruction *inst = cast<Instruction>(V);
+    Type *InType = inst->getOperand(0)->getType();
+    IntegerType *intType = dyn_cast<IntegerType>(InType);
+    Rank = intType->getBitWidth();
+  } else if (const ConstantInt *C = dyn_cast<ConstantInt>(V)) {
+    Rank = C->getValue().getMinSignedBits();
+  } else if (isa<LoadInst>(V)) {
+    Rank = type->getIntegerBitWidth() + 1;
+  } else {
+    Rank = type->getIntegerBitWidth();
+  }
+  return Rank;
+}
+
 class Node {
 public:
   explicit Node(Value *V)
@@ -90,6 +118,7 @@ public:
     if (Instruction *I = dyn_cast<Instruction>(V)) {
       Inst = I;
     }
+    Rank = getRankFromValue(V);
   }
 
   /// Set the parent node of this node.
@@ -134,6 +163,9 @@ public:
   /// Get the total cost of this node.
   int getTotalCost() const { return TotalCost; }
 
+  /// Get the rank of this node.
+  unsigned getRank() const { return Rank; }
+
   /// Return true if this node is a branch (including a root).
   bool isBranch() const { return Left != nullptr && Right != nullptr; }
 
@@ -146,17 +178,23 @@ public:
   /// Return true if this node is considered as a leaf node.
   /// Tree height reduction can be applied only to nodes whose operation codes
   /// are same. In addition, IR flags like 'nuw' must be same to preserve them.
+  /// We can think of these Nodes with the same operation codes as a subtree.
   /// So it is necessary to consider a node whose operation code or IR flags
-  /// are different from its parent's ones as a leaf node.
-  bool isConsideredAsLeaf() const {
+  /// are different from the subtree root's ones as a leaf node.
+  bool isConsideredAsLeaf(const Node* SubTreeRoot) const {
     if (isLeaf())
       return true;
     if (isRoot())
       return false;
-    if (getOrgInst()->getOpcode() != getParent()->getOrgInst()->getOpcode() ||
-        !getOrgInst()->hasSameSubclassOptionalData(getParent()->getOrgInst()))
+    if (getOrgInst()->getOpcode() != SubTreeRoot->getOrgInst()->getOpcode() ||
+        !getOrgInst()->hasSameSubclassOptionalData(SubTreeRoot->getOrgInst()))
       return true;
     return false;
+  }
+
+  bool isSameOpAndOpt(const Node *Other) const {
+    return getOrgInst()->getOpcode() == Other->getOrgInst()->getOpcode() &&
+           getOrgInst()->hasSameSubclassOptionalData(Other->getOrgInst());
   }
 
   /// Update tree's latency under this node.
@@ -185,6 +223,8 @@ private:
   int Latency;
   /// Total cost of nodes under this node.
   int TotalCost;
+  /// Rank of this node.
+  unsigned Rank; 
 };
 
 class TreeHeightReduction {
@@ -512,6 +552,10 @@ Node *TreeHeightReduction::applyTreeHeightReduction(Node *N, bool isLeft) {
   // Save original parent information.
   Node *Parent = N->getParent();
 
+  if ((Parent && N->isSameOpAndOpt(Parent))) {
+    return N;
+  }
+
   std::vector<Node *> Leaves;
   // 'ReusableBranches' holds branch nodes which are reused when updating
   // parent and child node's relationship in constructOptimizedSubtree().
@@ -542,7 +586,7 @@ void TreeHeightReduction::collectLeavesAndReusableBranches(
   //       different from that function because this is BFS with a condition.
   for (unsigned i = 0; i < Worklist.size(); ++i) {
     Node *CurNode = Worklist[i];
-    if (CurNode->isConsideredAsLeaf()) {
+    if (CurNode->isConsideredAsLeaf(N)) {
       Leaves.push_back(CurNode);
     } else {
       ReusableBranches.push_back(CurNode);
@@ -560,7 +604,7 @@ Node *TreeHeightReduction::constructOptimizedSubtree(
         return LHS->getLatency() < RHS->getLatency();
       if (LHS->getTotalCost() != RHS->getTotalCost())
         return LHS->getTotalCost() < RHS->getTotalCost();
-      return false;
+      return LHS->getRank() < RHS->getRank();
     });
     DEBUG(printLeaves(dbgs(), Leaves, true));
 
@@ -698,51 +742,48 @@ Value *TreeHeightReduction::createInst(IRBuilder<> &Builder, Node *N,
   return V;
 }
 
-bool TreeHeightReductionPass::runImpl(Loop &L,  
+bool TreeHeightReductionPass::runImpl(Function &F,  
                               TargetTransformInfo *TTI) {
- // Tree height reduction is applied only to inner-most loops.
-  if (!L.getSubLoops().empty())
-    return false;
-
-  OptimizationRemarkEmitter ORE(L.getHeader()->getParent());
+  OptimizationRemarkEmitter ORE(&F);
   bool Changed = false;
-  auto &LoopBlocks = L.getBlocksVector();
 
   if (EnableIntTHR) {
     auto THR = TreeHeightReduction(TreeHeightReduction::InstTy::INTEGER,
                                    TTI, &ORE);
-    for (auto *BB : LoopBlocks)
-      Changed |= THR.runOnBasicBlock(BB);
+    for (auto &BB : F)
+      Changed |= THR.runOnBasicBlock(&BB);
   }
 
   if (EnableFpTHR) {
     auto THR = TreeHeightReduction(TreeHeightReduction::InstTy::FLOATING_POINT,
                                    TTI, &ORE);
-    for (auto *BB : LoopBlocks)
-      Changed |= THR.runOnBasicBlock(BB);
+    for (auto &BB : F)
+      Changed |= THR.runOnBasicBlock(&BB);
   }
   return Changed;
 }
 
 
-PreservedAnalyses TreeHeightReductionPass::run(Loop &L, LoopAnalysisManager &AM,
-                                               LoopStandardAnalysisResults &AR,
-                                               LPMUpdater &U) {
-  if (!runImpl(L, &AR.TTI)) 
+PreservedAnalyses TreeHeightReductionPass::run(Function &F, FunctionAnalysisManager &FAM) {
+  if (!runImpl(F, &FAM.getResult<TargetIRAnalysis>(F)))
     return PreservedAnalyses::all();
-  return getLoopPassPreservedAnalyses();
+
+  PreservedAnalyses PA;
+  PA.preserveSet<CFGAnalyses>();
+  return PA;
 }
 
-struct llvm::thr::LegacyTreeHeightReductionPass : public LoopPass {
+struct llvm::thr::LegacyTreeHeightReductionPass : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
-  LegacyTreeHeightReductionPass() : LoopPass(ID) {
+  LegacyTreeHeightReductionPass() : FunctionPass(ID) {
     initializeLegacyTreeHeightReductionPassPass(*PassRegistry::getPassRegistry());
   }
 
-  bool runOnLoop(Loop *L, LPPassManager &LPM) override {
-    return THRPass.runImpl(*L, 
-                          &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(
-                              *L->getHeader()->getParent()));
+  bool runOnFunction(Function &F) override {
+    if (skipFunction(F))
+      return false;
+    return THRPass.runImpl(
+        F, &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F));
   }
 
   /// This transformation requires natural loop information & requires that
@@ -751,12 +792,6 @@ struct llvm::thr::LegacyTreeHeightReductionPass : public LoopPass {
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     AU.addRequired<TargetTransformInfoWrapperPass>();
-  }
-
-  using llvm::Pass::doFinalization;
-
-  bool doFinalization() override {
-    return false;
   }
 
 private:

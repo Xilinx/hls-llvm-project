@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -72,9 +75,9 @@ INITIALIZE_PASS_END(MemorySSAPrinterLegacyPass, "print-memoryssa",
                     "Memory SSA Printer", false, false)
 
 static cl::opt<unsigned> MaxCheckLimit(
-    "memssa-check-limit", cl::Hidden, cl::init(100),
+    "memssa-check-limit", cl::Hidden, cl::init(20),
     cl::desc("The maximum number of stores/phis MemorySSA"
-             "will consider trying to walk past (default = 100)"));
+             "will consider trying to walk past (default = 20)"));
 
 static cl::opt<bool>
     VerifyMemorySSA("verify-memoryssa", cl::init(false), cl::Hidden,

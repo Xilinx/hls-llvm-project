@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -58,6 +58,8 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/XILINXFPGAIntrinsicInst.h"
+#include "llvm/IR/XILINXHLSIRBuilder.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -4966,6 +4968,47 @@ void CodeGenModule::genTopArgAnnotation()
       else { 
         GenerateStreamAnnotationIntrinsic(builder, Parm, D, D->getType(), fields, false);
         GenerateDirectIOAnnotationIntrinsic(builder, Parm, D, D->getType(), fields, false);
+      }
+    }
+  }
+}
+
+void CodeGenModule::genImplicitInterfaceInst()
+{
+  if (getLangOpts().HLSExt && HLSTop) { 
+    auto &Args = HLSTop->topArgs;
+
+    llvm::HLSIRBuilder IB(&*HLSTop->func->getEntryBlock().getFirstInsertionPt());
+    for( int i = 0; i < Args.size(); i++) { 
+      const VarDecl *ParmD = Args[i];
+      assert(isa<ParmVarDecl>(ParmD) && "unexpected, the implicit 'this' parameter must nost be top argument"); 
+      const ParmVarDecl *D = cast<ParmVarDecl>(ParmD); 
+
+      llvm::Argument *Parm = HLSTop->func->getArg(i);
+
+      if (D->getType()->isReferenceType() || D->getType()->isPointerType()) { 
+        auto Ty = D->getType()->getPointeeType().getCanonicalType();
+
+        if (Ty->isClassType()) {
+          CXXRecordDecl *RD = Ty->getAsCXXRecordDecl()->getCanonicalDecl();
+          std::string &&name = RD->getQualifiedNameAsString();
+          if (name == "hls::directio") {
+            auto TSD = cast<ClassTemplateSpecializationDecl>(RD);
+            llvm::APSInt Mode = TSD->getTemplateArgs()[1].getAsIntegral();
+            if (Mode == 0) {
+              cast<llvm::ScalarInterfaceInst>(IB.CreateApHsPragmaInst(Parm, false, ""))->setClassDirectIO();
+            }
+            else if (Mode == 1) {
+              cast<llvm::ScalarInterfaceInst>(IB.CreateApVldPragmaInst(Parm, false, ""))->setClassDirectIO();
+            }
+            else if (Mode == 2) {
+              cast<llvm::ScalarInterfaceInst>(IB.CreateApAckPragmaInst(Parm, false, ""))->setClassDirectIO();
+            }
+            else if (Mode == 3) {
+              cast<llvm::ScalarInterfaceInst>(IB.CreateApNonePragmaInst(Parm, false, ""))->setClassDirectIO();
+            }
+          }
+        }
       }
     }
   }

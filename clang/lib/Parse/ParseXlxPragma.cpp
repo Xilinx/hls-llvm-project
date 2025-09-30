@@ -1,5 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -390,8 +390,6 @@ class XlxPragmaArgParser {
   StringMap<ArgsUnion> ArgMap;
   StringMap<IdentifierLoc *> PresentedID;
 
-  SourceLocation PragmaLoc;
-  SourceRange PragmaRange;
 
   VarDecl *parseSubject();
 
@@ -399,6 +397,8 @@ public:
   Parser &P;
   Preprocessor &PP;
   IdentifierInfo *pragmaContext; 
+  SourceLocation PragmaLoc;
+  SourceRange PragmaRange;
 
   XlxPragmaArgParser(
       Parser &P, Scope *CurScope, SubjectListTy &Subjects, 
@@ -1686,6 +1686,10 @@ static bool HandleResetPragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 static bool HandleFunctionAllocationPragma(IdentifierLoc *allocType, 
                                            XlxPragmaArgParser &PAP
                                            ) {
+  if (!PAP.lookup("instances")) { 
+    PAP.P.Diag(PAP.PragmaLoc, diag::warn_pragma_named_argument_missing) << "instances";
+    return false; 
+  }
 
   Expr *func = PAP["instances"].get<Expr *>();
   ArgsUnion Args[] = {func, PAP["limit"]};
@@ -1698,6 +1702,10 @@ static bool HandleOperationAllocationPragma(IdentifierLoc *allocType,
                                             XlxPragmaArgParser &PAP) {
 
 
+  if (!PAP.lookup("instances")) { 
+    PAP.P.Diag(PAP.PragmaLoc, diag::warn_pragma_named_argument_missing) << "instances";
+    return false; 
+  }
   ArgsUnion Args[] = {allocType, PAP["instances"], PAP["limit"]};
   PAP.addDependenceAttribute("fpga_resource_limit_hint", Args);
   return true;
@@ -2248,7 +2256,8 @@ static bool HandleArrayReshapePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
   } else {
     // expect factor option
     if (!PAP.lookup("factor")) {
-      // TODO, add error out message
+      PAP.P.Diag(PragmaLoc, diag::warn_pragma_named_argument_missing)
+          << "factor"; 
       return false;
     }
 
@@ -3366,17 +3375,24 @@ static bool HandleXlxStablePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
 #ifdef TABLEGEN_HLS
       PRAGMA_HLS_STABLE, 
 #else 
-      {reqVarRefExpr("variable")},
+      {reqVarRefExpr("variable"),
+       presentId("off", 1)
+      },
 #endif
                          PragmaLoc);
   if (!PAP.parse())
     return false;
+  IdentifierLoc * off_opt = nullptr; 
+
   Expr* var_expr = PAP["variable"].get<Expr*>();
+  if (ArgsUnion off_arg = PAP.lookup("off")){ 
+    off_opt = off_arg.get<IdentifierLoc*>();
+  }
   // parse "expr1, expr2, expr3"
   SmallVector<Expr *, 4> subExprs;
   getSubExprOfVariable(subExprs, var_expr, PAP.P);
   for (auto var: subExprs) { 
-    ArgsUnion args[] = {var};
+    ArgsUnion args[] = {var, off_opt};
     PAP.addDependenceAttribute("xlx_stable", args);
   }
   return true;
@@ -3786,8 +3802,8 @@ static bool HandleCachePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
       PRAGMA_HLS_CACHE, 
 #else 
       {reqVarRefExpr("port"),
-       optICEExpr("lines"), optICEExpr("depth"), /*optICEExpr("ways"),*/
-       /*optICEExpr("users"),*/
+       optICEExpr("lines"), optICEExpr("depth"), optICEExpr("ports"),
+       optICEExpr("l2_lines"),
      //optEnum("burst", {"off", "on"/*, "adaptive"*/}),
        optEnum("write_mode", {"write_back", "write_through"})},
 #endif
@@ -3817,8 +3833,7 @@ static bool HandleCachePragma(XlxPragmaArgParser &PAP, Scope *CurScope,
     getSubExprOfVariable(subExprs, var_expr, PAP.P);
     for (auto port_ref : subExprs) {
       ArgsUnion args[] = { port_ref, PAP.lookup("lines"), PAP.lookup("depth"),
-                           /*PAP.lookup("ways"), PAP.lookup("users"),*/
-                           PAP.createIntegerLiteral(1), PAP.createIntegerLiteral(1),
+                           PAP.lookup("ports"), PAP.lookup("l2_lines"),
                           /*burst,*/
                           PAP.createIdentLoc("off"),
                           write_mode

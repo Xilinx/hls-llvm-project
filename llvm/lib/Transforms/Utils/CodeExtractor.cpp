@@ -4,8 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// (C) Copyright 2016-2022 Xilinx, Inc. 
-// All Rights Reserved.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -80,6 +81,8 @@ using ProfileCount = Function::ProfileCount;
 
 #define DEBUG_TYPE "code-extractor"
 
+extern cl::opt<bool> HLS;
+
 // Provide a command-line option to aggregate function arguments into a struct
 // for functions produced by the code extractor. This is useful when converting
 // extracted functions to pthread-based code, as only one argument (void*) can
@@ -91,9 +94,6 @@ AggregateArgsOpt("aggregate-extracted-args", cl::Hidden,
 /// \brief Test whether a block is valid for extraction.
 bool CodeExtractor::isBlockValidForExtraction(const BasicBlock &BB,
                                               bool AllowVarArgs) {
-  // Landing pads must be in the function where they were inserted for cleanup.
-  if (BB.isEHPad())
-    return false;
   // taking the address of a basic block moved to another function is illegal
   if (BB.hasAddressTaken())
     return false;
@@ -156,22 +156,36 @@ buildExtractionBlockSet(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
 
     if (!Result.insert(BB))
       llvm_unreachable("Repeated basic blocks in extraction input");
-    if (!CodeExtractor::isBlockValidForExtraction(*BB, AllowVarArgs)) {
-      Result.clear();
-      return Result;
-    }
   }
 
-#ifndef NDEBUG
-  for (SetVector<BasicBlock *>::iterator I = std::next(Result.begin()),
-                                         E = Result.end();
-       I != E; ++I)
-    for (pred_iterator PI = pred_begin(*I), PE = pred_end(*I);
-         PI != PE; ++PI)
-      assert(Result.count(*PI) &&
-             "No blocks in this region may have entries from outside the region"
-             " except for the first block!");
-#endif
+  DEBUG(dbgs() << "Region front block: " << Result.front()->getName()
+                    << '\n');
+
+  for (auto *BB : Result) {
+    if (!CodeExtractor::isBlockValidForExtraction(*BB, AllowVarArgs))
+      return {};
+
+    // Make sure that the first block is not a landing pad.
+    if (BB == Result.front()) {
+      if (BB->isEHPad()) {
+        DEBUG(dbgs() << "The first block cannot be an unwind block\n");
+        return {};
+      }
+      continue;
+    }
+
+    // All blocks other than the first must not have predecessors outside of
+    // the subgraph which is being extracted.
+    for (auto *PBB : predecessors(BB))
+      if (!Result.count(PBB)) {
+        DEBUG(dbgs() << "No blocks in this region may have entries from "
+                             "outside the region except for the first block!\n"
+                          << "Problematic source BB: " << BB->getName() << "\n"
+                          << "Problematic destination BB: " << PBB->getName()
+                          << "\n");
+        return {};
+      }
+  }
 
   return Result;
 }
@@ -448,6 +462,33 @@ void CodeExtractor::findAllocas(ValueSet &SinkCands, ValueSet &HoistCands,
   }
 }
 
+bool CodeExtractor::isEligible() const {
+  if (Blocks.empty())
+    return false;
+  BasicBlock *Header = *Blocks.begin();
+  Function *F = Header->getParent();
+
+  // For functions with varargs, check that varargs handling is only done in the
+  // outlined function, i.e vastart and vaend are only used in outlined blocks.
+  if (AllowVarArgs && F->getFunctionType()->isVarArg()) {
+    auto containsVarArgIntrinsic = [](const Instruction &I) {
+      if (const CallInst *CI = dyn_cast<CallInst>(&I))
+        if (const Function *Callee = CI->getCalledFunction())
+          return Callee->getIntrinsicID() == Intrinsic::vastart ||
+                 Callee->getIntrinsicID() == Intrinsic::vaend;
+      return false;
+    };
+
+    for (auto &BB : *F) {
+      if (Blocks.count(&BB))
+        continue;
+      if (llvm::any_of(BB, containsVarArgIntrinsic))
+        return false;
+    }
+  }
+  return true;
+}
+
 void CodeExtractor::findInputsOutputs(ValueSet &Inputs, ValueSet &Outputs,
                                       const ValueSet &SinkCands) const {
   for (BasicBlock *BB : Blocks) {
@@ -470,10 +511,10 @@ void CodeExtractor::findInputsOutputs(ValueSet &Inputs, ValueSet &Outputs,
   }
 }
 
-/// severSplitPHINodes - If a PHI node has multiple inputs from outside of the
-/// region, we need to split the entry block of the region so that the PHI node
-/// is easier to deal with.
-void CodeExtractor::severSplitPHINodes(BasicBlock *&Header) {
+/// severSplitPHINodesOfEntry - If a PHI node has multiple inputs from outside
+/// of the region, we need to split the entry block of the region so that the
+/// PHI node is easier to deal with.
+void CodeExtractor::severSplitPHINodesOfEntry(BasicBlock *&Header) {
   unsigned NumPredsFromRegion = 0;
   unsigned NumPredsOutsideRegion = 0;
 
@@ -541,6 +582,56 @@ void CodeExtractor::severSplitPHINodes(BasicBlock *&Header) {
           --i;
         }
       }
+    }
+  }
+}
+
+/// severSplitPHINodesOfExits - if PHI nodes in exit blocks have inputs from
+/// outlined region, we split these PHIs on two: one with inputs from region
+/// and other with remaining incoming blocks; then first PHIs are placed in
+/// outlined region.
+void CodeExtractor::severSplitPHINodesOfExits(
+    const SmallPtrSetImpl<BasicBlock *> &Exits) {
+  for (BasicBlock *ExitBB : Exits) {
+    BasicBlock *NewBB = nullptr;
+
+    for (PHINode &PN : ExitBB->phis()) {
+      // Find all incoming values from the outlining region.
+      SmallVector<unsigned, 2> IncomingVals;
+      for (unsigned i = 0; i < PN.getNumIncomingValues(); ++i)
+        if (Blocks.count(PN.getIncomingBlock(i)))
+          IncomingVals.push_back(i);
+
+      // Do not process PHI if there is one (or fewer) predecessor from region.
+      // If PHI has exactly one predecessor from region, only this one incoming
+      // will be replaced on codeRepl block, so it should be safe to skip PHI.
+      if (IncomingVals.size() <= 1)
+        continue;
+
+      // Create block for new PHIs and add it to the list of outlined if it
+      // wasn't done before.
+      if (!NewBB) {
+        NewBB = BasicBlock::Create(ExitBB->getContext(),
+                                   ExitBB->getName() + ".split",
+                                   ExitBB->getParent(), ExitBB);
+        SmallVector<BasicBlock *, 4> Preds(pred_begin(ExitBB),
+                                           pred_end(ExitBB));
+        for (BasicBlock *PredBB : Preds)
+          if (Blocks.count(PredBB))
+            PredBB->getTerminator()->replaceUsesOfWith(ExitBB, NewBB);
+        BranchInst::Create(ExitBB, NewBB);
+        Blocks.insert(NewBB);
+      }
+
+      // Split this PHI.
+      PHINode *NewPN =
+          PHINode::Create(PN.getType(), IncomingVals.size(),
+                          PN.getName() + ".ce", NewBB->getFirstNonPHI());
+      for (unsigned i : IncomingVals)
+        NewPN->addIncoming(PN.getIncomingValue(i), PN.getIncomingBlock(i));
+      for (unsigned i : reverse(IncomingVals))
+        PN.removeIncomingValue(i, false);
+      PN.addIncoming(NewPN, NewBB);
     }
   }
 }
@@ -845,7 +936,6 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
     std::advance(OutputArgBegin, inputs.size());
 
   // Reload the outputs passed in by reference.
-  Function::arg_iterator OAI = OutputArgBegin;
   for (unsigned i = 0, e = outputs.size(); i != e; ++i) {
     Value *Output = nullptr;
     if (AggregateArgs) {
@@ -867,34 +957,6 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
       Instruction *inst = cast<Instruction>(Users[u]);
       if (!Blocks.count(inst->getParent()))
         inst->replaceUsesOfWith(outputs[i], load);
-    }
-
-    // Store to argument right after the definition of output value.
-    auto *OutI = dyn_cast<Instruction>(outputs[i]);
-    if (!OutI)
-      continue;
-    // Find proper insertion point.
-    Instruction *InsertPt = OutI->getNextNode();
-    // Let's assume that there is no other guy interleave non-PHI in PHIs.
-    if (isa<PHINode>(InsertPt))
-      InsertPt = InsertPt->getParent()->getFirstNonPHI();
-
-    assert(OAI != newFunction->arg_end() &&
-           "Number of output arguments should match "
-           "the amount of defined values");
-    if (AggregateArgs) {
-      Value *Idx[2];
-      Idx[0] = Constant::getNullValue(Type::getInt32Ty(Context));
-      Idx[1] = ConstantInt::get(Type::getInt32Ty(Context), FirstOut + i);
-      GetElementPtrInst *GEP = GetElementPtrInst::Create(
-          StructArgTy, &*OAI, Idx, "gep_" + outputs[i]->getName(), InsertPt);
-      new StoreInst(outputs[i], GEP, InsertPt);
-      // Since there should be only one struct argument aggregating
-      // all the output values, we shouldn't increment OAI, which always
-      // points to the struct argument, in this case.
-    } else {
-      new StoreInst(outputs[i], &*OAI, InsertPt);
-      ++OAI;
     }
   }
 
@@ -950,6 +1012,51 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
         TI->setSuccessor(i, NewTarget);
       }
   }
+
+  // Store the arguments right after the definition of output value.
+  // This should be proceeded after creating exit stubs to be ensure that invoke
+  // result restore will be placed in the outlined function.
+  Function::arg_iterator OAI = OutputArgBegin;
+  for (unsigned i = 0, e = outputs.size(); i != e; ++i) {
+    auto *OutI = dyn_cast<Instruction>(outputs[i]);
+    if (!OutI)
+      continue;
+
+    // Find proper insertion point.
+    BasicBlock::iterator InsertPt;
+    // In case OutI is an invoke, we insert the store at the beginning in the
+    // 'normal destination' BB. Otherwise we insert the store right after OutI.
+    if (auto *InvokeI = dyn_cast<InvokeInst>(OutI))
+      InsertPt = InvokeI->getNormalDest()->getFirstInsertionPt();
+    else if (auto *Phi = dyn_cast<PHINode>(OutI))
+      InsertPt = Phi->getParent()->getFirstInsertionPt();
+    else
+      InsertPt = std::next(OutI->getIterator());
+
+    Instruction *InsertBefore = &*InsertPt;
+    assert((InsertBefore->getFunction() == newFunction ||
+            Blocks.count(InsertBefore->getParent())) &&
+           "InsertPt should be in new function");
+    assert(OAI != newFunction->arg_end() &&
+           "Number of output arguments should match "
+           "the amount of defined values");
+    if (AggregateArgs) {
+      Value *Idx[2];
+      Idx[0] = Constant::getNullValue(Type::getInt32Ty(Context));
+      Idx[1] = ConstantInt::get(Type::getInt32Ty(Context), FirstOut + i);
+      GetElementPtrInst *GEP = GetElementPtrInst::Create(
+          StructArgTy, &*OAI, Idx, "gep_" + outputs[i]->getName(),
+          InsertBefore);
+      new StoreInst(outputs[i], GEP, InsertBefore);
+      // Since there should be only one struct argument aggregating
+      // all the output values, we shouldn't increment OAI, which always
+      // points to the struct argument, in this case.
+    } else {
+      new StoreInst(outputs[i], &*OAI, InsertBefore);
+      ++OAI;
+    }
+  }
+
 
   // Now that we've done the deed, simplify the switch instruction.
   Type *OldFnRetTy = TheSwitch->getParent()->getParent()->getReturnType();
@@ -1008,13 +1115,6 @@ void CodeExtractor::moveCodeToFunction(Function *newFunction) {
 
     // Insert this basic block into the new function
     newBlocks.push_back(Block);
-
-    // Remove @llvm.assume calls that were moved to the new function from the
-    // old function's assumption cache.
-    if (AC)
-      for (auto &I : *Block)
-        if (match(&I, m_Intrinsic<Intrinsic::assume>())) 
-          AC->unregisterAssumption(cast<CallInst>(&I));
   }
 }
 
@@ -1163,21 +1263,318 @@ static void eraseDebugIntrinsicsWithNonLocalRefs(Function &F) {
    for (Instruction &I : instructions(NewFunc)) {
      if (const DebugLoc &DL = I.getDebugLoc())
        I.setDebugLoc(DILocation::get(Ctx, DL.getLine(), DL.getCol(), NewSP));
-  
+
      // Loop info metadata may contain line locations. Fix them up.
      auto updateLoopInfoLoc = [&Ctx, NewSP](Metadata *MD) -> Metadata * {
        if (auto *Loc = dyn_cast_or_null<DILocation>(MD))
          return DILocation::get(Ctx, Loc->getLine(), Loc->getColumn(), NewSP,
-                                nullptr);
+             nullptr);
        return MD;
      };
      updateLoopMetadataDebugLocations(I, updateLoopInfoLoc);
+
+     // Cast instruction to ScopeEntry and update the pragma location
+     if (auto *EI = dyn_cast<ScopeEntry>(&I)) {
+       if (auto Di = EI->getPragmaLoc()) {
+         DebugLoc newLoc(Di);  
+         newLoc = DebugLoc::get(newLoc.getLine(), newLoc.getCol(), NewSP);
+         EI->setPragmaLoc(newLoc);
+       }
+     }
    }
    if (!TheCall.getDebugLoc())
      TheCall.setDebugLoc(DILocation::get(Ctx, 0, 0, OldSP));
   
    eraseDebugIntrinsicsWithNonLocalRefs(NewFunc);
 } 
+
+bool CodeExtractor::sinkGEPIntoLifeScope() 
+{
+  Function *Func = (*Blocks.begin())->getParent();
+
+  SmallVector<GetElementPtrInst*, 4> gepSinkCands; 
+  for (BasicBlock &BB : *Func) {
+    for(Instruction &Inst :BB) { 
+      if (!isa<AllocaInst>(Inst)) { 
+        continue; 
+      }
+      //check AllocaInst uses, find GEP users that is out of region
+      bool ok = true; 
+      for( User *user: Inst.users()) { 
+        if (isa<GetElementPtrInst>(user)){ 
+          if (definedInRegion(Blocks, user)){ 
+            continue; 
+          }
+          //check GEP not in the region ,  if there is no constant indices, we can not sink the GEP into region
+          if (!cast<GetElementPtrInst>(user)->hasAllConstantIndices()) { 
+            ok = false; 
+            break;
+          }
+
+          //check GEP which is out of region, if the users of 'GEP ' is out of region
+          //we can not sink the GEP  into region 
+          for( User *next_user: user->users()){ 
+            if (!definedInRegion(Blocks, next_user)){ 
+              ok =  false; 
+              break; 
+            }
+          }
+          if (!ok)
+            break; 
+        }
+        else if (isa<BitCastOperator>(user)){ 
+          //check bitcast user is in the region 
+          for(User *next_user: user->users()){ 
+            if (!definedInRegion(Blocks, next_user)){ 
+              //if user of bitcast is out of region  
+              ok = false; 
+              break; 
+            }
+          }
+          if(!ok)
+            break; 
+        }
+        else { 
+          //check current user is in region 
+          if (!definedInRegion(Blocks, user)){ 
+            ok = false; 
+            break; 
+          }
+        }
+      }
+      if (!ok)
+        continue; 
+      //ok, it is safe to sink GEP into region 
+      for( User* user: Inst.users()){ 
+        if (user->getNumUses() == 0)
+          continue; 
+        if (isa<GetElementPtrInst>(user)){ 
+          if ( !definedInRegion(Blocks, user)){ 
+            gepSinkCands.push_back(cast<GetElementPtrInst>(user)); 
+          }
+        }
+      }
+    }
+  }
+
+  for( auto * gep: gepSinkCands){ 
+    gep->removeFromParent(); 
+    Instruction* pt = Blocks.front()->getFirstNonPHIOrDbgOrLifetime(); 
+    gep->insertBefore(pt);
+  }
+  return true; 
+}
+
+/**
+ * @brief Determines if an instruction can be localized.
+ *
+ * This function checks the opcode of the given instruction to determine if it
+ * can be localized. It returns true for a specific set of opcodes that are
+ * considered localizable, such as logical operations (And, Or, Xor), type
+ * conversions (Trunc, ZExt, SExt, etc.), and comparison operations (ICmp,
+ * FCmp).
+ *
+ * @param I A pointer to the instruction to be checked.
+ * @return true if the instruction can be localized, false otherwise.
+ */
+static bool canBeLocalized(const Instruction *I) {
+  switch (I->getOpcode()) {
+  case Instruction::And:
+  case Instruction::Or:
+  case Instruction::Xor:
+  case Instruction::Trunc:
+  case Instruction::ZExt:
+  case Instruction::SExt:
+  case Instruction::FPToUI:
+  case Instruction::FPToSI:
+  case Instruction::UIToFP:
+  case Instruction::SIToFP:
+  case Instruction::FPTrunc:
+  case Instruction::FPExt:
+  case Instruction::PtrToInt:
+  case Instruction::IntToPtr:
+  case Instruction::BitCast:
+  case Instruction::ICmp:
+    return true;
+
+  default:
+    break;
+  }
+
+  return false;
+}
+
+/**
+ * @brief Localizes predicates in the outlined region for HLS (High-Level Synthesis).
+ * 
+ * This function collects all predicates (conditions) within the outlined region 
+ * and localizes them by moving or cloning the instructions as necessary. 
+ * It ensures that the predicates are only used within the outlined region.
+ * 
+ * @param LocalizedInst A vector to store the localized instructions.
+ * 
+ * The function performs the following steps:
+ * 1. Collects all predicates in the outlined region.
+ * 2. Identifies instructions to be localized.
+ * 3. Performs a topological sort on the instructions to maintain dependencies.
+ * 4. Localizes the instructions by either moving or cloning them.
+ * 5. Reverts any changes to the terminal instruction if it was modified.
+ */
+void CodeExtractor::localizePredicates(
+    std::vector<Instruction *> &LocalizedInst) {
+  if (!HLS)
+    return;
+
+  SmallVector<Value *, 16> WorkList;
+  auto AddToWorkList = [&WorkList, this](Value *Cond) {
+    WorkList.push_back(Cond);
+  };
+
+  /// collect all predicates in outlined region
+  for (auto BB : Blocks) {
+    for (auto &I : *BB) {
+      if (auto BI = dyn_cast<BranchInst>(&I)) {
+        if (BI->isConditional())
+          AddToWorkList(BI->getCondition());
+      } else if (auto SelI = dyn_cast<SelectInst>(&I))
+        AddToWorkList(SelI->getCondition());
+      else if (auto SI = dyn_cast<SwitchInst>(&I))
+        AddToWorkList(SI->getCondition());
+      else if (auto Mux = dyn_cast<FPGASparseMuxInst>(&I))
+        AddToWorkList(Mux->getCondition());
+    }
+  }
+
+  /// collect the instructions that will be localized
+  SmallPtrSet<Instruction *, 16> Visited;
+  SetVector<Instruction *> ToBeLocalizedInsts;
+  while (!WorkList.empty()) {
+    auto Inst = dyn_cast<Instruction>(WorkList.pop_back_val());
+    if (!Inst)
+      continue;
+
+    /// already visited before
+    if (!Visited.insert(Inst).second)
+      continue;
+
+    if (!canBeLocalized(Inst))
+      continue;
+
+    for (Value *Op : Inst->operands())
+      WorkList.push_back(Op);
+
+    if (definedInRegion(Blocks, Inst))
+      continue;
+
+    ToBeLocalizedInsts.insert(Inst);
+  }
+
+  auto TopologicalSort = [](SetVector<Instruction *> &Insts,
+                            std::vector<Instruction *> &TopoSortedInsts) {
+    /// 1. build DAG
+    std::map<Instruction *, std::vector<Instruction *>> DepG;
+    std::map<Instruction *, unsigned> IncomingEdgeNumMap;
+
+    for (auto I : Insts)
+      IncomingEdgeNumMap[I] = 0;
+
+    for (auto I : Insts) {
+      for (Value *Op : I->operands()) {
+        auto OpI = dyn_cast<Instruction>(Op);
+        if (!OpI)
+          continue;
+
+        if (Insts.count(OpI)) {
+          DepG[I].push_back(OpI);
+          assert(IncomingEdgeNumMap.count(OpI) && "OpI not found in map");
+          IncomingEdgeNumMap[OpI]++;
+        }
+      }
+    }
+
+    /// 2. initialize WorkList with node has no incoming edge
+    SmallVector<Instruction *, 16> WorkList;
+    for (auto I : Insts) {
+      assert(IncomingEdgeNumMap.count(I) && "Instruction not found in map");
+      if (IncomingEdgeNumMap[I] == 0)
+        WorkList.push_back(I);
+    }
+
+    /// 3. do the topological sort
+    while (!WorkList.empty()) {
+      auto Inst = WorkList.pop_back_val();
+      TopoSortedInsts.push_back(Inst);
+
+      for (Value *Op : Inst->operands()) {
+        auto OpI = dyn_cast<Instruction>(Op);
+        if (!OpI)
+          continue;
+
+        if (!Insts.count(OpI))
+          continue;
+
+        assert(IncomingEdgeNumMap.count(OpI) && IncomingEdgeNumMap[OpI] > 0 &&
+               "OpI not found in map");
+        if (--IncomingEdgeNumMap[OpI] == 0)
+          WorkList.push_back(OpI);
+      }
+    }
+  };
+
+  /// localize the user first
+  std::vector<Instruction *> SortedInsts;
+  TopologicalSort(ToBeLocalizedInsts, SortedInsts);
+
+  auto OnlyUsedInRegion = [this](Instruction *I) -> bool {
+    for (auto User : I->users()) {
+      auto UI = dyn_cast<Instruction>(User);
+      if (!UI)
+        continue;
+
+      if (!definedInRegion(Blocks, UI))
+        return false;
+    }
+
+    return true;
+  };
+
+  /// localize instructions in outlined region
+  Instruction *IP = Blocks.front()->getFirstNonPHI();
+  auto TI = Blocks.front()->getTerminator();
+  bool IsTerminalIP = IP == TI;
+  assert(IP && "Invalid insert point");
+
+  for (auto Inst : SortedInsts) {
+    if (OnlyUsedInRegion(Inst)) {
+      Inst->moveAfter(IP);
+      LocalizedInst.push_back(Inst);
+    } else {
+      auto NewI = Inst->clone();
+      NewI->insertAfter(IP);
+      LocalizedInst.push_back(NewI);
+      if (Inst->hasName())
+        NewI->setName(Inst->getName());
+
+      SmallVector<Use *, 8> ReplaceUses;
+      for (Use &U : Inst->uses()) {
+        if (auto UI = dyn_cast<Instruction>(U.getUser())) {
+          if (definedInRegion(Blocks, UI))
+            ReplaceUses.push_back(&U);
+        }
+      }
+
+      for (auto U : ReplaceUses)
+        U->set(NewI);
+    }
+  }
+
+  /// revert back the terminal instruction if we changed it.
+  if (IsTerminalIP) {
+    TI->removeFromParent();
+    Blocks.front()->getInstList().push_back(TI);
+  }
+  std::reverse(LocalizedInst.begin(), LocalizedInst.end());
+}
 
 Function *CodeExtractor::extractCodeRegion() {
   if (!isEligible())
@@ -1188,24 +1585,6 @@ Function *CodeExtractor::extractCodeRegion() {
   BasicBlock *header = *Blocks.begin();
   Function *oldFunction = header->getParent();
 
-  // For functions with varargs, check that varargs handling is only done in the
-  // outlined function, i.e vastart and vaend are only used in outlined blocks.
-  if (AllowVarArgs && oldFunction->getFunctionType()->isVarArg()) {
-    auto containsVarArgIntrinsic = [](Instruction &I) {
-      if (const CallInst *CI = dyn_cast<CallInst>(&I))
-        if (const Function *F = CI->getCalledFunction())
-          return F->getIntrinsicID() == Intrinsic::vastart ||
-                 F->getIntrinsicID() == Intrinsic::vaend;
-      return false;
-    };
-
-    for (auto &BB : *oldFunction) {
-      if (Blocks.count(&BB))
-        continue;
-      if (llvm::any_of(BB, containsVarArgIntrinsic))
-        return nullptr;
-    }
-  }
   ValueSet inputs, outputs, SinkingCands, HoistingCands;
   BasicBlock *CommonExit = nullptr;
 
@@ -1222,12 +1601,41 @@ Function *CodeExtractor::extractCodeRegion() {
     }
   }
 
-  // If we have to split PHI nodes or the entry block, do so now.
-  severSplitPHINodes(header);
+  if (AC) {
+    // Remove @llvm.assume calls that were moved to the new function from the
+    // old function's assumption cache.
+    for (BasicBlock *Block : Blocks)
+      for (auto &I : *Block)
+        if (match(&I, m_Intrinsic<Intrinsic::assume>()))
+          AC->unregisterAssumption(cast<CallInst>(&I));
+  }
 
   // If we have any return instructions in the region, split those blocks so
   // that the return is not in the region.
   splitReturnBlocks();
+
+  // Calculate the exit blocks for the extracted region and the total exit
+  // weights for each of those blocks.
+  DenseMap<BasicBlock *, BlockFrequency> ExitWeights;
+  SmallPtrSet<BasicBlock *, 1> ExitBlocks;
+  for (BasicBlock *Block : Blocks) {
+    for (succ_iterator SI = succ_begin(Block), SE = succ_end(Block); SI != SE;
+         ++SI) {
+      if (!Blocks.count(*SI)) {
+        // Update the branch weight for this successor.
+        if (BFI) {
+          BlockFrequency &BF = ExitWeights[*SI];
+          BF += BFI->getBlockFreq(Block) * BPI->getEdgeProbability(Block, *SI);
+        }
+        ExitBlocks.insert(*SI);
+      }
+    }
+  }
+  NumExitBlocks = ExitBlocks.size();
+
+  // If we have to split PHI nodes of the entry or exit blocks, do so now.
+  severSplitPHINodesOfEntry(header);
+  severSplitPHINodesOfExits(ExitBlocks);
 
   // This takes place of the original loop
   BasicBlock *codeReplacer = BasicBlock::Create(header->getContext(), 
@@ -1255,16 +1663,34 @@ Function *CodeExtractor::extractCodeRegion() {
   }
   newFuncRoot->getInstList().push_back(BranchI);
 
+
+  sinkGEPIntoLifeScope(); 
+  std::vector<Instruction *> LocalizedPredicates;
+  localizePredicates(LocalizedPredicates);
   findAllocas(SinkingCands, HoistingCands, CommonExit);
   assert(HoistingCands.empty() || CommonExit);
 
   // Find inputs to, outputs from the code region.
   findInputsOutputs(inputs, outputs, SinkingCands);
 
-  // Now sink all instructions which only have non-phi uses inside the region
-  for (auto *II : SinkingCands)
-    cast<Instruction>(II)->moveBefore(*newFuncRoot,
-                                      newFuncRoot->getFirstInsertionPt());
+  // Now sink all instructions which only have non-phi uses inside the region.
+  // Group the allocas at the start of the block, so that any bitcast uses of
+  // the allocas are well-defined.
+  AllocaInst *FirstSunkAlloca = nullptr;
+  for (auto *II : SinkingCands) {
+    if (auto *AI = dyn_cast<AllocaInst>(II)) {
+      AI->moveBefore(*newFuncRoot, newFuncRoot->getFirstInsertionPt());
+      if (!FirstSunkAlloca)
+        FirstSunkAlloca = AI;
+    }
+  }
+  assert((SinkingCands.empty() || FirstSunkAlloca) &&
+         "Did not expect a sink candidate without any allocas");
+  for (auto *II : SinkingCands) {
+    if (!isa<AllocaInst>(II)) {
+      cast<Instruction>(II)->moveAfter(FirstSunkAlloca);
+    }
+  }
 
   if (!HoistingCands.empty()) {
     auto *HoistToBlock = findOrCreateBlockForHoisting(CommonExit);
@@ -1273,30 +1699,15 @@ Function *CodeExtractor::extractCodeRegion() {
       cast<Instruction>(II)->moveBefore(TI);
   }
 
-  // Calculate the exit blocks for the extracted region and the total exit
-  // weights for each of those blocks.
-  DenseMap<BasicBlock *, BlockFrequency> ExitWeights;
-  SmallPtrSet<BasicBlock *, 1> ExitBlocks;
-  for (BasicBlock *Block : Blocks) {
-    for (succ_iterator SI = succ_begin(Block), SE = succ_end(Block); SI != SE;
-         ++SI) {
-      if (!Blocks.count(*SI)) {
-        // Update the branch weight for this successor.
-        if (BFI) {
-          BlockFrequency &BF = ExitWeights[*SI];
-          BF += BFI->getBlockFreq(Block) * BPI->getEdgeProbability(Block, *SI);
-        }
-        ExitBlocks.insert(*SI);
-      }
-    }
-  }
-  NumExitBlocks = ExitBlocks.size();
-
   // Construct new function based on inputs/outputs & add allocas for all defs.
   Function *newFunction = constructFunction(inputs, outputs, header,
                                             newFuncRoot,
                                             codeReplacer, oldFunction,
                                             oldFunction->getParent());
+
+  /// move the localized instruction to the entry block
+  for (auto I : LocalizedPredicates)
+    I->moveBefore(newFuncRoot->getTerminator());
 
   // Update the entry count of the function.
   if (BFI) {
@@ -1315,8 +1726,8 @@ Function *CodeExtractor::extractCodeRegion() {
   if (BFI && NumExitBlocks > 1)
     calculateNewCallTerminatorWeights(codeReplacer, ExitWeights, BPI);
 
-  // Loop over all of the PHI nodes in the header block, and change any
-  // references to the old incoming edge to be the new incoming edge.
+  // Loop over all of the PHI nodes in the header and exit blocks, and change
+  // any references to the old incoming edge to be the new incoming edge.
   for (BasicBlock::iterator I = header->begin(); isa<PHINode>(I); ++I) {
     PHINode *PN = cast<PHINode>(I);
     for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
@@ -1324,31 +1735,55 @@ Function *CodeExtractor::extractCodeRegion() {
         PN->setIncomingBlock(i, newFuncRoot);
   }
 
-  // Look at all successors of the codeReplacer block.  If any of these blocks
-  // had PHI nodes in them, we need to update the "from" block to be the code
-  // replacer, not the original block in the extracted region.
-  std::vector<BasicBlock *> Succs(succ_begin(codeReplacer),
-                                  succ_end(codeReplacer));
-  for (unsigned i = 0, e = Succs.size(); i != e; ++i)
-    for (BasicBlock::iterator I = Succs[i]->begin(); isa<PHINode>(I); ++I) {
-      PHINode *PN = cast<PHINode>(I);
-      std::set<BasicBlock*> ProcessedPreds;
-      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
-        if (Blocks.count(PN->getIncomingBlock(i))) {
-          if (ProcessedPreds.insert(PN->getIncomingBlock(i)).second)
-            PN->setIncomingBlock(i, codeReplacer);
-          else {
-            // There were multiple entries in the PHI for this block, now there
-            // is only one, so remove the duplicated entries.
-            PN->removeIncomingValue(i, false);
-            --i; --e;
-          }
-        }
+  for (BasicBlock *ExitBB : ExitBlocks)
+    for (PHINode &PN : ExitBB->phis()) {
+       Value *IncomingCodeReplacerVal = nullptr;
+      for (unsigned i = 0, e = PN.getNumIncomingValues(); i != e; ++i) {
+         // Ignore incoming values from outside of the extracted region.
+        if (!Blocks.count(PN.getIncomingBlock(i)))
+           continue;
+ 
+         // Ensure that there is only one incoming value from codeReplacer.
+         if (!IncomingCodeReplacerVal) {
+          PN.setIncomingBlock(i, codeReplacer);
+          IncomingCodeReplacerVal = PN.getIncomingValue(i);
+        } else
+          assert(IncomingCodeReplacerVal == PN.getIncomingValue(i) &&
+                  "PHI has two incompatbile incoming values from codeRepl");
+       }
     }
+ 
+   // Erase debug info intrinsics. Variable updates within the new function are
+   // invisible to debuggers. This could be improved by defining a DISubprogram
 
   fixupDebugInfoPostExtraction(*oldFunction, *newFunction, *TheCall);
 
+  // Mark the new function `noreturn` if applicable. Terminators which resume
+  // exception propagation are treated as returning instructions. This is to
+  // avoid inserting traps after calls to outlined functions which unwind.
+  bool doesNotReturn = none_of(*newFunction, [](const BasicBlock &BB) {
+    const Instruction *Term = BB.getTerminator();
+    return isa<ReturnInst>(Term) || isa<ResumeInst>(Term);
+  });
+  if (doesNotReturn)
+    newFunction->setDoesNotReturn();
+
+
   DEBUG(if (verifyFunction(*newFunction)) 
-        report_fatal_error("verifyFunction failed!"));
+        report_fatal_error("verifyFunction of newFunction failed!"));
+  DEBUG(if (verifyFunction(*oldFunction))
+             report_fatal_error("verification of oldFunction failed!"));
+  DEBUG(if (AC && verifyAssumptionCache(*oldFunction, AC))
+             report_fatal_error("Stale Asumption cache for old Function!"));
   return newFunction;
+}
+
+bool CodeExtractor::verifyAssumptionCache(const Function& F,
+                                          AssumptionCache *AC) {
+  for (auto AssumeVH : AC->assumptions()) {
+    CallInst *I = cast<CallInst>(AssumeVH);
+    if (I->getFunction() != &F)
+      return true;
+  }
+  return false;
 }

@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -77,8 +77,6 @@ void llvm::addLoopMetadata(Loop *L, StringRef Attr,
 
 /// NOTE: If there is already \p Attr existed for Loop \p L, drops it 
 void llvm::removeLoopMetadata(Loop *L, StringRef Attr) {
-  bool IsUnrollLoopMD = IsUnrollLoopMetadata(Attr);
-
   // Reserve first location for self reference to the LoopID metadata node.
   SmallVector<Metadata *, 4> MDs(1);
 
@@ -122,12 +120,16 @@ void llvm::addLoopTripCount(Loop *L, uint32_t Min, uint32_t Max, uint32_t Avg,
   addLoopMetadata(L, "llvm.loop.tripcount", MD);
 }
 
-void llvm::addDataFlow(Loop *L, StringRef Source) {
-  SmallVector<Metadata *, 1> MD;
-  if (Source != "") {
-    MD.push_back(MDString::get(GetContext(L), Source));
-  }
-  addLoopMetadata(L, "llvm.loop.dataflow.enable", MD);
+void llvm::addDataFlow(Loop *L, bool DisableStartProp, StringRef Source,
+                       DILocation *Loc) {
+  auto &Ctx = GetContext(L);
+  SmallVector<Metadata *, 4> MDs = {ConstantAsMetadata::get(
+      ConstantInt::get(Type::getInt1Ty(Ctx), DisableStartProp))};
+  if (Source != "")
+    MDs.push_back(MDString::get(Ctx, Source));
+  if (Loc)
+    MDs.push_back(Loc);
+  addLoopMetadata(L, "llvm.loop.dataflow.enable", MDs);
 }
 
 /// II = -1 : default "II" value
@@ -156,6 +158,10 @@ void llvm::addPipelineOff(Loop *L, StringRef Source) {
 
 void llvm::removePipeline(Loop *L) {
   removeLoopMetadata(L, "llvm.loop.pipeline.enable");
+}
+
+void llvm::removeDataflow(Loop *L) {
+  removeLoopMetadata(L, "llvm.loop.dataflow.enable");
 }
 
 void llvm::addFullyUnroll(Loop *L, StringRef Source, DILocation *Loc) {

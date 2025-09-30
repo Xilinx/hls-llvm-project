@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -1753,7 +1753,11 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
     // Add alignment assumptions if necessary. We do this before the inlined
     // instructions are actually cloned into the caller so that we can easily
     // check what will be known at the start of the inlined code.
-    AddAlignmentAssumptions(CS, IFI);
+    if (!HLS) { 
+      /// for fpga, there is no alignment problem , the Alignment assumen will 
+      /// produce ptrtoint instruction, it cause ROMInfer failed 
+      AddAlignmentAssumptions(CS, IFI);
+    }
 
     // We want the inliner to prune the code as it copies.  We would LOVE to
     // have no dead or constant instructions leftover after inlining occurs

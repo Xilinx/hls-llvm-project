@@ -1,5 +1,5 @@
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -261,10 +261,8 @@ uint64_t SeqBeginInst::getSmallConstantSizeInBytes(const DataLayout &DL) const {
 void SeqBeginInst::updateSize(Value *V) { return getArgOperandUse(1).set(V); }
 
 SeqBeginInst *SeqEndInst::getBegin() const {
-  return cast<SeqBeginInst>(getArgOperand(0));
+  return dyn_cast<SeqBeginInst>(getArgOperand(0));
 }
-
-void SeqEndInst::updateSize(Value *V) { return getArgOperandUse(1).set(V); }
 
 Type *SeqAccessInst::getDataType() const {
   if (auto *Ld = dyn_cast<SeqLoadInst>(this))
@@ -295,13 +293,13 @@ void SeqAccessInst::updateIndex(Value *V) {
 }
 
 SeqBeginInst *SeqLoadInst::getPointerOperand() const {
-  return cast<SeqBeginInst>(getArgOperand(0));
+  return dyn_cast<SeqBeginInst>(getArgOperand(0));
 }
 
 void SeqLoadInst::updateIndex(Value *V) { getArgOperandUse(1).set(V); }
 
 SeqBeginInst *SeqStoreInst::getPointerOperand() const {
-  return cast<SeqBeginInst>(getArgOperand(1));
+  return dyn_cast<SeqBeginInst>(getArgOperand(1));
 }
 
 void SeqStoreInst::updateIndex(Value *V) { getArgOperandUse(2).set(V); }

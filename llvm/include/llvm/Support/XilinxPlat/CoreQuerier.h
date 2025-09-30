@@ -1,4 +1,6 @@
-
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
+// 67d7842dbbe25473c3c32b93c0da8047785f30d78e8a024de1b57352245f9689
 #ifndef _PLATFORM_CoreQuerier_H
 #define _PLATFORM_CoreQuerier_H
 
@@ -9,6 +11,7 @@
 #include <cassert>
 #include <iostream>
 #include <map>
+#include <unordered_map>
 #include <set>
 #if XILINX_HLS_FE_STANDALONE
 #include "llvm/Support/XILINXFPGAPlatformBasic.h"
@@ -46,6 +49,7 @@ class DSPUsageQuerier;
 class AdapterQuerier;
 
 
+
 struct ResourceData {
     int Lut;
     int Ff;
@@ -74,11 +78,12 @@ struct CacheKey {
     std::string CoreNameInDb;
     int QueryKey0;
     int QueryKey1;
+    int QueryKey2;
     int UserLatency;
     int DelayBudget;      // int(raw delayBudget * 10000)
 
-    CacheKey(const std::string& nameInDb, int key0, int key1, int userLatency, double delayBudget):
-                CoreNameInDb(nameInDb), QueryKey0(key0), QueryKey1(key1), UserLatency(userLatency) {
+    CacheKey(const std::string& nameInDb, int key0, int key1, int key2, int userLatency, double delayBudget):
+                CoreNameInDb(nameInDb), QueryKey0(key0), QueryKey1(key1), QueryKey2(key2), UserLatency(userLatency) {
         DelayBudget = static_cast<int>(delayBudget * 10000);
     }
 
@@ -101,6 +106,12 @@ struct CacheKey {
             return false;
         }
 
+        if (QueryKey2 < other.QueryKey2) {
+            return true;
+        } else if (QueryKey2 > other.QueryKey2){
+            return false;
+        }
+
         if (UserLatency < other.UserLatency) {
             return true;
         } else if (UserLatency > other.UserLatency){
@@ -114,6 +125,32 @@ struct CacheKey {
         }
 
         return false;
+    }
+
+    bool operator==(const CacheKey& other) const {
+        return CoreNameInDb == other.CoreNameInDb &&
+               QueryKey0 == other.QueryKey0 &&
+               QueryKey1 == other.QueryKey1 &&
+               QueryKey2 == other.QueryKey2 &&
+               UserLatency == other.UserLatency &&
+               DelayBudget == other.DelayBudget;
+    }
+};
+
+struct CacheKeyHash {
+    std::size_t operator()(const CacheKey& key) const {
+        return std::hash<std::string>()(key.CoreNameInDb) ^
+               std::hash<int>()(key.QueryKey0) ^
+               std::hash<int>()(key.QueryKey1) ^
+               std::hash<int>()(key.QueryKey2) ^
+               std::hash<int>()(key.UserLatency) ^
+               std::hash<int>()(key.DelayBudget);
+    }
+};
+
+struct CacheKeyEqual {
+    bool operator()(const CacheKey& lhs, const CacheKey& rhs) const {
+        return lhs == rhs;
     }
 };
 
@@ -142,7 +179,7 @@ private:
     bool mLatency;          // Whether to cache 'latency' information
     bool mDelay;            // Whether to cache 'Delay' information
     bool mResource;         // Whether to cache 'Resource' information
-    std::map<CacheKey, QueryData> mMap;
+    std::unordered_map<CacheKey, QueryData, CacheKeyHash, CacheKeyEqual> mMap;
 };
 
 //  factory to create Core Queriers
@@ -166,7 +203,7 @@ public:
         DOUBLE_KEY_ARITHMETIC, // for verlsal add/sub, mul
         DOUBLE_KEY_DIVNS,      // for verlsal div
         ADAPTER,            // for adapter
-        
+        DIVIDER_LOGICORE,   // for divider logicore
         VIVADO_IP,          // VIVADO IP use tcl flow
         DSP48,              // for DSP48 
         DSP58,              // for DSP58 
@@ -174,13 +211,18 @@ public:
         DSP_QADD_SUB,       // for QAddSub_DSP
         BLACK_BOX,          // for BlackBox
         SPARSE_MUX,         // for SparseMux
-        QUADRUPLE_KEY_AXI,  // for maxi 
+        QUADKEY_MAXI,       // for maxi 
+        QUADKEY_AXILITE,    // for axilite
         REG_SLICE,          // for regslice
         AXIS,               // for AXIS
         DSP58BUILTIN,         // for DSP58Builtin
         DSP48BUILTIN,         // for DSP48Builtin
         QUADKEY_APFLOAT,    // for ApFloat Type Conversion
-        BIN_SPARSE_MUX      // for Binary SparseMux
+        BIN_SPARSE_MUX,     // for Binary SparseMux
+        BIT_SELECTOR,       // for BitSelector, non-versal 
+        DOUBLE_KEY_BIT_SELECTOR, // for DoubleKeyBitSelector
+        DOUBLE_KEY_BITSET,   // for DoubleKeyBitSetQuerier
+        CPLX                 // CPLX Core Querier
     }; 
 private:
     QuerierFactory() = default;
@@ -196,6 +238,8 @@ public:
     static std::vector<double> queryDelayList(CoreInst* core, OperType oper);
     static ResourceData queryResource(CoreInst* core);
     static bool getLegality(CoreInst* core, OperType oper);
+    static std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core);
+    static PlatformBasic::IMPL_TYPE autoTypeChangeTo(CoreInst* core);
     // convert core_name in .lib to core_name in Database
     std::string getNameInDB(CoreInst* core) const;
 
@@ -211,6 +255,9 @@ private:
     std::map<CoreQuerier*, QuerierCache*> mCacheMap; 
     std::set<CoreQuerier*> mSingleKeyQuerier;
     std::set<CoreQuerier*> mDoubleKeyQuerier;
+    std::set<CoreQuerier*> mTripleKeyQuerier;
+    // Special handling for BinarySparseMuxQuerier
+    CoreQuerier* mBinarySparseMuxQuerier;
     std::map<std::string, std::string> mCoreName2TypeMap;
     QuerierCache* mFullCache;
     QuerierCache* mNoResCache;
@@ -232,6 +279,8 @@ public:
     virtual std::vector<double> queryDelayList(CoreInst* core) = 0;
     virtual ResourceData queryResource(CoreInst* core) = 0;
     virtual bool getLegality(CoreInst* core) { return true; }
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) { return {"", ""}; }
+    virtual PlatformBasic::IMPL_TYPE autoTypeChangeTo(CoreInst* core) { return PlatformBasic::IMPL_TYPE::AUTO; }
 protected:
     // linear interpolation
     double interpolate(int index, int leftIndex, int rightIndex, 
@@ -302,19 +351,23 @@ protected:
     template <class T>
     T getValue(const std::map<int, T> &tmap, int key)
     {
-        T value;
+        assert(tmap.size() > 0);
+        T value = T(); // Ensure value is initialized
+        if (tmap.empty()) {
+            return value;
+        }
         auto itlow = tmap.lower_bound(key);
-        if(itlow == tmap.end())
+        if (itlow == tmap.end()) 
         {
             // bigger than last
-            value = tmap.rbegin()->second;
-        }
-        else if(itlow == tmap.begin())
+            value = std::prev(tmap.end())->second;
+        } 
+        else if (itlow == tmap.begin()) 
         {
             // smaller than first
-            value = tmap.begin()->second;
-        }
-        else if(itlow->first == key)
+            value = itlow->second;
+        } 
+        else if (itlow->first == key) 
         {
             // found
             value = itlow->second;
@@ -360,6 +413,9 @@ public:
     virtual int queryLatency(CoreInst* core) { return 0; }
     virtual std::vector<double> queryDelayList(CoreInst* core) { return {1.0, 1.0, 1.0}; }
     virtual ResourceData queryResource(CoreInst* core); 
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) { 
+        return {"LUT6", "LUT6"}; 
+    }
 };
 
 class DotProductQuerier : public MultOperQuerier 
@@ -373,6 +429,9 @@ public:
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
     virtual bool getLegality(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"DSP58", "DSP58"}; 
+    }
     virtual const char* getTableName() { return "DotProduct"; } 
 };
 
@@ -388,6 +447,7 @@ public:
     virtual int queryLatency(CoreInst* core);
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core);
 
 private:
     virtual int getKey(CoreInst* core) = 0;
@@ -399,6 +459,7 @@ private:
     DelayMap selectLatencyDelayMap(const char* name_db, PlatformBasic::IMPL_TYPE impl, int key);
     DelayMap selectKeyDelayMap(const char* name_db, int latency);
     std::vector<std::vector<int>> selectKeyResource2dList(const char *name_db, int latency);
+    int selectMinGEValue(const char* core_name, const char* column, int value, bool& overLimit);
 };
 
 class ArithmeticQuerier: public SingleKeyQuerier 
@@ -437,6 +498,16 @@ protected:
 
 public:
     virtual int queryLatency(CoreInst* core); 
+};
+
+class DividerLogiCoreQuerier : public ArithmeticQuerier 
+{
+    friend class QuerierFactory;
+protected:
+    DividerLogiCoreQuerier() = default;
+    ~DividerLogiCoreQuerier() = default;
+public:
+    virtual int getKey(CoreInst* core);
 };
 
 class OneKeySparseMuxQuerier: public SingleKeyQuerier 
@@ -532,9 +603,10 @@ protected:
 
 public:
     virtual int queryLatency(CoreInst* core);
-    std::vector<double> queryDelayList(CoreInst* core);
+    virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
 
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core);
 private: 
     virtual const char* getTableName() = 0;
     virtual const char* getDelayColumn() = 0;
@@ -546,7 +618,7 @@ private:
 protected: 
     int selectMinGEValue(const char* core_name, const char* column, int value, bool& overLimit);
     // the minimum(column0 * column1) where column0 >= value0 and column1 >= value1
-    std::pair<int, int> selectMinGEValue(const char *core_name, const char* column0, int value0,
+    virtual std::pair<int, int> selectMinGEValue(const char *core_name, const char* column0, int value0,
                          const char *column1, int value1, std::pair<bool, bool>& overLimit);
     DelayMap selectLatencyDelayMap(const char* name_db, PlatformBasic::IMPL_TYPE impl, int key0, int key1);
     std::vector<double> selectDelayList(const char* core_name, int key0, int key1, int latency);
@@ -562,6 +634,7 @@ public:
     virtual int queryLatency(CoreInst* core) override;  
     virtual std::vector<double> queryDelayList(CoreInst* core) override;
     virtual ResourceData queryResource(CoreInst* core) override;
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) override;
 
 private:
     virtual int getKey0(CoreInst* core) override;
@@ -573,17 +646,40 @@ private:
     const char* getDelayColumn() override { return "DELAY0, DELAY1, DELAY2"; };
 
     int getRawLatency(CoreInst* core);
+
+    static const std::map<PlatformBasic::IMPL_TYPE, PlatformBasic::MEMORY_IMPL> fifoImpl2MemoryImpl;
+};
+
+class DoubleKeyUramQuerier : public DoubleKeyQuerier
+{
+    friend class QuerierFactory;
+    friend class DoubleKeyMemoryQuerier;
+public:
+    DoubleKeyUramQuerier() = default;
+    ~DoubleKeyUramQuerier() = default;
+private:
+    virtual int getKey0(CoreInst* core);
+    virtual int getKey1(CoreInst* core);
+    virtual const char* getKey0Type() { return "BITWIDTH"; };
+    virtual const char* getKey1Type() { return "DEPTH"; }
+
+    const char* getTableName() { return "2D_Memory"; }
+    const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; };
+    virtual std::string getNameInDB(CoreInst* core) { return "RAMUltra"; };
+
 };
 
 class DoubleKeyMemoryQuerier : public DoubleKeyQuerier
 {
     friend class QuerierFactory;
-    DoubleKeyMemoryQuerier() = default; 
-    ~DoubleKeyMemoryQuerier() = default;
+    DoubleKeyMemoryQuerier(); 
+    ~DoubleKeyMemoryQuerier();
 
 public:
     virtual ResourceData queryResource(CoreInst* core);
     virtual int queryLatency(CoreInst* core);
+    virtual std::vector<double> queryDelayList(CoreInst* core); 
+    virtual PlatformBasic::IMPL_TYPE autoTypeChangeTo(CoreInst* core);
 
 private: 
     virtual int getKey0(CoreInst* core);
@@ -593,6 +689,20 @@ private:
 
     const char* getTableName() { return "2D_Memory"; }
     const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; };
+
+    bool isMeetDelayBudget(CoreInst* core);
+
+    bool isSDPMode(const std::vector<unsigned>& usedPorts);
+    unsigned queryVersalBRAM(StorageInst* storage);
+    unsigned decomposeCalculateBRAM(const std::map<unsigned, unsigned>& pairs, int memoryWidth, int memoryDepth);
+    unsigned singleConfigCalculateBRAM(unsigned uniformWidth, unsigned uniformDepth, int memoryWidth, int memoryDepth);
+    
+    static const std::string mRam1PortName;
+    static const std::string mRam2PortName;
+    static const std::string mRom1PortName;
+    static const std::string mRom2PortName;
+    static const std::string mRamBlock2PortName;
+    DoubleKeyUramQuerier *mUramQuerier;
 };
 
 class DoubleKeyArithmeticQuerier : public DoubleKeyQuerier
@@ -608,6 +718,30 @@ private:
     virtual int getKey1(CoreInst* core);
     virtual const char*  getKey0Type() { return "OPERANDS0"; }
     virtual const char*  getKey1Type() { return "OPERANDS1"; }
+};
+
+class DoubleKeyBitSetQuerier : public DoubleKeyQuerier
+{
+    friend class QuerierFactory;
+protected:
+    DoubleKeyBitSetQuerier() = default;
+    ~DoubleKeyBitSetQuerier() = default;
+private:
+    virtual const char* getTableName() { return "2D_Arithmetic"; }
+    virtual const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
+    virtual int getKey0(CoreInst* core);
+    virtual int getKey1(CoreInst* core);
+    virtual const char*  getKey0Type() { return "OPERANDS0"; }
+    virtual const char*  getKey1Type() { return "OPERANDS1"; }
+    virtual std::pair<int, int> selectMinGEValue(const char *core_name, const char* column0, int value0,
+                const char *column1, int value1, std::pair<bool, bool>& overLimit);
+    
+    int selectMinGEValueByFixOneKey(const char *core_name,
+                const char *column,
+                int value, 
+                int fixKey,
+                unsigned fixColumn,
+                bool& overLimit);
 };
 
 class DoubleKeyDivnsQuerier : public DoubleKeyArithmeticQuerier
@@ -635,6 +769,10 @@ public:
     virtual int queryLatency(CoreInst* core);
     std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"LUT6", "SRLC32E"};
+    }
 
 private: 
     virtual const char* getTableName() = 0;
@@ -694,6 +832,10 @@ private:
     virtual ResourceData queryResource(CoreInst* core);
 
     virtual void configInnerMemories(ChannelInst* channInst);
+
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"LUT6", "LUT6"};
+    }
 }; 
 
 class AdapterQuerier : public MultOperQuerier 
@@ -725,6 +867,9 @@ public:
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
     ResourceData queryAXILiteResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"LUT6", "LUT6"};
+    }
     ResourceData queryMAXIResource(CoreInst* core);
     // for m_axi resource querier.
     virtual void configInnerMemories(AdapterInst* adapterInst);
@@ -786,6 +931,9 @@ public:
     virtual int queryLatency(CoreInst* core);
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"DSP58", "DSP58"};
+    }
     int queryMaxLatency(const CoreInst* core);
 
 private:
@@ -850,6 +998,9 @@ public:
     virtual int queryLatency(CoreInst* core);
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"DSP58", "DSP58"};
+    }
     
 };
 
@@ -866,6 +1017,10 @@ public:
     virtual int queryLatency(CoreInst* core);
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"DSP58", "DSP58"};
+    }
 
     std::vector<unsigned> queryLatencyList(CoreInst* core);
     std::vector<unsigned> queryLatencyList(CoreInst* core, const std::string& opcode);
@@ -889,6 +1044,8 @@ public:
     std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
 
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core);
+
 private: 
     virtual const char* getTableName() = 0;
     virtual const char* getDelayColumn() = 0;
@@ -900,6 +1057,20 @@ private:
     virtual const char* getKey2Type() = 0;
     
     int selectMinGEValue(const char* core_name, const char* column, int value, bool& overLimit);
+    int selectMinGEValueByFixOneKey(const char *core_name,
+                        const char *column,
+                        int value, 
+                        int fixKey,
+                        unsigned fixColumn,
+                        bool& overLimit);
+    int selectMinGEValueByFixDoubleKeys(const char *core_name,
+                        const char *column,
+                        int value, 
+                        int fixKey0,
+                        unsigned fixColumn0,
+                        int fixKey1,
+                        unsigned fixColumn1,
+                        bool& overLimit);
     DelayMap selectLatencyDelayMap(const char* name_db, PlatformBasic::IMPL_TYPE impl, int key0, int key1, int key2);
     std::vector<double> selectDelayList(const char* core_name, int key0, int key1, int key2, int latency);
 
@@ -949,6 +1120,9 @@ public:
     virtual int queryLatency(CoreInst* core);
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return mSimpleLabelMux->queryInOutPrimitive(core);
+    }
 
 private:
     SimpleLabelMuxQuerier* mSimpleLabelMux;
@@ -967,6 +1141,7 @@ public:
     virtual int queryLatency(CoreInst* core);
     std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core);
 
 protected:
     int selectMinGEValue(const char* core_name, const char* column, int value, bool& overLimit);
@@ -985,17 +1160,122 @@ private:
 
 };
 
-class QuadrupleAxiQuerier : public MultipleMGEKeyQuerier {
+class QuadrupleKeyAxiComponentQuerier : public MultipleMGEKeyQuerier {
     friend class QuerierFactory;
 protected:
-    QuadrupleAxiQuerier() = default;
-    ~QuadrupleAxiQuerier() = default;
+    QuadrupleKeyAxiComponentQuerier() = default;
+    ~QuadrupleKeyAxiComponentQuerier() = default;
+
+public:
+    void setTargetChanID(unsigned id) { mTargetChanID = id; }
+    unsigned getTargetChanID() { return mTargetChanID; }
+
+    void setTargetPortID(uint64_t id) { mTargetPortID = id; }
+    uint64_t getTargetPortID() { return mTargetPortID; }
 
 private: 
-    virtual const char* getTableName() { return "AXI";}
+    virtual const char* getTableName() { return "4D_AXI";}
     virtual const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
-    virtual std::vector<int> getKeys(CoreInst* core);
-    virtual std::vector<std::string> getKeyTypes() { return {"BUSWIDTH", "BURSTLENGTH", "OUTSTANDING", "USERLATENCY"};};
+    virtual std::vector<int> getKeys(CoreInst* core) { return {0,0,0,0}; }
+    virtual std::vector<std::string> getKeyTypes() { return {"PARAMETER0", "PARAMETER1", "PARAMETER2", "PARAMETER3"};}
+
+    unsigned mTargetChanID;
+    uint64_t mTargetPortID;
+};
+
+class MAXIQuerier : public MultOperQuerier {
+    friend class QuerierFactory;
+protected:
+    MAXIQuerier();
+    ~MAXIQuerier();
+
+    enum MAXIComponent {
+        LoadUnit = 0, // MAXI Components
+        StoreUnit,
+        CacheUnit,
+        BusRead,
+        BusWrite
+    };
+
+    class LoadUnitQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core) { return "load_unit"; };
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+
+    class StoreUnitQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core) { return "store_unit"; };
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+
+    class CacheUnitQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core);
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+
+    class BusReadQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core) { return "bus_read"; };
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+
+    class BusWriteQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core) { return "bus_write"; };
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+    class MemUsageQuerier : public AdapterQuerier {};
+
+    std::shared_ptr<CoreInst> getMAXIRequestFIFO(CoreInst* core);
+
+public:
+    virtual int queryLatency(CoreInst* core);
+    virtual std::vector<double> queryDelayList(CoreInst* core);
+    virtual ResourceData queryResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"LUT6", "LUT6"};
+    }
+
+private:
+    std::map<MAXIComponent, QuadrupleKeyAxiComponentQuerier*> mQueriers;
+    MemUsageQuerier memUsage;
+};
+
+class AXILiteQuerier : public CoreQuerier {
+    friend class QuerierFactory;
+protected:
+    AXILiteQuerier();
+    ~AXILiteQuerier();
+
+    enum AXILiteComponent {
+        AXILiteCtrl = 0,// AXILite Components
+        AXILiteScalar,
+        AXILiteArray
+    };
+
+    class AXILiteCtrlQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core) { return "axilite_ctrl"; };
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+    class AXILiteScalarQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core) { return "axilite_scalar"; };
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+    class AXILiteArrayQuerier : public QuadrupleKeyAxiComponentQuerier {
+        virtual std::string getNameInDB(CoreInst* core) { return "axilite_array"; };
+        virtual std::vector<int> getKeys(CoreInst* core);
+    };
+    class MemUsageQuerier : public AdapterQuerier {};
+
+public:
+    virtual int queryLatency(CoreInst* core);
+    virtual std::vector<double> queryDelayList(CoreInst* core);
+    virtual ResourceData queryResource(CoreInst* core);
+
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"LUT6", "LUT6"};
+    }
+
+private:
+    std::map<AXILiteComponent, QuadrupleKeyAxiComponentQuerier*> mQueriers;
+    MemUsageQuerier memUsage;
 };
 
 class DSPBuiltinQuerier : public CoreQuerier {
@@ -1008,6 +1288,10 @@ protected:
 public:
     virtual int queryLatency(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"DSP58", "DSP58"};
+    }
 
 protected: 
     void decidePreAdder(CoreInst* core);
@@ -1138,6 +1422,9 @@ public:
     virtual int queryLatency(CoreInst* core);
     virtual std::vector<double> queryDelayList(CoreInst* core);
     virtual ResourceData queryResource(CoreInst* core);
+    virtual std::pair<std::string, std::string> queryInOutPrimitive(CoreInst* core) {
+        return {"DSP58", "DSP58"};
+    }
 
     int queryMaxLatency(CoreInst* core);
 
@@ -1174,6 +1461,92 @@ private:
     std::map<std::string, double> mDelayData; 
     std::vector<int> mPortList;
     const int MaxLatency;
+};
+
+class BitSelectorQuerier: public DoubleKeyQuerier 
+{
+    friend class QuerierFactory;
+    BitSelectorQuerier() = default;
+    ~BitSelectorQuerier() = default;
+
+private:
+    virtual int getKey0(CoreInst* core);
+    virtual int getKey1(CoreInst* core);
+    virtual const char* getKey0Type() { return "OPERANDS0"; }
+    virtual const char* getKey1Type() { return "OPERANDS1"; }
+
+    virtual const char* getTableName() { return "2D_Arithmetic"; } 
+    virtual const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
+
+    virtual std::pair<int, int> selectMinGEValue(const char *core_name, const char* column0, int value0,
+                const char *column1, int value1, std::pair<bool, bool>& overLimit);
+    
+    int selectMinGEValueByFixOneKey(const char *core_name,
+                const char *column,
+                int value, 
+                int fixKey,
+                unsigned fixColumn,
+                bool& overLimit);
+};
+
+class DoubleKeyBitSelectorQuerier : public TripleMGEKeyQuerier 
+{
+    friend class QuerierFactory;
+protected:
+    DoubleKeyBitSelectorQuerier() = default;
+    ~DoubleKeyBitSelectorQuerier() = default;
+
+private:
+    virtual int getKey0(CoreInst* core);
+    virtual int getKey1(CoreInst* core);
+    virtual int getKey2(CoreInst* core);
+    virtual std::string getNameInDB(CoreInst* core) { return "BinarySparseMux_DontCare_IncrEncode"; };
+    virtual const char* getKey0Type() { return "DATAWIDTH"; }
+    virtual const char* getKey1Type() { return "ADDRWIDTH"; }
+    virtual const char* getKey2Type() { return "INPUT_NUMBER"; }
+
+    const char* getTableName() { return "SparseMux"; }
+    const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
+};
+
+class CplxQuerier : public CoreQuerier {
+    friend class QuerierFactory;
+    enum CplxType {
+        Mul, 
+        MulAdd,
+        MulAcc
+    };
+
+protected:
+    CplxQuerier() = default;
+    ~CplxQuerier() = default;
+
+public:
+    enum Register {
+        A1,
+        A2,
+        B1,
+        B2,
+        D,
+        AD,
+        M,
+        C,
+        P
+    };
+    
+    virtual std::vector<double> queryDelayList(CoreInst* core) override;
+    virtual int queryLatency(CoreInst* core) override;
+    virtual ResourceData queryResource(CoreInst* core) override;
+
+protected: 
+    int regsToIndex(const std::vector<unsigned>& regs, CplxType type);
+    std::vector<double> selectDelayList(const std::string& nameDb, int latency, int bits);
+
+    const char* getKeyType() { return "OPERANDS"; }
+    const char* getTableName() { return "Arithmetic"; }
+    const char* getDelayColumn() { return "DELAY0, DELAY1, DELAY2"; }
+
+    
 };
 
 } //< namespace

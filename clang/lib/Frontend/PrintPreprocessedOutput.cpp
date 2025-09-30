@@ -4,8 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// (C) Copyright 2016-2022 Xilinx, Inc. 
-// All Rights Reserved.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -726,13 +727,13 @@ void PrintPPOutputPPCallbacks::InitializeHLSDirectives( const std::string HLSDir
     }
 
     StringRef pos(handle.InsertPosition); 
-    SmallVector<StringRef, 3> subs; 
-    pos.split(subs, ":"); 
     int line; 
     int column; 
-    subs[1].getAsInteger(10, line); 
-    subs[2].getAsInteger(10, column); 
-    directive.filename  = subs[0]; 
+    auto pair = pos.rsplit(':'); 
+    pair.second.getAsInteger(10, column); 
+    pair = pair.first.rsplit(':'); 
+    pair.second.getAsInteger(10, line); 
+    directive.filename  = pair.first; 
     directive.line = line; 
     directive.column = column; 
 
@@ -748,7 +749,11 @@ void PrintPPOutputPPCallbacks::InitializeHLSDirectives( const std::string HLSDir
     directive.slx = handle.FromSLX; 
     directive.directive_source_file = handle.SourceFile; 
     directive.directive_source_line = handle.SourceLine; 
-    directive.success = handle.success; 
+    /* fix the bug, if the location is in some header file, and the header file is included by more than one
+     cpp file,  set 'directive.success' to 'true' , will prevent inserting directive to more than one 
+     cpp files; 
+     */
+    directive.success = false ; 
 
     std::string pragmaStr; 
     if (handle.FromSLX ) { 
@@ -806,7 +811,9 @@ void PrintPPOutputPPCallbacks::FinalizeHLSDirectives( const std::string  HLSDire
   for( int i = 0; i < HLSDirectives.size(); i++) { 
     for (int j = 0; j < DirectiveList.size(); j++) { 
       if ( HLSDirectives[i].directive_id == DirectiveList[j].Id) { 
-        DirectiveList[j].success = HLSDirectives[i].success; 
+        if (!DirectiveList[j].success) { 
+          DirectiveList[j].success = HLSDirectives[i].success; 
+        }
         break; 
       }
     }
@@ -962,7 +969,7 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
             DEBUG(llvm::dbgs() << "one left 'directive' that will be dump:  " ); 
             OS << "\n#  " << directive->directive_source_line << " \"" << directive->directive_source_file << "\" 1\n"; 
             OS << directive->pragma << "\n"; 
-            OS << "#  " << Callbacks->getCurLine() << " \"" << Callbacks->getCurFilename() << "\" 2\n"; 
+            Callbacks->WriteLineInfo(Callbacks->getCurLine(), " 2", 2);
             DEBUG(llvm::dbgs() << "finish one directive " << directive->pragma  << " at line: " << directive->line << "\n"; ); 
             directive->success = true; 
             // replace current 'idx' with last 'idx', and resize 
@@ -991,7 +998,7 @@ static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
         DEBUG(llvm::dbgs() << "will insert HLS directive " << directive->pragma << " into " << Callbacks->getCurFilename() << "\n"; ); 
         OS << "\n# " << directive->directive_source_line << " \"" << directive->directive_source_file << "\" 1\n"; 
         OS << directive->pragma << "\n"; 
-        OS << "# " << Callbacks->getCurLine() << " \"" << Callbacks->getCurFilename() << "\" 2\n"; 
+        Callbacks->WriteLineInfo(Callbacks->getCurLine(), " 2", 2); 
         // replace current 'idx' with last 'idx', and resize 
         unsigned size = directive_idxs.size(); 
         directive_idxs[i] = directive_idxs.back(); 

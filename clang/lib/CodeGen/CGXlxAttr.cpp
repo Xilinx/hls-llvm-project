@@ -1,5 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -47,7 +47,7 @@ StringRef getPragmaContext(const Attr* A)
     return "user" ; 
   }
     if(A->getPragmaContext()->getName().equals_lower("SLXDIRECTIVE")) { 
-      return "user";
+      return "inferred";
     }
     else if (A->getPragmaContext()->getName().equals_lower("HLSDIRECTIVE")) { 
       return "user" ;
@@ -137,8 +137,8 @@ StringRef getPragmaContext(const Attr* A)
     case attr::FPGAMaxiRdBurstLen:
     case attr::FPGAMaxiWtBurstLen:
     case attr::CodeGenType:
-    case attr::Unpacked:
     case attr::HLSPreserve:
+    case attr::HLSTopTask:
     default:
       return "user"; 
 #endif 
@@ -190,13 +190,13 @@ static int EvaluateInteger(Expr *E, const ASTContext &Ctx, int Default = -1) {
 }
 
 
-static int64_t HLSEvaluateClockCycle(Expr *E, bool isSec, double clockPeriod, const char * option_name, CodeGenModule& CGM,  const ASTContext &Ctx) {
-
+int64_t CodeGenFunction::HLSEvaluateClockCycle(Expr *E, bool isSec, double clockPeriod, const char * option_name) 
+{
   if (!E)
     return 0;
 
   Expr::EvalResult EvalResult;
-  bool Result = E->EvaluateAsRValue(EvalResult, Ctx);
+  bool Result = E->EvaluateAsRValue(EvalResult, CGM.getContext()); 
 
   if (Result && !EvalResult.HasSideEffects) {
     if (EvalResult.Val.isInt()) {
@@ -326,6 +326,67 @@ Optional<int> CodeGenFunction::HLSEvaluateICEResult(Expr *E)
   }
 }
 
+template<bool AllowVD>
+static bool VerifyDepth(Expr *Depth, const ASTContext &Ctx, DiagnosticsEngine &Diag)
+{
+  llvm::APSInt Result;
+  if (Depth->EvaluateAsInt(Result, Ctx)) {
+    return true;
+  }
+  else if (AllowVD) {
+    if (auto PE = dyn_cast<ParenExpr>(Depth)) {
+      return VerifyDepth<AllowVD>(PE->getSubExpr(), Ctx, Diag);
+    }
+    else if (auto CE = dyn_cast<ImplicitCastExpr>(Depth)) {
+      return VerifyDepth<AllowVD>(CE->getSubExpr(), Ctx, Diag);
+    }
+    else if (auto BO = dyn_cast<BinaryOperator>(Depth)) {
+      switch (BO->getOpcode()) {
+      case BO_Add:
+      case BO_Sub:
+      case BO_Mul:
+      case BO_Div:
+        return VerifyDepth<AllowVD>(BO->getLHS(), Ctx, Diag) && VerifyDepth<AllowVD>(BO->getRHS(), Ctx, Diag);
+      default:
+        Diag.Report(Depth->getExprLoc(), diag::err_invalid_option_unless)
+          << "depth" << "it specifies a legal expression.";
+        return false;
+      }
+    }
+    else if (isa<DeclRefExpr>(Depth)) {
+      ValueDecl *D = cast<DeclRefExpr>(Depth)->getDecl();
+      QualType T = D->getType().getCanonicalType();
+      if (!isa<ParmVarDecl>(D)) {
+        Diag.Report(Depth->getExprLoc(), diag::err_invalid_option_unless)
+          << "depth" << "it specifies a formal parameter name of kernel function.";
+        return false;
+      }
+      else if (T->isPointerType() || T->isReferenceType()) {
+        Diag.Report(Depth->getExprLoc(), diag::err_invalid_option_unless)
+          << "depth" << "the kernel parameter it specifies is passed by value.";
+        return false;
+      }
+      else if (!T->isIntegralType(Ctx)) {
+        Diag.Report(Depth->getExprLoc(), diag::err_invalid_option_unless)
+          << "depth" << "the kernel parameter it specifies is integral type.";
+        return false;
+      }
+      else {
+        return true;
+      }
+    }
+    else {
+      Diag.Report(Depth->getExprLoc(), diag::err_invalid_option_unless)
+        << "depth" << "it specifies a legal expression.";
+      return false;
+    }
+  }
+  else {
+    Diag.Report(Depth->getLocStart(), diag::err_invalid_option_unless)
+      << "depth" << "it evaluates to positive integer constant.";
+    return false;
+  }
+}
 
 template <unsigned N>
 static llvm::ConstantAsMetadata *CreateIntMeatadata(llvm::LLVMContext &Ctx,
@@ -1110,6 +1171,37 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
 
 
   SmallVector<llvm::Metadata *, 4> Args;
+
+  if (auto PerformanceAttr = FD->getAttr<XlxPerformanceAttr>()){ 
+    bool isSec = PerformanceAttr->getUnit() == XlxPerformanceAttr::Seconds; 
+    if (getLangOpts().HLSClockPeriod == 0 && isSec){ 
+      CGM.getDiags().Report(PerformanceAttr->getLocation(),
+        diag::err_xlx_clock_period_is_invalid);
+    }
+    
+    int64_t TargetTI = HLSEvaluateClockCycle(PerformanceAttr->getTargetTI(), isSec, getLangOpts().HLSClockPeriod, "target_ti"); 
+
+    int64_t TargetTL = HLSEvaluateClockCycle(
+        PerformanceAttr->getTargetTL(), isSec, getLangOpts().HLSClockPeriod, "target_tl"); 
+    int64_t AssumeTI = HLSEvaluateClockCycle(
+        PerformanceAttr->getAssumeTI(), isSec, getLangOpts().HLSClockPeriod, "assume_ti"); 
+    int64_t AssumeTL = HLSEvaluateClockCycle(
+        PerformanceAttr->getAssumeTL(), isSec, getLangOpts().HLSClockPeriod, "assume_tl"); 
+    // 'HLSEvaluateClockCycle' could be warning out, if so, the return value is negative number , here we ignore the pragma 
+    if (TargetTI >= 0 && TargetTL >= 0 && AssumeTI >= 0 && AssumeTL >= 0) { 
+      SmallString<128> performanceEncoding;
+      auto targetTI_str = "target_ti=" + llvm::utostr(TargetTI);
+      auto targetTL_str = "target_tl=" + llvm::utostr(TargetTL);
+      auto assumeTI_str = "assume_ti=" + llvm::utostr(AssumeTI);
+      auto assumeTL_str = "assume_tl=" + llvm::utostr(AssumeTL);
+      auto attrStr = targetTI_str + ";" + targetTL_str + ";" + assumeTI_str + ";" + assumeTL_str;
+  
+      Fn->addFnAttr("fpga.function.performance", attrStr);
+  
+      llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(PerformanceAttr->getLocation());
+      Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("fpga.function.performance"), MDB.createString(getPragmaContext(PerformanceAttr)), Loc.getAsMDNode()}));
+    }
+  }
   if (auto DownwardInline = FD->getAttr<XCLInlineAttr>()) {
     auto mode = DownwardInline->getRecursive();
     if (mode == 0)
@@ -1205,6 +1297,11 @@ void CodeGenFunction::EmitXlxFunctionAttributes(const FunctionDecl *FD,
     Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("hls_preserve"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
   }
 
+  for (auto *A : FD->specific_attrs<HLSTopTaskAttr>()) {
+    Fn->addFnAttr("hls.top.task");
+    llvm::DebugLoc Loc  = PragmaSourceLocToDebugLoc(A->getLocation());
+    Args.push_back(llvm::MDNode::get(Ctx, {MDB.createString("hls.top.task"), MDB.createString(getPragmaContext(A)), Loc.getAsMDNode()}));
+  }
    
   if(!Args.empty()) {
     Fn->addMetadata("fpga.function.pragma", *llvm::MDNode::get(Ctx, Args));
@@ -1651,47 +1748,6 @@ void CodeGenFunction::EmitBundleForScope(
       HintPragmaLocs.emplace_back(MDN);
       break;
     }
-    case attr::XlxPerformance: {
-
-      const XlxPerformanceAttr *PerformanceAttr = cast<XlxPerformanceAttr>(A);
-      bool isLoop =
-          PerformanceAttr->getPerformanceScope() == XlxPerformanceAttr::Loop;
-
-      bool isSec = PerformanceAttr->getUnit() == XlxPerformanceAttr::Seconds; 
-      if (getLangOpts().HLSClockPeriod == 0 && isSec){ 
-        CGM.getDiags().Report(PerformanceAttr->getLocation(),
-          diag::err_xlx_clock_period_is_invalid);
-      }
-      
-      int64_t TargetTI = HLSEvaluateClockCycle(PerformanceAttr->getTargetTI(), isSec, getLangOpts().HLSClockPeriod, "target_ti", CGM, getContext());
-      if (TargetTI < 0)
-        break;
-
-      int64_t TargetTL = HLSEvaluateClockCycle(
-          PerformanceAttr->getTargetTL(), isSec, getLangOpts().HLSClockPeriod, "target_tl", CGM, getContext());
-      if (TargetTL < 0)
-        break;
-      int64_t AssumeTI = HLSEvaluateClockCycle(
-          PerformanceAttr->getAssumeTI(), isSec, getLangOpts().HLSClockPeriod, "assume_ti", CGM, getContext());
-      if (AssumeTI < 0)
-        break;
-      int64_t AssumeTL = HLSEvaluateClockCycle(
-          PerformanceAttr->getAssumeTL(), isSec, getLangOpts().HLSClockPeriod, "assume_tl", CGM, getContext());
-      if (AssumeTL < 0)
-        break;
-
-      llvm::Value *Args[] = {Builder.getInt32(isLoop),
-                             Builder.getInt64(TargetTI),
-                             Builder.getInt64(TargetTL),
-                             Builder.getInt64(AssumeTI),
-                             Builder.getInt64(AssumeTL),
-                             Builder.getInt32(0) /// 0 means for cycle
-                            };
-
-      HintBundleList.emplace_back(A->getSpelling(), Args);
-      HintPragmaLocs.emplace_back(MDN);
-      break;
-    }
     case attr::XlxBindOpExpr: {
       auto *bindOp = dyn_cast<XlxBindOpExprAttr>(A);
 
@@ -1890,16 +1946,21 @@ std::pair<llvm::Value*, int64_t>  CodeGenFunction::EmitHLSVariableExpr( Expr *ex
 
     if (idxs.size() == 0) {
       //it is some declref expr
-      QualType originalType = Parm->getType();
-      if (isa<DecayedType>(originalType)) { 
+      QualType originalType = Parm->getType(); 
+      if (isa<DecayedType>(originalType)) {
         originalType = cast<DecayedType>(originalType)->getOriginalType();
       }
-      llvm::Type *llvm_type = V->getType();
+      originalType = originalType.getCanonicalType(); 
       int64_t port_width = 0;
-      if(originalType->isReferenceType()) { 
+
+      if (originalType->isReferenceType()) {
         originalType = cast<ReferenceType>(originalType)->getPointeeType();
       }
+
       //if the variable is function::Argument, and is pointer type, port_width is 0
+      //it is because :  the pointer variable can be pointer argument from array 
+      //we rely on reflow pass to compute the port.bitwidth , otherwise there is 
+      //maxi_burst widith regression 
       if (!originalType->isPointerType() ) { 
         llvm::Type *lv_type = ConvertType(originalType);
  
@@ -2005,9 +2066,12 @@ void CodeGenFunction::EmitStableIntrinsic(const XlxStableAttr *A) {
 
   V = port_info.first;
   int64_t port_width = port_info.second;
+  
+  llvm::Value *off = Builder.getInt1(A->getOff()? false: true);
 
   llvm::Value *args[] = {
-    V
+    V, 
+    off
   };
 
   CreateCallSideEffect(CGM, Builder, "stable", args, port_width, getPragmaContext(A));
@@ -2025,7 +2089,7 @@ void CodeGenFunction::EmitStableContentIntrinsic(
   int64_t port_width = port_info.second;
   addr = port_info.first;
   llvm::Value *args[] = {
-      addr,
+      addr
   };
 
   CreateCallSideEffect(CGM, Builder, "stable_content", args, port_width, getPragmaContext(A));
@@ -2498,7 +2562,20 @@ void CodeGenFunction::EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *inter
   std::string channelID = 
       cast<StringLiteral>(interface->getChannel())->getString();
   
-  int depth = HLSEvaluateICE(interface->getDepth(), "depth", "m_axi", -1);
+  llvm::Value *Depth;
+  {
+    Expr *depth = interface->getDepth();
+    if (!VerifyDepth<true>(depth, getContext(), CGM.getDiags())) {
+      return;
+    }
+    if (depth->isEvaluatable(getContext())) {
+      Depth = Builder.getInt64(HLSEvaluateICE(depth, "depth", "interface m_axi"));
+    }
+    else {
+      Depth = Builder.CreateIntCast(EmitScalarExpr(depth), Builder.getInt64Ty(), false);
+    }
+  }
+
   StringRef offsetType = MAXIInterfaceAttr::ConvertOffsetModeTypeToStr(interface->getOffsetMode());
   StringRef signalName = interface->getSignalName();
   int num_read_outstanding = HLSEvaluateICE(interface->getNumReadOutstanding(), "read_outstanding", "m_axi");
@@ -2510,7 +2587,7 @@ void CodeGenFunction::EmitMAXIInterfaceIntrinsic( const MAXIInterfaceAttr *inter
   llvm::Value *Args[] = {
     port_var, 
     llvm::ConstantDataArray::getString(getLLVMContext(), bundleName, false), 
-    Builder.getInt64(depth), 
+    Depth,
     llvm::ConstantDataArray::getString(getLLVMContext(), offsetType, false), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false),
     Builder.getInt64(num_read_outstanding),
@@ -2547,7 +2624,20 @@ void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceA
 
   int isRegister = interface->getIsRegister();
   int registerMode = (int)interface->getRegisterMode();
-  int depth = HLSEvaluateICE(interface->getDepth(), "depth","axis",  0);
+  llvm::Value *Depth;
+  {
+    Expr *depth = interface->getDepth();
+    if (!VerifyDepth<true>(depth, getContext(), CGM.getDiags())) {
+      return;
+    }
+    if (depth->isEvaluatable(getContext())) {
+      Depth = Builder.getInt64(HLSEvaluateICE(depth, "depth", "interface axis"));
+    }
+    else {
+      Depth = Builder.CreateIntCast(EmitScalarExpr(depth), Builder.getInt64Ty(), false);
+    }
+  }
+
   StringRef signalName = interface->getSignalName();
   StringRef bundleName = interface->getBundleName();
 
@@ -2555,7 +2645,7 @@ void CodeGenFunction::EmitAXIStreamInterfaceIntrinsic( const AXIStreamInterfaceA
     port_var,
     Builder.getInt32(isRegister),
     Builder.getInt64(registerMode), 
-    Builder.getInt64(depth), 
+    Depth,
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false),
     llvm::ConstantDataArray::getString(getLLVMContext(), bundleName, false)
   };
@@ -2651,12 +2741,24 @@ void CodeGenFunction::EmitAPFifoInterfaceIntrinsic( const APFifoInterfaceAttr *i
 
   int isRegister = interface->getIsRegister();
   StringRef signalName = interface->getSignalName();
-  int depth = HLSEvaluateICE(interface->getDepth(), "depth", "interface ap_fifo" );
+  llvm::Value *Depth;
+  {
+    Expr *depth = interface->getDepth();
+    if (!VerifyDepth<true>(depth, getContext(), CGM.getDiags())) {
+      return;
+    }
+    if (depth->isEvaluatable(getContext())) {
+      Depth = Builder.getInt64(HLSEvaluateICE(depth, "depth", "interface ap_fifo"));
+    }
+    else {
+      Depth = Builder.CreateIntCast(EmitScalarExpr(depth), Builder.getInt64Ty(), false);
+    }
+  }
   llvm::Value *Args [] = { 
     port_var,
     Builder.getInt32(isRegister), 
     llvm::ConstantDataArray::getString(getLLVMContext(), signalName, false), 
-    Builder.getInt64(depth)
+    Depth
   };
 
   CreateCallSideEffect(CGM, Builder, "xlx_ap_fifo", Args, port_width, getPragmaContext(interface));
@@ -3046,9 +3148,9 @@ void CodeGenFunction::EmitXlxCacheIntrinsic(const XlxCacheAttr *cache)
   }
 
   size_t lines = 1;
-  size_t depth = 1; 
-  size_t ways = 1; 
-  size_t users = 1; 
+  size_t depth = 1;
+  size_t l2_lines = 0;
+  size_t ports = 1;
   bool invalidExpr = false; 
   if (Optional<int> result = HLSEvaluateICEResult(cache->getLines()) ) { 
     lines = result.getValue(); 
@@ -3067,21 +3169,21 @@ void CodeGenFunction::EmitXlxCacheIntrinsic(const XlxCacheAttr *cache)
       << "depth" << "cache";
     invalidExpr = true; 
   }
-  if (Optional<int> result = HLSEvaluateICEResult(cache->getWays())) { 
-    ways = result.getValue(); 
+  if (Optional<int> result = HLSEvaluateICEResult(cache->getL2Lines())) {
+    l2_lines = result.getValue();
   }
   else { 
-    CGM.getDiags().Report(cache->getWays()->getExprLoc(), diag::err_xlx_option_not_ice)
-      << "ways" << "cache";
+    CGM.getDiags().Report(cache->getL2Lines()->getExprLoc(), diag::err_xlx_option_not_ice)
+      << "l2_lines" << "cache";
     invalidExpr = true; 
   }
 
-  if (Optional<int> result =  HLSEvaluateICEResult(cache->getUsers())) { 
-    users = result.getValue(); 
+  if (Optional<int> result =  HLSEvaluateICEResult(cache->getPorts())) { 
+    ports = result.getValue(); 
   }
   else { 
-    CGM.getDiags().Report(cache->getUsers()->getExprLoc(), diag::err_xlx_option_not_ice)
-      << "users" << "cache";
+    CGM.getDiags().Report(cache->getPorts()->getExprLoc(), diag::err_xlx_option_not_ice)
+      << "ports" << "cache";
     invalidExpr = true; 
   }
 
@@ -3090,23 +3192,47 @@ void CodeGenFunction::EmitXlxCacheIntrinsic(const XlxCacheAttr *cache)
 
   size_t burst = (size_t)cache->getBurst();
   size_t write = (size_t)cache->getWrite();
+  bool validPorts = true; 
+  if (ports < 1) { 
+    CGM.getDiags().Report(cache->getPorts()->getExprLoc(), 
+        diag::err_xlx_argument_out_of_range)
+        << "'ports' option in 'CACHE' pragma" << 1 << -1U - 1  << cache->getPorts()->getSourceRange();
+    validPorts = false;
+  }
+
+  if (l2_lines != 0 && ports == 1) { 
+    CGM.getDiags().Report(cache->getL2Lines()->getExprLoc(), 
+        diag::err_xlx_attribute_invalid_option_and_because)
+      << "L2_Lines" << "'L2_Lines' is invalid option  when ports is '1'"; 
+  }
 
   bool validLines = must_be_power_of_2(lines, "Lines", cache->getLocation(), CGM.getDiags()); 
+  validLines &= l2_lines == 0 || must_be_power_of_2(l2_lines, "L2_Lines", cache->getLocation(), CGM.getDiags()); 
+
+
+  //the default value for 'l2_lines' is 0, it standfor backend will define lines of l2 cache automatically 
+  if (l2_lines != 0 && l2_lines <= lines ) { 
+    CGM.getDiags().Report(cache->getL2Lines()->getExprLoc(), 
+        diag::err_xlx_attribute_invalid_option_and_because)
+      << "L2_Lines" << "number of 'L2_Lines' must be greater than number of 'Lines'"; 
+    validLines = false; 
+  }
 
   bool validDepth = true; 
   if (!cache->getIsDefaultDepth()){ 
     validDepth = must_be_power_of_2(depth, "Depth", cache->getLocation(), CGM.getDiags());
   }
 
-  if (!validDepth || !validLines)
+
+  if (!validDepth || !validLines || !validPorts)
     return ; 
 
   llvm::Value *Args[] = {
     port_var,
     Builder.getInt64(lines),
     Builder.getInt64(depth),
-    Builder.getInt64(ways),
-    Builder.getInt64(users),
+    Builder.getInt64(ports),
+    Builder.getInt64(l2_lines),
     Builder.getInt64(burst), 
     Builder.getInt64(write), 
   };

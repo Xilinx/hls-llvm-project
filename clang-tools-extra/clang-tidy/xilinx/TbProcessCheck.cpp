@@ -1,5 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -108,13 +108,14 @@ void TbProcessCheck::registerMatchers(MatchFinder *Finder) {
     auto TopDef = functionDecl(hasName(name), isDefinition())
                   .bind("topdef");
 
-    // support format: top()/a=top()/b=top
+    // support format: top()/a=top()/b=top func(top, a, b, ...)
     auto Call = expr(anyOf(callExpr(callee(Top)),
                            callExpr(callee(TopDef)),
                            binaryOperator(hasRHS(
                              ignoringImpCasts(declRefExpr(to(Top))))),
                            binaryOperator(hasRHS(
-                             ignoringImpCasts(declRefExpr(to(TopDef)))))))
+                             ignoringImpCasts(declRefExpr(to(TopDef))))),
+                             declRefExpr(to(Top)), declRefExpr(to(TopDef))))
                 .bind("call");
 
     auto Main = functionDecl(hasName("::main"), isDefinition())

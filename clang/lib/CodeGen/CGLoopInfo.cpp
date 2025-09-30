@@ -8,7 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
-// Copyright (C) 2023-2024, Advanced Micro Devices, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -139,6 +139,14 @@ static MDNode *createMetadata(LLVMContext &Ctx, const LoopAttributes &Attrs,
     Args.push_back(MDNode::get(Ctx, Vals));
   }
 
+  if (!Attrs.performanceSpec.empty()){ 
+    Metadata *Vals[] = {MDString::get(Ctx, "fpga.loop.performance"),
+                        MDString::get(Ctx, Attrs.performanceSpec),
+                        MDString::get(Ctx, Attrs.PerformancePragmaContext),
+                        Attrs.PerformancePragmaLoc.getAsMDNode()};
+    Args.push_back(MDNode::get(Ctx, Vals));
+  }
+
   if (Attrs.DistributeEnable != LoopAttributes::Unspecified) {
     Metadata *Vals[] = {MDString::get(Ctx, "llvm.loop.distribute.enable"),
                         ConstantAsMetadata::get(ConstantInt::get(
@@ -222,6 +230,7 @@ void LoopAttributes::clear() {
   TripCount.clear();
   MinMax.clear();
   LoopName = "";
+  performanceSpec.clear(); 
 }
 
 LoopInfo::LoopInfo(BasicBlock *Header, const LoopAttributes &Attrs,
@@ -257,6 +266,48 @@ void LoopInfoStack::push(CodeGenFunction* CGF, BasicBlock *Header, clang::ASTCon
 
     if (isa<XlxPipelineAttr>(Attr)) {
       setRewind(cast<XlxPipelineAttr>(Attr)->getRewind());
+    }
+
+    if (isa<XlxPerformanceAttr>(Attr)){ 
+      if (!getPerformanceSpec().empty()) { 
+        CGF->CGM.getDiags().Report(Attr->getLocation(), diag::warn_xlx_ignore_duplicate_pragma)
+          << "performance" << "loop" ; 
+        continue; 
+      }
+      auto PerformanceAttr = cast<XlxPerformanceAttr>(Attr);
+      bool isSec = PerformanceAttr->getUnit() == XlxPerformanceAttr::Seconds; 
+      if (CGF->getLangOpts().HLSClockPeriod == 0 && isSec){ 
+        CGF->CGM.getDiags().Report(PerformanceAttr->getLocation(),
+          diag::err_xlx_clock_period_is_invalid);
+      }
+      
+      int64_t TargetTI = CGF->HLSEvaluateClockCycle(
+          PerformanceAttr->getTargetTI(), isSec, CGF->getLangOpts().HLSClockPeriod, "target_ti"); 
+      if (TargetTI < 0)
+         continue; 
+      int64_t TargetTL = CGF->HLSEvaluateClockCycle(
+          PerformanceAttr->getTargetTL(), isSec, CGF->getLangOpts().HLSClockPeriod, "target_tl"); 
+      if (TargetTL < 0)
+         continue; 
+      int64_t AssumeTI = CGF->HLSEvaluateClockCycle(
+          PerformanceAttr->getAssumeTI(), isSec, CGF->getLangOpts().HLSClockPeriod, "assume_ti"); 
+      if (AssumeTI < 0)
+        continue; 
+      int64_t AssumeTL = CGF->HLSEvaluateClockCycle(
+          PerformanceAttr->getAssumeTL(), isSec, CGF->getLangOpts().HLSClockPeriod, "assume_tl"); 
+      if (AssumeTL < 0)
+         continue; 
+  
+      SmallString<128> performanceEncoding;
+      auto targetTI_str = "target_ti=" + utostr(TargetTI);
+      auto targetTL_str = "target_tl=" + utostr(TargetTL);
+      auto assumeTI_str = "assume_ti=" + utostr(AssumeTI);
+      auto assumeTL_str = "assume_tl=" + utostr(AssumeTL);
+      auto specStr = targetTI_str + ";" + targetTL_str + ";" + assumeTI_str + ";" + assumeTL_str;
+  
+      setPerformanceSpec(specStr);
+      setPerformanceDebugLoc(CGF->PragmaSourceLocToDebugLoc(Attr->getLocation()));
+      setPerformancePragmaContext(getPragmaContext(Attr)); 
     }
 
     const LoopHintAttr *LH = dyn_cast<LoopHintAttr>(Attr);

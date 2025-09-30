@@ -7,7 +7,8 @@
 //
 // And has the following additional copyright:
 //
-// (C) Copyright 2016-2021 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -76,8 +77,13 @@ static bool PropagateConstantsIntoArguments(Function &F) {
     // transform.
     if (!isa<CallInst>(UR) && !isa<InvokeInst>(UR))
       return false;
-    
+
     CallSite CS(cast<Instruction>(UR));
+    //if function is used in "directive.scope.entry["xlx_function_allocation"] 
+    //or "sideeffect["xlx_function_allocation"]").
+    if (CS && CS.isBundleOperand(&U))
+      continue;
+    
     if (!CS.isCallee(&U))
       return false;
 

@@ -4,6 +4,9 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+// And has the following additional copyright:
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -89,6 +92,10 @@
 #include <vector>
 
 using namespace llvm;
+
+static cl::opt<bool> EnableDataflowCanon2(
+    "reflow-enable-dataflow-canon2", cl::init(false), cl::Hidden,
+    cl::desc("Enable dataflow canonicalization in reflow"));
 
 #define DEBUG_TYPE "argpromotion"
 
@@ -990,7 +997,8 @@ promoteArguments(Function *F, std::map<Function*, const LoopInfo> &cacheDataflow
         // the new alloca we introduce.
         if (AllSimple) {
           //HLS special
-          if (checkArgValueFromNoDataflow(PtrArg, cacheDataflowLoopInfo)) { 
+          if (checkArgValueFromNoDataflow(PtrArg, cacheDataflowLoopInfo) ||
+              EnableDataflowCanon2) {
             ByValArgsToTransform.insert(PtrArg);
             continue;
           }
@@ -1019,7 +1027,8 @@ promoteArguments(Function *F, std::map<Function*, const LoopInfo> &cacheDataflow
                                 MaxElements))
 
       //HLS special
-      if (checkArgValueFromNoDataflow(PtrArg, cacheDataflowLoopInfo)) { 
+      if (checkArgValueFromNoDataflow(PtrArg, cacheDataflowLoopInfo) ||
+          EnableDataflowCanon2) {
         ArgsToPromote.insert(PtrArg);
       }
   }

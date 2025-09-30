@@ -1,4 +1,5 @@
-// (c) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 // Licensed to the Apache Software Foundation (ASF) under one
@@ -303,7 +304,8 @@ static bool IsBitwiseBinaryOperator(unsigned Opcode) {
 static bool IsFreeOperator(const User *U) {
   if (isa<BitCastOperator>(U))
     return true;
-
+  if (U->getNumOperands() == 0)
+    return false;
   auto *O = dyn_cast<Operator>(U);
   if (!O)
     return false;

@@ -8,6 +8,7 @@
 // And has the following additional copyright:
 //
 // (C) Copyright 2016-2022 Xilinx, Inc.
+// (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
 // All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
@@ -267,6 +268,7 @@ namespace {
     void HandleTranslationUnit(ASTContext &Ctx) override {
       // Release the Builder when there is no error.
       Builder->genTopArgAnnotation(); 
+      Builder->genImplicitInterfaceInst(); 
       if (!Diags.hasErrorOccurred() && Builder)
         Builder->Release();
 
