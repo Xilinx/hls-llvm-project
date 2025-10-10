@@ -24,6 +24,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Config/config.h"
+
+#if HLS_FPGA_FLOAT_CONSTEVAL
+
 #include "llvm/Support/XILINXFPGAFloatInstEval.h"
 
 #include "llvm/ADT/APInt.h"
@@ -447,3 +451,5 @@ bool EvalFloatCompareUO(const APInt &Lhs, const APInt &Rhs, int ExpWidth) {
     return ret;
 }
 } // namespace fpga
+
+#endif // HLS_FPGA_FLOAT_CONSTEVAL

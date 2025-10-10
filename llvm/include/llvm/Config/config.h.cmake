@@ -440,4 +440,7 @@
 /* Define to the default GlobalISel coverage file prefix */
 #cmakedefine LLVM_GISEL_COV_PREFIX "${LLVM_GISEL_COV_PREFIX}"
 
+/* Enable FPGA Float ConstEval Support */
+#cmakedefine01 HLS_FPGA_FLOAT_CONSTEVAL
+
 #endif

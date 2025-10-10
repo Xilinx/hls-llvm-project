@@ -1049,6 +1049,7 @@ Constant *FoldFloatUnaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands
   if (isa<UndefValue>(Op) || isa<UndefValue>(ExpBW))
     return UndefValue::get(Op->getType());
 
+#if HLS_FPGA_FLOAT_CONSTEVAL
   APInt OpVal = cast<ConstantInt>(Op)->getValue();
   int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
 
@@ -1062,6 +1063,9 @@ Constant *FoldFloatUnaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands
   }
 
   return ConstantInt::get(Op->getContext(), ResVal);
+#else
+  return nullptr;
+#endif // HLS_FPGA_FLOAT_CONSTEVAL
 }
 
 Constant *FoldFloatBinaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands) {
@@ -1073,6 +1077,7 @@ Constant *FoldFloatBinaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operand
   if (isa<UndefValue>(LHS) || isa<UndefValue>(RHS) || isa<UndefValue>(ExpBW))
     return UndefValue::get(LHS->getType());
 
+#if HLS_FPGA_FLOAT_CONSTEVAL
   APInt LHSVal = cast<ConstantInt>(LHS)->getValue();
   APInt RHSVal = cast<ConstantInt>(RHS)->getValue();
   int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
@@ -1096,6 +1101,9 @@ Constant *FoldFloatBinaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operand
   }
 
   return ConstantInt::get(LHS->getContext(), ResVal);
+#else
+  return nullptr;
+#endif // HLS_FPGA_FLOAT_CONSTEVAL
 }
 
 Constant *FoldFloatTernaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands) {
@@ -1108,6 +1116,7 @@ Constant *FoldFloatTernaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operan
   if (isa<UndefValue>(Op0) || isa<UndefValue>(Op1) || isa<UndefValue>(Op2) || isa<UndefValue>(ExpBW))
     return UndefValue::get(Op0->getType());
 
+#if HLS_FPGA_FLOAT_CONSTEVAL
   APInt Op0Val = cast<ConstantInt>(Op0)->getValue();
   APInt Op1Val = cast<ConstantInt>(Op1)->getValue();
   APInt Op2Val = cast<ConstantInt>(Op2)->getValue();
@@ -1123,6 +1132,9 @@ Constant *FoldFloatTernaryInst(unsigned IntrinsicID, ArrayRef<Constant *> Operan
   }
 
   return ConstantInt::get(Op0->getContext(), ResVal);
+#else
+  return nullptr;
+#endif // HLS_FPGA_FLOAT_CONSTEVAL
 }
 
 Constant *FoldFloatCastInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands, Type *Ty) {
@@ -1134,6 +1146,7 @@ Constant *FoldFloatCastInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands,
   if (isa<UndefValue>(Op) || isa<UndefValue>(ExpBW) || isa<UndefValue>(DstExpBW))
     return UndefValue::get(Ty);
 
+#if HLS_FPGA_FLOAT_CONSTEVAL
   APInt OpVal = cast<ConstantInt>(Op)->getValue();
   int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
   int DstExpBWVal = cast<ConstantInt>(DstExpBW)->getSExtValue();
@@ -1155,6 +1168,9 @@ Constant *FoldFloatCastInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands,
   }
 
   return ConstantInt::get(Ty->getContext(), ResVal);      
+#else
+  return nullptr;
+#endif // HLS_FPGA_FLOAT_CONSTEVAL
 }
 
 Constant *FoldFloatCompareInst(unsigned IntrinsicID, ArrayRef<Constant *> Operands) {
@@ -1166,6 +1182,7 @@ Constant *FoldFloatCompareInst(unsigned IntrinsicID, ArrayRef<Constant *> Operan
   if (isa<UndefValue>(LHS) || isa<UndefValue>(RHS) || isa<UndefValue>(ExpBW))
     return UndefValue::get(LHS->getType());
 
+#if HLS_FPGA_FLOAT_CONSTEVAL
   APInt LHSVal = cast<ConstantInt>(LHS)->getValue();
   APInt RHSVal = cast<ConstantInt>(RHS)->getValue();
   int ExpBWVal = cast<ConstantInt>(ExpBW)->getSExtValue();
@@ -1192,6 +1209,9 @@ Constant *FoldFloatCompareInst(unsigned IntrinsicID, ArrayRef<Constant *> Operan
   }
 
   return ConstantInt::get(LHS->getContext(), APInt(1, ResVal));
+#else
+  return nullptr;
+#endif // HLS_FPGA_FLOAT_CONSTEVAL
 }
 
 Constant *FoldSMod(ArrayRef<Constant *> Operands) {

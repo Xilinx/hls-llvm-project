@@ -1,10 +1,14 @@
 # (C) Copyright 2016-2022 Xilinx, Inc.
 # (C) Copyright 2023-2025 Advanced Micro Devices, Inc.
+option(HLS_FPGA_FLOAT_CONSTEVAL "Enable FPGA Float ConstEval support" OFF)
+
 add_library(sqlite3 SHARED IMPORTED)
 
+if (HLS_FPGA_FLOAT_CONSTEVAL)
 add_library(fpo_v7_1_gmp SHARED IMPORTED)
 add_library(fpo_v7_1_mpfr SHARED IMPORTED)
 add_library(fpo_v7_1 SHARED IMPORTED)
+endif()
 
 # Find out position of libsqlite3 .so/.lib/.dll
 #################################################
@@ -34,6 +38,7 @@ endif()
 
 # Find out position of libIp_floating_point_v7_1_bitacc_cmodel .so/.lib/.dll
 #################################################
+if (HLS_FPGA_FLOAT_CONSTEVAL)
 if (WIN32 OR CYGWIN)
   if (EXISTS "${HLS_FPO_DIR}/libIp_floating_point_v7_1_bitacc_cmodel.lib")
     set(fpo_res_path_lib "${HLS_FPO_DIR}/libIp_floating_point_v7_1_bitacc_cmodel.lib" CACHE FILEPATH "" FORCE)
@@ -73,6 +78,7 @@ else()
     message(STATUS mpfr_res_path_so=${mpfr_res_path_so})
   endif()
 endif()
+endif()
 #################################################
 
 set(system_libs)
@@ -87,6 +93,7 @@ if(WIN32 OR CYGWIN)
     set_property(TARGET sqlite3 PROPERTY IMPORTED_LOCATION ${RDI_SRC_ROOT}/ext/sqlite/sqlite-3.45.1/rdi/lib/vs2017/win64.o/libsqlite3.45.1.dll)
     set_property(TARGET sqlite3 PROPERTY IMPORTED_IMPLIB ${RDI_SRC_ROOT}/ext/sqlite/sqlite-3.45.1/rdi/lib/vs2017/win64.o/libsqlite3.45.1.lib)
   endif()
+  if (HLS_FPGA_FLOAT_CONSTEVAL)
   # fpo_v7_1
   set_property(TARGET fpo_v7_1 PROPERTY IMPORTED_LOCATION ${fpo_res_path_dll})
   set_property(TARGET fpo_v7_1 PROPERTY IMPORTED_IMPLIB ${fpo_res_path_lib})
@@ -94,6 +101,7 @@ if(WIN32 OR CYGWIN)
   set_property(TARGET fpo_v7_1_gmp PROPERTY IMPORTED_IMPLIB ${gmp_res_path_lib})
   set_property(TARGET fpo_v7_1_mpfr PROPERTY IMPORTED_LOCATION ${mpfr_res_path_dll})
   set_property(TARGET fpo_v7_1_mpfr PROPERTY IMPORTED_IMPLIB ${mpfr_res_path_lib})
+  endif()
   # libuuid required for FOLDERID_Profile usage in lib/Support/Windows/Path.inc.
   set(system_libs ${system_libs} psapi shell32 ole32 uuid)
 #elseif( CMAKE_HOST_UNIX )
@@ -111,6 +119,7 @@ else()
     endif()
   endif()
 
+  if (HLS_FPGA_FLOAT_CONSTEVAL)
   # fpo_v7_1
   set_property(TARGET fpo_v7_1 PROPERTY IMPORTED_NO_SONAME 1)
   set_target_properties(fpo_v7_1 PROPERTIES IMPORTED_LOCATION ${fpo_res_path_so})
@@ -118,6 +127,7 @@ else()
   set_target_properties(fpo_v7_1_gmp PROPERTIES IMPORTED_LOCATION ${gmp_res_path_so})
   set_property(TARGET fpo_v7_1_mpfr PROPERTY IMPORTED_NO_SONAME 1)
   set_target_properties(fpo_v7_1_mpfr PROPERTIES IMPORTED_LOCATION ${mpfr_res_path_so})
+  endif()
 
   if( HAVE_LIBRT )
     set(system_libs ${system_libs} rt)
@@ -304,6 +314,7 @@ endif()
 
 target_link_libraries(LLVMSupport PRIVATE sqlite3)
 
+if (HLS_FPGA_FLOAT_CONSTEVAL)
 target_include_directories(LLVMSupport PRIVATE "${HLS_FPO_DIR}/")
 
 target_link_libraries(LLVMSupport PRIVATE fpo_v7_1 fpo_v7_1_gmp fpo_v7_1_mpfr)
@@ -337,6 +348,7 @@ else()
     )
   install(FILES "${fpo_res_path_so}" "${gmp_res_path_so}" "${mpfr_res_path_so}" DESTINATION lib)
 endif()
+endif()
 
 
 if (DEFINED RDI_BUILD_DIR)
@@ -348,7 +360,9 @@ else()
   #message(FATAL_ERROR "Cannot find environment variable RDI_BUILD_DIR or LINK_DIRS. Please set it....")
 endif()
 
+if (HLS_FPGA_FLOAT_CONSTEVAL)
 link_directories("${HLS_FPO_DIR}")
+endif()
 
 set_property(TARGET LLVMSupport PROPERTY LLVM_SYSTEM_LIBS "${system_libs}")
 add_definitions(-DXILINX_HLS_FE_STANDALONE)
